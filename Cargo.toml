@@ -13,10 +13,19 @@ categories = ["mathematics", "science", "algorithms"]
 
 [dependencies]
 num-traits = "0.2"
+approx = { version = "0.5", optional = true }
+simba = { version = "0.9", optional = true }
+bumpalo = { version = "3", features = ["collections"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 approx = "0.5"
+nalgebra = "0.33"
+
+[features]
+default = ["simba"]
+simba = ["dep:simba", "dep:approx"]
+bytecode = ["dep:bumpalo"]
 
 [[bench]]
 name = "forward"
@@ -25,6 +34,11 @@ harness = false
 [[bench]]
 name = "reverse"
 harness = false
+
+[[bench]]
+name = "bytecode"
+harness = false
+required-features = ["bytecode"]
 
 [package.metadata.docs.rs]
 all-features = true
