@@ -111,106 +111,262 @@ impl<F: Float> Signed for Dual<F> {
 }
 
 impl<F: Float> FloatConst for Dual<F> {
-    fn E() -> Self { Dual::constant(F::E()) }
-    fn FRAC_1_PI() -> Self { Dual::constant(F::FRAC_1_PI()) }
-    fn FRAC_1_SQRT_2() -> Self { Dual::constant(F::FRAC_1_SQRT_2()) }
-    fn FRAC_2_PI() -> Self { Dual::constant(F::FRAC_2_PI()) }
-    fn FRAC_2_SQRT_PI() -> Self { Dual::constant(F::FRAC_2_SQRT_PI()) }
-    fn FRAC_PI_2() -> Self { Dual::constant(F::FRAC_PI_2()) }
-    fn FRAC_PI_3() -> Self { Dual::constant(F::FRAC_PI_3()) }
-    fn FRAC_PI_4() -> Self { Dual::constant(F::FRAC_PI_4()) }
-    fn FRAC_PI_6() -> Self { Dual::constant(F::FRAC_PI_6()) }
-    fn FRAC_PI_8() -> Self { Dual::constant(F::FRAC_PI_8()) }
-    fn LN_10() -> Self { Dual::constant(F::LN_10()) }
-    fn LN_2() -> Self { Dual::constant(F::LN_2()) }
-    fn LOG10_E() -> Self { Dual::constant(F::LOG10_E()) }
-    fn LOG2_E() -> Self { Dual::constant(F::LOG2_E()) }
-    fn PI() -> Self { Dual::constant(F::PI()) }
-    fn SQRT_2() -> Self { Dual::constant(F::SQRT_2()) }
-    fn TAU() -> Self { Dual::constant(F::TAU()) }
-    fn LOG10_2() -> Self { Dual::constant(F::LOG10_2()) }
-    fn LOG2_10() -> Self { Dual::constant(F::LOG2_10()) }
+    fn E() -> Self {
+        Dual::constant(F::E())
+    }
+    fn FRAC_1_PI() -> Self {
+        Dual::constant(F::FRAC_1_PI())
+    }
+    fn FRAC_1_SQRT_2() -> Self {
+        Dual::constant(F::FRAC_1_SQRT_2())
+    }
+    fn FRAC_2_PI() -> Self {
+        Dual::constant(F::FRAC_2_PI())
+    }
+    fn FRAC_2_SQRT_PI() -> Self {
+        Dual::constant(F::FRAC_2_SQRT_PI())
+    }
+    fn FRAC_PI_2() -> Self {
+        Dual::constant(F::FRAC_PI_2())
+    }
+    fn FRAC_PI_3() -> Self {
+        Dual::constant(F::FRAC_PI_3())
+    }
+    fn FRAC_PI_4() -> Self {
+        Dual::constant(F::FRAC_PI_4())
+    }
+    fn FRAC_PI_6() -> Self {
+        Dual::constant(F::FRAC_PI_6())
+    }
+    fn FRAC_PI_8() -> Self {
+        Dual::constant(F::FRAC_PI_8())
+    }
+    fn LN_10() -> Self {
+        Dual::constant(F::LN_10())
+    }
+    fn LN_2() -> Self {
+        Dual::constant(F::LN_2())
+    }
+    fn LOG10_E() -> Self {
+        Dual::constant(F::LOG10_E())
+    }
+    fn LOG2_E() -> Self {
+        Dual::constant(F::LOG2_E())
+    }
+    fn PI() -> Self {
+        Dual::constant(F::PI())
+    }
+    fn SQRT_2() -> Self {
+        Dual::constant(F::SQRT_2())
+    }
+    fn TAU() -> Self {
+        Dual::constant(F::TAU())
+    }
+    fn LOG10_2() -> Self {
+        Dual::constant(F::LOG10_2())
+    }
+    fn LOG2_10() -> Self {
+        Dual::constant(F::LOG2_10())
+    }
 }
 
 impl<F: Float> NumFloat for Dual<F> {
-    fn nan() -> Self { Dual::constant(F::nan()) }
-    fn infinity() -> Self { Dual::constant(F::infinity()) }
-    fn neg_infinity() -> Self { Dual::constant(F::neg_infinity()) }
-    fn neg_zero() -> Self { Dual::constant(F::neg_zero()) }
-
-    fn min_value() -> Self { Dual::constant(F::min_value()) }
-    fn min_positive_value() -> Self { Dual::constant(F::min_positive_value()) }
-    fn max_value() -> Self { Dual::constant(F::max_value()) }
-    fn epsilon() -> Self { Dual::constant(F::epsilon()) }
-
-    fn is_nan(self) -> bool { self.re.is_nan() }
-    fn is_infinite(self) -> bool { self.re.is_infinite() }
-    fn is_finite(self) -> bool { self.re.is_finite() }
-    fn is_normal(self) -> bool { self.re.is_normal() }
-    fn is_sign_positive(self) -> bool { self.re.is_sign_positive() }
-    fn is_sign_negative(self) -> bool { self.re.is_sign_negative() }
-    fn classify(self) -> FpCategory { self.re.classify() }
-
-    fn floor(self) -> Self { Dual::floor(self) }
-    fn ceil(self) -> Self { Dual::ceil(self) }
-    fn round(self) -> Self { Dual::round(self) }
-    fn trunc(self) -> Self { Dual::trunc(self) }
-    fn fract(self) -> Self { Dual::fract(self) }
-    fn abs(self) -> Self { Dual::abs(self) }
-    fn signum(self) -> Self { Dual::signum(self) }
-
-    fn mul_add(self, a: Self, b: Self) -> Self { Dual::mul_add(self, a, b) }
-
-    fn recip(self) -> Self { Dual::recip(self) }
-    fn powi(self, n: i32) -> Self { Dual::powi(self, n) }
-    fn powf(self, n: Self) -> Self { Dual::powf(self, n) }
-    fn sqrt(self) -> Self { Dual::sqrt(self) }
-    fn cbrt(self) -> Self { Dual::cbrt(self) }
-
-    fn exp(self) -> Self { Dual::exp(self) }
-    fn exp2(self) -> Self { Dual::exp2(self) }
-    fn exp_m1(self) -> Self { Dual::exp_m1(self) }
-    fn ln(self) -> Self { Dual::ln(self) }
-    fn log2(self) -> Self { Dual::log2(self) }
-    fn log10(self) -> Self { Dual::log10(self) }
-    fn ln_1p(self) -> Self { Dual::ln_1p(self) }
-    fn log(self, base: Self) -> Self { Dual::log(self, base) }
-
-    fn sin(self) -> Self { Dual::sin(self) }
-    fn cos(self) -> Self { Dual::cos(self) }
-    fn tan(self) -> Self { Dual::tan(self) }
-    fn sin_cos(self) -> (Self, Self) { Dual::sin_cos(self) }
-    fn asin(self) -> Self { Dual::asin(self) }
-    fn acos(self) -> Self { Dual::acos(self) }
-    fn atan(self) -> Self { Dual::atan(self) }
-    fn atan2(self, other: Self) -> Self { Dual::atan2(self, other) }
-
-    fn sinh(self) -> Self { Dual::sinh(self) }
-    fn cosh(self) -> Self { Dual::cosh(self) }
-    fn tanh(self) -> Self { Dual::tanh(self) }
-    fn asinh(self) -> Self { Dual::asinh(self) }
-    fn acosh(self) -> Self { Dual::acosh(self) }
-    fn atanh(self) -> Self { Dual::atanh(self) }
-
-    fn hypot(self, other: Self) -> Self { Dual::hypot(self, other) }
-
-    fn max(self, other: Self) -> Self { Dual::max(self, other) }
-    fn min(self, other: Self) -> Self { Dual::min(self, other) }
-
-    fn abs_sub(self, other: Self) -> Self {
-        if self.re > other.re { self - other } else { Self::zero() }
+    fn nan() -> Self {
+        Dual::constant(F::nan())
+    }
+    fn infinity() -> Self {
+        Dual::constant(F::infinity())
+    }
+    fn neg_infinity() -> Self {
+        Dual::constant(F::neg_infinity())
+    }
+    fn neg_zero() -> Self {
+        Dual::constant(F::neg_zero())
     }
 
-    fn integer_decode(self) -> (u64, i16, i8) { self.re.integer_decode() }
+    fn min_value() -> Self {
+        Dual::constant(F::min_value())
+    }
+    fn min_positive_value() -> Self {
+        Dual::constant(F::min_positive_value())
+    }
+    fn max_value() -> Self {
+        Dual::constant(F::max_value())
+    }
+    fn epsilon() -> Self {
+        Dual::constant(F::epsilon())
+    }
+
+    fn is_nan(self) -> bool {
+        self.re.is_nan()
+    }
+    fn is_infinite(self) -> bool {
+        self.re.is_infinite()
+    }
+    fn is_finite(self) -> bool {
+        self.re.is_finite()
+    }
+    fn is_normal(self) -> bool {
+        self.re.is_normal()
+    }
+    fn is_sign_positive(self) -> bool {
+        self.re.is_sign_positive()
+    }
+    fn is_sign_negative(self) -> bool {
+        self.re.is_sign_negative()
+    }
+    fn classify(self) -> FpCategory {
+        self.re.classify()
+    }
+
+    fn floor(self) -> Self {
+        Dual::floor(self)
+    }
+    fn ceil(self) -> Self {
+        Dual::ceil(self)
+    }
+    fn round(self) -> Self {
+        Dual::round(self)
+    }
+    fn trunc(self) -> Self {
+        Dual::trunc(self)
+    }
+    fn fract(self) -> Self {
+        Dual::fract(self)
+    }
+    fn abs(self) -> Self {
+        Dual::abs(self)
+    }
+    fn signum(self) -> Self {
+        Dual::signum(self)
+    }
+
+    fn mul_add(self, a: Self, b: Self) -> Self {
+        Dual::mul_add(self, a, b)
+    }
+
+    fn recip(self) -> Self {
+        Dual::recip(self)
+    }
+    fn powi(self, n: i32) -> Self {
+        Dual::powi(self, n)
+    }
+    fn powf(self, n: Self) -> Self {
+        Dual::powf(self, n)
+    }
+    fn sqrt(self) -> Self {
+        Dual::sqrt(self)
+    }
+    fn cbrt(self) -> Self {
+        Dual::cbrt(self)
+    }
+
+    fn exp(self) -> Self {
+        Dual::exp(self)
+    }
+    fn exp2(self) -> Self {
+        Dual::exp2(self)
+    }
+    fn exp_m1(self) -> Self {
+        Dual::exp_m1(self)
+    }
+    fn ln(self) -> Self {
+        Dual::ln(self)
+    }
+    fn log2(self) -> Self {
+        Dual::log2(self)
+    }
+    fn log10(self) -> Self {
+        Dual::log10(self)
+    }
+    fn ln_1p(self) -> Self {
+        Dual::ln_1p(self)
+    }
+    fn log(self, base: Self) -> Self {
+        Dual::log(self, base)
+    }
+
+    fn sin(self) -> Self {
+        Dual::sin(self)
+    }
+    fn cos(self) -> Self {
+        Dual::cos(self)
+    }
+    fn tan(self) -> Self {
+        Dual::tan(self)
+    }
+    fn sin_cos(self) -> (Self, Self) {
+        Dual::sin_cos(self)
+    }
+    fn asin(self) -> Self {
+        Dual::asin(self)
+    }
+    fn acos(self) -> Self {
+        Dual::acos(self)
+    }
+    fn atan(self) -> Self {
+        Dual::atan(self)
+    }
+    fn atan2(self, other: Self) -> Self {
+        Dual::atan2(self, other)
+    }
+
+    fn sinh(self) -> Self {
+        Dual::sinh(self)
+    }
+    fn cosh(self) -> Self {
+        Dual::cosh(self)
+    }
+    fn tanh(self) -> Self {
+        Dual::tanh(self)
+    }
+    fn asinh(self) -> Self {
+        Dual::asinh(self)
+    }
+    fn acosh(self) -> Self {
+        Dual::acosh(self)
+    }
+    fn atanh(self) -> Self {
+        Dual::atanh(self)
+    }
+
+    fn hypot(self, other: Self) -> Self {
+        Dual::hypot(self, other)
+    }
+
+    fn max(self, other: Self) -> Self {
+        Dual::max(self, other)
+    }
+    fn min(self, other: Self) -> Self {
+        Dual::min(self, other)
+    }
+
+    fn abs_sub(self, other: Self) -> Self {
+        if self.re > other.re {
+            self - other
+        } else {
+            Self::zero()
+        }
+    }
+
+    fn integer_decode(self) -> (u64, i16, i8) {
+        self.re.integer_decode()
+    }
 
     fn to_degrees(self) -> Self {
         let factor = F::from(180.0).unwrap() / F::PI();
-        Dual { re: self.re.to_degrees(), eps: self.eps * factor }
+        Dual {
+            re: self.re.to_degrees(),
+            eps: self.eps * factor,
+        }
     }
 
     fn to_radians(self) -> Self {
         let factor = F::PI() / F::from(180.0).unwrap();
-        Dual { re: self.re.to_radians(), eps: self.eps * factor }
+        Dual {
+            re: self.re.to_radians(),
+            eps: self.eps * factor,
+        }
     }
 }
 
@@ -318,32 +474,73 @@ impl<F: Float + TapeThreadLocal> Signed for Reverse<F> {
 }
 
 impl<F: Float + TapeThreadLocal> FloatConst for Reverse<F> {
-    fn E() -> Self { Reverse::constant(F::E()) }
-    fn FRAC_1_PI() -> Self { Reverse::constant(F::FRAC_1_PI()) }
-    fn FRAC_1_SQRT_2() -> Self { Reverse::constant(F::FRAC_1_SQRT_2()) }
-    fn FRAC_2_PI() -> Self { Reverse::constant(F::FRAC_2_PI()) }
-    fn FRAC_2_SQRT_PI() -> Self { Reverse::constant(F::FRAC_2_SQRT_PI()) }
-    fn FRAC_PI_2() -> Self { Reverse::constant(F::FRAC_PI_2()) }
-    fn FRAC_PI_3() -> Self { Reverse::constant(F::FRAC_PI_3()) }
-    fn FRAC_PI_4() -> Self { Reverse::constant(F::FRAC_PI_4()) }
-    fn FRAC_PI_6() -> Self { Reverse::constant(F::FRAC_PI_6()) }
-    fn FRAC_PI_8() -> Self { Reverse::constant(F::FRAC_PI_8()) }
-    fn LN_10() -> Self { Reverse::constant(F::LN_10()) }
-    fn LN_2() -> Self { Reverse::constant(F::LN_2()) }
-    fn LOG10_E() -> Self { Reverse::constant(F::LOG10_E()) }
-    fn LOG2_E() -> Self { Reverse::constant(F::LOG2_E()) }
-    fn PI() -> Self { Reverse::constant(F::PI()) }
-    fn SQRT_2() -> Self { Reverse::constant(F::SQRT_2()) }
-    fn TAU() -> Self { Reverse::constant(F::TAU()) }
-    fn LOG10_2() -> Self { Reverse::constant(F::LOG10_2()) }
-    fn LOG2_10() -> Self { Reverse::constant(F::LOG2_10()) }
+    fn E() -> Self {
+        Reverse::constant(F::E())
+    }
+    fn FRAC_1_PI() -> Self {
+        Reverse::constant(F::FRAC_1_PI())
+    }
+    fn FRAC_1_SQRT_2() -> Self {
+        Reverse::constant(F::FRAC_1_SQRT_2())
+    }
+    fn FRAC_2_PI() -> Self {
+        Reverse::constant(F::FRAC_2_PI())
+    }
+    fn FRAC_2_SQRT_PI() -> Self {
+        Reverse::constant(F::FRAC_2_SQRT_PI())
+    }
+    fn FRAC_PI_2() -> Self {
+        Reverse::constant(F::FRAC_PI_2())
+    }
+    fn FRAC_PI_3() -> Self {
+        Reverse::constant(F::FRAC_PI_3())
+    }
+    fn FRAC_PI_4() -> Self {
+        Reverse::constant(F::FRAC_PI_4())
+    }
+    fn FRAC_PI_6() -> Self {
+        Reverse::constant(F::FRAC_PI_6())
+    }
+    fn FRAC_PI_8() -> Self {
+        Reverse::constant(F::FRAC_PI_8())
+    }
+    fn LN_10() -> Self {
+        Reverse::constant(F::LN_10())
+    }
+    fn LN_2() -> Self {
+        Reverse::constant(F::LN_2())
+    }
+    fn LOG10_E() -> Self {
+        Reverse::constant(F::LOG10_E())
+    }
+    fn LOG2_E() -> Self {
+        Reverse::constant(F::LOG2_E())
+    }
+    fn PI() -> Self {
+        Reverse::constant(F::PI())
+    }
+    fn SQRT_2() -> Self {
+        Reverse::constant(F::SQRT_2())
+    }
+    fn TAU() -> Self {
+        Reverse::constant(F::TAU())
+    }
+    fn LOG10_2() -> Self {
+        Reverse::constant(F::LOG10_2())
+    }
+    fn LOG2_10() -> Self {
+        Reverse::constant(F::LOG2_10())
+    }
 }
 
 /// Helper: record a unary elemental on the active tape.
 #[inline]
 fn rev_unary<F: Float + TapeThreadLocal>(x: Reverse<F>, f_val: F, f_deriv: F) -> Reverse<F> {
     let index = tape::with_active_tape(|t| t.push_unary(x.index, f_deriv));
-    Reverse { value: f_val, index }
+    Reverse {
+        value: f_val,
+        index,
+    }
 }
 
 /// Helper: record a binary elemental on the active tape.
@@ -356,32 +553,73 @@ fn rev_binary<F: Float + TapeThreadLocal>(
     dy: F,
 ) -> Reverse<F> {
     let index = tape::with_active_tape(|t| t.push_binary(x.index, dx, y.index, dy));
-    Reverse { value: f_val, index }
+    Reverse {
+        value: f_val,
+        index,
+    }
 }
 
 impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
-    fn nan() -> Self { Reverse::constant(F::nan()) }
-    fn infinity() -> Self { Reverse::constant(F::infinity()) }
-    fn neg_infinity() -> Self { Reverse::constant(F::neg_infinity()) }
-    fn neg_zero() -> Self { Reverse::constant(F::neg_zero()) }
+    fn nan() -> Self {
+        Reverse::constant(F::nan())
+    }
+    fn infinity() -> Self {
+        Reverse::constant(F::infinity())
+    }
+    fn neg_infinity() -> Self {
+        Reverse::constant(F::neg_infinity())
+    }
+    fn neg_zero() -> Self {
+        Reverse::constant(F::neg_zero())
+    }
 
-    fn min_value() -> Self { Reverse::constant(F::min_value()) }
-    fn min_positive_value() -> Self { Reverse::constant(F::min_positive_value()) }
-    fn max_value() -> Self { Reverse::constant(F::max_value()) }
-    fn epsilon() -> Self { Reverse::constant(F::epsilon()) }
+    fn min_value() -> Self {
+        Reverse::constant(F::min_value())
+    }
+    fn min_positive_value() -> Self {
+        Reverse::constant(F::min_positive_value())
+    }
+    fn max_value() -> Self {
+        Reverse::constant(F::max_value())
+    }
+    fn epsilon() -> Self {
+        Reverse::constant(F::epsilon())
+    }
 
-    fn is_nan(self) -> bool { self.value.is_nan() }
-    fn is_infinite(self) -> bool { self.value.is_infinite() }
-    fn is_finite(self) -> bool { self.value.is_finite() }
-    fn is_normal(self) -> bool { self.value.is_normal() }
-    fn is_sign_positive(self) -> bool { self.value.is_sign_positive() }
-    fn is_sign_negative(self) -> bool { self.value.is_sign_negative() }
-    fn classify(self) -> FpCategory { self.value.classify() }
+    fn is_nan(self) -> bool {
+        self.value.is_nan()
+    }
+    fn is_infinite(self) -> bool {
+        self.value.is_infinite()
+    }
+    fn is_finite(self) -> bool {
+        self.value.is_finite()
+    }
+    fn is_normal(self) -> bool {
+        self.value.is_normal()
+    }
+    fn is_sign_positive(self) -> bool {
+        self.value.is_sign_positive()
+    }
+    fn is_sign_negative(self) -> bool {
+        self.value.is_sign_negative()
+    }
+    fn classify(self) -> FpCategory {
+        self.value.classify()
+    }
 
-    fn floor(self) -> Self { Reverse::constant(self.value.floor()) }
-    fn ceil(self) -> Self { Reverse::constant(self.value.ceil()) }
-    fn round(self) -> Self { Reverse::constant(self.value.round()) }
-    fn trunc(self) -> Self { Reverse::constant(self.value.trunc()) }
+    fn floor(self) -> Self {
+        Reverse::constant(self.value.floor())
+    }
+    fn ceil(self) -> Self {
+        Reverse::constant(self.value.ceil())
+    }
+    fn round(self) -> Self {
+        Reverse::constant(self.value.round())
+    }
+    fn trunc(self) -> Self {
+        Reverse::constant(self.value.trunc())
+    }
     fn fract(self) -> Self {
         rev_unary(self, self.value.fract(), F::one())
     }
@@ -452,7 +690,11 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn log10(self) -> Self {
-        rev_unary(self, self.value.log10(), F::one() / (self.value * F::LN_10()))
+        rev_unary(
+            self,
+            self.value.log10(),
+            F::one() / (self.value * F::LN_10()),
+        )
     }
 
     fn ln_1p(self) -> Self {

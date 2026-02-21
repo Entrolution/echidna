@@ -1,16 +1,16 @@
-pub mod float;
-pub mod scalar;
-pub mod dual;
-pub mod tape;
-pub mod reverse;
 pub mod api;
+pub mod dual;
+pub mod float;
+pub mod reverse;
+pub mod scalar;
+pub mod tape;
 mod traits;
 
-pub use float::Float;
-pub use scalar::Scalar;
+pub use api::{grad, jacobian, jvp, vjp};
 pub use dual::Dual;
+pub use float::Float;
 pub use reverse::Reverse;
-pub use api::{grad, jvp, vjp, jacobian};
+pub use scalar::Scalar;
 
 /// Type alias for forward-mode dual numbers over `f64`.
 pub type Dual64 = Dual<f64>;

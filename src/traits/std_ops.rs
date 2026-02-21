@@ -1,9 +1,11 @@
-use std::ops::{Add, Sub, Mul, Div, Neg, Rem, AddAssign, SubAssign, MulAssign, DivAssign, RemAssign};
+use std::ops::{
+    Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign,
+};
 
 use crate::dual::Dual;
 use crate::float::Float;
 use crate::reverse::Reverse;
-use crate::tape::{self, CONSTANT, TapeThreadLocal};
+use crate::tape::{self, TapeThreadLocal, CONSTANT};
 
 // ──────────────────────────────────────────────
 //  Dual<F> operators
@@ -13,7 +15,10 @@ impl<F: Float> Add for Dual<F> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Dual { re: self.re + rhs.re, eps: self.eps + rhs.eps }
+        Dual {
+            re: self.re + rhs.re,
+            eps: self.eps + rhs.eps,
+        }
     }
 }
 
@@ -21,7 +26,10 @@ impl<F: Float> Sub for Dual<F> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Dual { re: self.re - rhs.re, eps: self.eps - rhs.eps }
+        Dual {
+            re: self.re - rhs.re,
+            eps: self.eps - rhs.eps,
+        }
     }
 }
 
@@ -52,7 +60,10 @@ impl<F: Float> Neg for Dual<F> {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        Dual { re: -self.re, eps: -self.eps }
+        Dual {
+            re: -self.re,
+            eps: -self.eps,
+        }
     }
 }
 
@@ -60,33 +71,46 @@ impl<F: Float> Rem for Dual<F> {
     type Output = Self;
     #[inline]
     fn rem(self, rhs: Self) -> Self {
-        Dual { re: self.re % rhs.re, eps: self.eps }
+        Dual {
+            re: self.re % rhs.re,
+            eps: self.eps,
+        }
     }
 }
 
 impl<F: Float> AddAssign for Dual<F> {
     #[inline]
-    fn add_assign(&mut self, rhs: Self) { *self = *self + rhs; }
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
 }
 
 impl<F: Float> SubAssign for Dual<F> {
     #[inline]
-    fn sub_assign(&mut self, rhs: Self) { *self = *self - rhs; }
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
 }
 
 impl<F: Float> MulAssign for Dual<F> {
     #[inline]
-    fn mul_assign(&mut self, rhs: Self) { *self = *self * rhs; }
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
 }
 
 impl<F: Float> DivAssign for Dual<F> {
     #[inline]
-    fn div_assign(&mut self, rhs: Self) { *self = *self / rhs; }
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
 }
 
 impl<F: Float> RemAssign for Dual<F> {
     #[inline]
-    fn rem_assign(&mut self, rhs: Self) { *self = *self % rhs; }
+    fn rem_assign(&mut self, rhs: Self) {
+        *self = *self % rhs;
+    }
 }
 
 // Mixed ops: Dual<F> with primitive floats.
@@ -97,7 +121,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn add(self, rhs: $f) -> Dual<$f> {
-                Dual { re: self.re + rhs, eps: self.eps }
+                Dual {
+                    re: self.re + rhs,
+                    eps: self.eps,
+                }
             }
         }
 
@@ -105,7 +132,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn add(self, rhs: Dual<$f>) -> Dual<$f> {
-                Dual { re: self + rhs.re, eps: rhs.eps }
+                Dual {
+                    re: self + rhs.re,
+                    eps: rhs.eps,
+                }
             }
         }
 
@@ -113,7 +143,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn sub(self, rhs: $f) -> Dual<$f> {
-                Dual { re: self.re - rhs, eps: self.eps }
+                Dual {
+                    re: self.re - rhs,
+                    eps: self.eps,
+                }
             }
         }
 
@@ -121,7 +154,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn sub(self, rhs: Dual<$f>) -> Dual<$f> {
-                Dual { re: self - rhs.re, eps: -rhs.eps }
+                Dual {
+                    re: self - rhs.re,
+                    eps: -rhs.eps,
+                }
             }
         }
 
@@ -129,7 +165,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn mul(self, rhs: $f) -> Dual<$f> {
-                Dual { re: self.re * rhs, eps: self.eps * rhs }
+                Dual {
+                    re: self.re * rhs,
+                    eps: self.eps * rhs,
+                }
             }
         }
 
@@ -137,7 +176,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn mul(self, rhs: Dual<$f>) -> Dual<$f> {
-                Dual { re: self * rhs.re, eps: self * rhs.eps }
+                Dual {
+                    re: self * rhs.re,
+                    eps: self * rhs.eps,
+                }
             }
         }
 
@@ -146,7 +188,10 @@ macro_rules! impl_dual_scalar_ops {
             #[inline]
             fn div(self, rhs: $f) -> Dual<$f> {
                 let inv = 1.0 / rhs;
-                Dual { re: self.re * inv, eps: self.eps * inv }
+                Dual {
+                    re: self.re * inv,
+                    eps: self.eps * inv,
+                }
             }
         }
 
@@ -166,7 +211,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn rem(self, rhs: $f) -> Dual<$f> {
-                Dual { re: self.re % rhs, eps: self.eps }
+                Dual {
+                    re: self.re % rhs,
+                    eps: self.eps,
+                }
             }
         }
 
@@ -174,7 +222,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn rem(self, rhs: Dual<$f>) -> Dual<$f> {
-                Dual { re: self % rhs.re, eps: <$f>::from(0.0) }
+                Dual {
+                    re: self % rhs.re,
+                    eps: <$f>::from(0.0),
+                }
             }
         }
     };
@@ -206,9 +257,8 @@ impl<F: Float + TapeThreadLocal> Add for Reverse<F> {
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let value = self.value + rhs.value;
-        let index = tape::with_active_tape(|t| {
-            t.push_binary(self.index, F::one(), rhs.index, F::one())
-        });
+        let index =
+            tape::with_active_tape(|t| t.push_binary(self.index, F::one(), rhs.index, F::one()));
         Reverse { value, index }
     }
 }
@@ -218,9 +268,8 @@ impl<F: Float + TapeThreadLocal> Sub for Reverse<F> {
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let value = self.value - rhs.value;
-        let index = tape::with_active_tape(|t| {
-            t.push_binary(self.index, F::one(), rhs.index, -F::one())
-        });
+        let index =
+            tape::with_active_tape(|t| t.push_binary(self.index, F::one(), rhs.index, -F::one()));
         Reverse { value, index }
     }
 }
@@ -230,9 +279,8 @@ impl<F: Float + TapeThreadLocal> Mul for Reverse<F> {
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let value = self.value * rhs.value;
-        let index = tape::with_active_tape(|t| {
-            t.push_binary(self.index, rhs.value, rhs.index, self.value)
-        });
+        let index =
+            tape::with_active_tape(|t| t.push_binary(self.index, rhs.value, rhs.index, self.value));
         Reverse { value, index }
     }
 }
@@ -265,36 +313,45 @@ impl<F: Float + TapeThreadLocal> Rem for Reverse<F> {
     #[inline]
     fn rem(self, rhs: Self) -> Self {
         let value = self.value % rhs.value;
-        let index = tape::with_active_tape(|t| {
-            t.push_binary(self.index, F::one(), rhs.index, F::zero())
-        });
+        let index =
+            tape::with_active_tape(|t| t.push_binary(self.index, F::one(), rhs.index, F::zero()));
         Reverse { value, index }
     }
 }
 
 impl<F: Float + TapeThreadLocal> AddAssign for Reverse<F> {
     #[inline]
-    fn add_assign(&mut self, rhs: Self) { *self = *self + rhs; }
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
 }
 
 impl<F: Float + TapeThreadLocal> SubAssign for Reverse<F> {
     #[inline]
-    fn sub_assign(&mut self, rhs: Self) { *self = *self - rhs; }
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
 }
 
 impl<F: Float + TapeThreadLocal> MulAssign for Reverse<F> {
     #[inline]
-    fn mul_assign(&mut self, rhs: Self) { *self = *self * rhs; }
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
 }
 
 impl<F: Float + TapeThreadLocal> DivAssign for Reverse<F> {
     #[inline]
-    fn div_assign(&mut self, rhs: Self) { *self = *self / rhs; }
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
 }
 
 impl<F: Float + TapeThreadLocal> RemAssign for Reverse<F> {
     #[inline]
-    fn rem_assign(&mut self, rhs: Self) { *self = *self % rhs; }
+    fn rem_assign(&mut self, rhs: Self) {
+        *self = *self % rhs;
+    }
 }
 
 // Mixed ops: Reverse<F> with primitive floats.
@@ -377,9 +434,7 @@ macro_rules! impl_reverse_scalar_ops {
             fn div(self, rhs: Reverse<$f>) -> Reverse<$f> {
                 let inv: $f = 1.0 / rhs.value;
                 let value = self * inv;
-                let index = tape::with_active_tape(|t| {
-                    t.push_unary(rhs.index, -self * inv * inv)
-                });
+                let index = tape::with_active_tape(|t| t.push_unary(rhs.index, -self * inv * inv));
                 Reverse { value, index }
             }
         }
@@ -400,7 +455,10 @@ macro_rules! impl_reverse_scalar_ops {
             fn rem(self, rhs: Reverse<$f>) -> Reverse<$f> {
                 let value = self % rhs.value;
                 // Constant remainder w.r.t. denominator has zero derivative.
-                Reverse { value, index: CONSTANT }
+                Reverse {
+                    value,
+                    index: CONSTANT,
+                }
             }
         }
     };

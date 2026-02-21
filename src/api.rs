@@ -41,11 +41,7 @@ pub fn grad<F: Float + TapeThreadLocal>(
 /// Jacobian-vector product (forward mode): `(f(x), J·v)`.
 ///
 /// Evaluates `f` at `x` and computes the directional derivative in direction `v`.
-pub fn jvp<F: Float>(
-    f: impl Fn(&[Dual<F>]) -> Vec<Dual<F>>,
-    x: &[F],
-    v: &[F],
-) -> (Vec<F>, Vec<F>) {
+pub fn jvp<F: Float>(f: impl Fn(&[Dual<F>]) -> Vec<Dual<F>>, x: &[F], v: &[F]) -> (Vec<F>, Vec<F>) {
     assert_eq!(x.len(), v.len(), "x and v must have the same length");
     let inputs: Vec<Dual<F>> = x
         .iter()

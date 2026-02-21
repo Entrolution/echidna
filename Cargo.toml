@@ -2,8 +2,14 @@
 name = "echidna"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.80"
 description = "A high-performance automatic differentiation library for Rust"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Entrolution/echidna"
+documentation = "https://docs.rs/echidna"
+readme = "README.md"
+keywords = ["autodiff", "differentiation", "gradient", "jacobian", "scientific"]
+categories = ["mathematics", "science", "algorithms"]
 
 [dependencies]
 num-traits = "0.2"
@@ -19,3 +25,7 @@ harness = false
 [[bench]]
 name = "reverse"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

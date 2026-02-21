@@ -152,19 +152,31 @@ impl<F: Float> Dual<F> {
     pub fn sin_cos(self) -> (Self, Self) {
         let (s, c) = self.re.sin_cos();
         (
-            Dual { re: s, eps: self.eps * c },
-            Dual { re: c, eps: self.eps * (-s) },
+            Dual {
+                re: s,
+                eps: self.eps * c,
+            },
+            Dual {
+                re: c,
+                eps: self.eps * (-s),
+            },
         )
     }
 
     #[inline]
     pub fn asin(self) -> Self {
-        self.chain(self.re.asin(), F::one() / (F::one() - self.re * self.re).sqrt())
+        self.chain(
+            self.re.asin(),
+            F::one() / (F::one() - self.re * self.re).sqrt(),
+        )
     }
 
     #[inline]
     pub fn acos(self) -> Self {
-        self.chain(self.re.acos(), -F::one() / (F::one() - self.re * self.re).sqrt())
+        self.chain(
+            self.re.acos(),
+            -F::one() / (F::one() - self.re * self.re).sqrt(),
+        )
     }
 
     #[inline]
@@ -202,12 +214,18 @@ impl<F: Float> Dual<F> {
 
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(self.re.asinh(), F::one() / (self.re * self.re + F::one()).sqrt())
+        self.chain(
+            self.re.asinh(),
+            F::one() / (self.re * self.re + F::one()).sqrt(),
+        )
     }
 
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(self.re.acosh(), F::one() / (self.re * self.re - F::one()).sqrt())
+        self.chain(
+            self.re.acosh(),
+            F::one() / (self.re * self.re - F::one()).sqrt(),
+        )
     }
 
     #[inline]
@@ -224,32 +242,50 @@ impl<F: Float> Dual<F> {
 
     #[inline]
     pub fn signum(self) -> Self {
-        Dual { re: self.re.signum(), eps: F::zero() }
+        Dual {
+            re: self.re.signum(),
+            eps: F::zero(),
+        }
     }
 
     #[inline]
     pub fn floor(self) -> Self {
-        Dual { re: self.re.floor(), eps: F::zero() }
+        Dual {
+            re: self.re.floor(),
+            eps: F::zero(),
+        }
     }
 
     #[inline]
     pub fn ceil(self) -> Self {
-        Dual { re: self.re.ceil(), eps: F::zero() }
+        Dual {
+            re: self.re.ceil(),
+            eps: F::zero(),
+        }
     }
 
     #[inline]
     pub fn round(self) -> Self {
-        Dual { re: self.re.round(), eps: F::zero() }
+        Dual {
+            re: self.re.round(),
+            eps: F::zero(),
+        }
     }
 
     #[inline]
     pub fn trunc(self) -> Self {
-        Dual { re: self.re.trunc(), eps: F::zero() }
+        Dual {
+            re: self.re.trunc(),
+            eps: F::zero(),
+        }
     }
 
     #[inline]
     pub fn fract(self) -> Self {
-        Dual { re: self.re.fract(), eps: self.eps }
+        Dual {
+            re: self.re.fract(),
+            eps: self.eps,
+        }
     }
 
     #[inline]
@@ -272,11 +308,19 @@ impl<F: Float> Dual<F> {
 
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.re >= other.re { self } else { other }
+        if self.re >= other.re {
+            self
+        } else {
+            other
+        }
     }
 
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.re <= other.re { self } else { other }
+        if self.re <= other.re {
+            self
+        } else {
+            other
+        }
     }
 }
