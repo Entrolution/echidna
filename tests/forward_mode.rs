@@ -62,16 +62,24 @@ fn mixed_scalar_ops() {
 // ── Powers ──
 
 #[test]
-fn recip() { check_elemental(|x| x.recip(), |x| x.recip(), 2.5, 1e-5); }
+fn recip() {
+    check_elemental(|x| x.recip(), |x| x.recip(), 2.5, 1e-5);
+}
 
 #[test]
-fn sqrt() { check_elemental(|x| x.sqrt(), |x| x.sqrt(), 4.0, 1e-5); }
+fn sqrt() {
+    check_elemental(|x| x.sqrt(), |x| x.sqrt(), 4.0, 1e-5);
+}
 
 #[test]
-fn cbrt() { check_elemental(|x| x.cbrt(), |x| x.cbrt(), 8.0, 1e-5); }
+fn cbrt() {
+    check_elemental(|x| x.cbrt(), |x| x.cbrt(), 8.0, 1e-5);
+}
 
 #[test]
-fn powi() { check_elemental(|x| x.powi(3), |x| x.powi(3), 2.0, 1e-5); }
+fn powi() {
+    check_elemental(|x| x.powi(3), |x| x.powi(3), 2.0, 1e-5);
+}
 
 #[test]
 fn powf() {
@@ -86,36 +94,56 @@ fn powf() {
 // ── Exp/Log ──
 
 #[test]
-fn exp() { check_elemental(|x| x.exp(), |x| x.exp(), 1.0, 1e-5); }
+fn exp() {
+    check_elemental(|x| x.exp(), |x| x.exp(), 1.0, 1e-5);
+}
 
 #[test]
-fn exp2() { check_elemental(|x| x.exp2(), |x| x.exp2(), 1.5, 1e-5); }
+fn exp2() {
+    check_elemental(|x| x.exp2(), |x| x.exp2(), 1.5, 1e-5);
+}
 
 #[test]
-fn exp_m1() { check_elemental(|x| x.exp_m1(), |x| x.exp_m1(), 0.5, 1e-5); }
+fn exp_m1() {
+    check_elemental(|x| x.exp_m1(), |x| x.exp_m1(), 0.5, 1e-5);
+}
 
 #[test]
-fn ln() { check_elemental(|x| x.ln(), |x| x.ln(), 2.0, 1e-5); }
+fn ln() {
+    check_elemental(|x| x.ln(), |x| x.ln(), 2.0, 1e-5);
+}
 
 #[test]
-fn log2() { check_elemental(|x| x.log2(), |x| x.log2(), 2.0, 1e-5); }
+fn log2() {
+    check_elemental(|x| x.log2(), |x| x.log2(), 2.0, 1e-5);
+}
 
 #[test]
-fn log10() { check_elemental(|x| x.log10(), |x| x.log10(), 2.0, 1e-5); }
+fn log10() {
+    check_elemental(|x| x.log10(), |x| x.log10(), 2.0, 1e-5);
+}
 
 #[test]
-fn ln_1p() { check_elemental(|x| x.ln_1p(), |x| x.ln_1p(), 0.5, 1e-5); }
+fn ln_1p() {
+    check_elemental(|x| x.ln_1p(), |x| x.ln_1p(), 0.5, 1e-5);
+}
 
 // ── Trig ──
 
 #[test]
-fn sin() { check_elemental(|x| x.sin(), |x| x.sin(), 1.0, 1e-5); }
+fn sin() {
+    check_elemental(|x| x.sin(), |x| x.sin(), 1.0, 1e-5);
+}
 
 #[test]
-fn cos() { check_elemental(|x| x.cos(), |x| x.cos(), 1.0, 1e-5); }
+fn cos() {
+    check_elemental(|x| x.cos(), |x| x.cos(), 1.0, 1e-5);
+}
 
 #[test]
-fn tan() { check_elemental(|x| x.tan(), |x| x.tan(), 0.5, 1e-5); }
+fn tan() {
+    check_elemental(|x| x.tan(), |x| x.tan(), 0.5, 1e-5);
+}
 
 #[test]
 fn sin_cos() {
@@ -128,13 +156,19 @@ fn sin_cos() {
 }
 
 #[test]
-fn asin() { check_elemental(|x| x.asin(), |x| x.asin(), 0.5, 1e-5); }
+fn asin() {
+    check_elemental(|x| x.asin(), |x| x.asin(), 0.5, 1e-5);
+}
 
 #[test]
-fn acos() { check_elemental(|x| x.acos(), |x| x.acos(), 0.5, 1e-5); }
+fn acos() {
+    check_elemental(|x| x.acos(), |x| x.acos(), 0.5, 1e-5);
+}
 
 #[test]
-fn atan() { check_elemental(|x| x.atan(), |x| x.atan(), 1.0, 1e-5); }
+fn atan() {
+    check_elemental(|x| x.atan(), |x| x.atan(), 1.0, 1e-5);
+}
 
 #[test]
 fn atan2() {
@@ -149,22 +183,34 @@ fn atan2() {
 // ── Hyperbolic ──
 
 #[test]
-fn sinh() { check_elemental(|x| x.sinh(), |x| x.sinh(), 1.0, 1e-5); }
+fn sinh() {
+    check_elemental(|x| x.sinh(), |x| x.sinh(), 1.0, 1e-5);
+}
 
 #[test]
-fn cosh() { check_elemental(|x| x.cosh(), |x| x.cosh(), 1.0, 1e-5); }
+fn cosh() {
+    check_elemental(|x| x.cosh(), |x| x.cosh(), 1.0, 1e-5);
+}
 
 #[test]
-fn tanh() { check_elemental(|x| x.tanh(), |x| x.tanh(), 1.0, 1e-5); }
+fn tanh() {
+    check_elemental(|x| x.tanh(), |x| x.tanh(), 1.0, 1e-5);
+}
 
 #[test]
-fn asinh() { check_elemental(|x| x.asinh(), |x| x.asinh(), 1.0, 1e-5); }
+fn asinh() {
+    check_elemental(|x| x.asinh(), |x| x.asinh(), 1.0, 1e-5);
+}
 
 #[test]
-fn acosh() { check_elemental(|x| x.acosh(), |x| x.acosh(), 2.0, 1e-5); }
+fn acosh() {
+    check_elemental(|x| x.acosh(), |x| x.acosh(), 2.0, 1e-5);
+}
 
 #[test]
-fn atanh() { check_elemental(|x| x.atanh(), |x| x.atanh(), 0.5, 1e-5); }
+fn atanh() {
+    check_elemental(|x| x.atanh(), |x| x.atanh(), 0.5, 1e-5);
+}
 
 // ── Misc ──
 

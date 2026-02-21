@@ -73,10 +73,7 @@ fn bench_forward_overhead(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("dual_single_dir", n), &x, |b, x| {
             b.iter(|| {
-                let inputs: Vec<Dual<f64>> = x
-                    .iter()
-                    .map(|&xi| Dual::variable(xi))
-                    .collect();
+                let inputs: Vec<Dual<f64>> = x.iter().map(|&xi| Dual::variable(xi)).collect();
                 black_box(rosenbrock_dual(black_box(&inputs)))
             })
         });
@@ -106,16 +103,16 @@ fn bench_jacobian(c: &mut Criterion) {
         let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
 
         group.bench_with_input(BenchmarkId::new("forward_jacobian", n), &x, |b, x| {
-            b.iter(|| {
-                black_box(jacobian(
-                    |v| vec![rosenbrock_generic(v)],
-                    black_box(x),
-                ))
-            })
+            b.iter(|| black_box(jacobian(|v| vec![rosenbrock_generic(v)], black_box(x))))
         });
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_forward_overhead, bench_forward_gradient, bench_jacobian);
+criterion_group!(
+    benches,
+    bench_forward_overhead,
+    bench_forward_gradient,
+    bench_jacobian
+);
 criterion_main!(benches);

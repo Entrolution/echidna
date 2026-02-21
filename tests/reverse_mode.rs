@@ -1,6 +1,6 @@
 use approx::assert_relative_eq;
-use echidna::Reverse;
 use echidna::tape::{Tape, TapeGuard};
+use echidna::Reverse;
 use num_traits::Float;
 
 /// Run a single-variable reverse-mode differentiation.
@@ -72,84 +72,133 @@ fn fan_out() {
 #[test]
 fn chain_depth() {
     // y = ((x²)²)² = x^8, dy/dx = 8*x^7
-    let grad = reverse_grad(|x| {
-        let a = x * x;
-        let b = a * a;
-        b * b
-    }, 2.0);
+    let grad = reverse_grad(
+        |x| {
+            let a = x * x;
+            let b = a * a;
+            b * b
+        },
+        2.0,
+    );
     assert_relative_eq!(grad, 8.0 * 2.0_f64.powi(7), max_relative = 1e-10);
 }
 
 // ── Elementals ──
 
 #[test]
-fn sin() { check_reverse_elemental(|x| x.sin(), |x| x.sin(), 1.0, 1e-5); }
+fn sin() {
+    check_reverse_elemental(|x| x.sin(), |x| x.sin(), 1.0, 1e-5);
+}
 
 #[test]
-fn cos() { check_reverse_elemental(|x| x.cos(), |x| x.cos(), 1.0, 1e-5); }
+fn cos() {
+    check_reverse_elemental(|x| x.cos(), |x| x.cos(), 1.0, 1e-5);
+}
 
 #[test]
-fn tan() { check_reverse_elemental(|x| x.tan(), |x| x.tan(), 0.5, 1e-5); }
+fn tan() {
+    check_reverse_elemental(|x| x.tan(), |x| x.tan(), 0.5, 1e-5);
+}
 
 #[test]
-fn exp() { check_reverse_elemental(|x| x.exp(), |x| x.exp(), 1.0, 1e-5); }
+fn exp() {
+    check_reverse_elemental(|x| x.exp(), |x| x.exp(), 1.0, 1e-5);
+}
 
 #[test]
-fn ln() { check_reverse_elemental(|x| x.ln(), |x| x.ln(), 2.0, 1e-5); }
+fn ln() {
+    check_reverse_elemental(|x| x.ln(), |x| x.ln(), 2.0, 1e-5);
+}
 
 #[test]
-fn sqrt() { check_reverse_elemental(|x| x.sqrt(), |x| x.sqrt(), 4.0, 1e-5); }
+fn sqrt() {
+    check_reverse_elemental(|x| x.sqrt(), |x| x.sqrt(), 4.0, 1e-5);
+}
 
 #[test]
-fn recip() { check_reverse_elemental(|x| x.recip(), |x| x.recip(), 2.5, 1e-5); }
+fn recip() {
+    check_reverse_elemental(|x| x.recip(), |x| x.recip(), 2.5, 1e-5);
+}
 
 #[test]
-fn powi() { check_reverse_elemental(|x| x.powi(3), |x| x.powi(3), 2.0, 1e-5); }
+fn powi() {
+    check_reverse_elemental(|x| x.powi(3), |x| x.powi(3), 2.0, 1e-5);
+}
 
 #[test]
-fn tanh() { check_reverse_elemental(|x| x.tanh(), |x| x.tanh(), 1.0, 1e-5); }
+fn tanh() {
+    check_reverse_elemental(|x| x.tanh(), |x| x.tanh(), 1.0, 1e-5);
+}
 
 #[test]
-fn asin() { check_reverse_elemental(|x| x.asin(), |x| x.asin(), 0.5, 1e-5); }
+fn asin() {
+    check_reverse_elemental(|x| x.asin(), |x| x.asin(), 0.5, 1e-5);
+}
 
 #[test]
-fn acos() { check_reverse_elemental(|x| x.acos(), |x| x.acos(), 0.5, 1e-5); }
+fn acos() {
+    check_reverse_elemental(|x| x.acos(), |x| x.acos(), 0.5, 1e-5);
+}
 
 #[test]
-fn atan() { check_reverse_elemental(|x| x.atan(), |x| x.atan(), 1.0, 1e-5); }
+fn atan() {
+    check_reverse_elemental(|x| x.atan(), |x| x.atan(), 1.0, 1e-5);
+}
 
 #[test]
-fn sinh() { check_reverse_elemental(|x| x.sinh(), |x| x.sinh(), 1.0, 1e-5); }
+fn sinh() {
+    check_reverse_elemental(|x| x.sinh(), |x| x.sinh(), 1.0, 1e-5);
+}
 
 #[test]
-fn cosh() { check_reverse_elemental(|x| x.cosh(), |x| x.cosh(), 1.0, 1e-5); }
+fn cosh() {
+    check_reverse_elemental(|x| x.cosh(), |x| x.cosh(), 1.0, 1e-5);
+}
 
 #[test]
-fn asinh() { check_reverse_elemental(|x| x.asinh(), |x| x.asinh(), 1.0, 1e-5); }
+fn asinh() {
+    check_reverse_elemental(|x| x.asinh(), |x| x.asinh(), 1.0, 1e-5);
+}
 
 #[test]
-fn acosh() { check_reverse_elemental(|x| x.acosh(), |x| x.acosh(), 2.0, 1e-5); }
+fn acosh() {
+    check_reverse_elemental(|x| x.acosh(), |x| x.acosh(), 2.0, 1e-5);
+}
 
 #[test]
-fn atanh() { check_reverse_elemental(|x| x.atanh(), |x| x.atanh(), 0.5, 1e-5); }
+fn atanh() {
+    check_reverse_elemental(|x| x.atanh(), |x| x.atanh(), 0.5, 1e-5);
+}
 
 #[test]
-fn exp2() { check_reverse_elemental(|x| x.exp2(), |x| x.exp2(), 1.5, 1e-5); }
+fn exp2() {
+    check_reverse_elemental(|x| x.exp2(), |x| x.exp2(), 1.5, 1e-5);
+}
 
 #[test]
-fn log2() { check_reverse_elemental(|x| x.log2(), |x| x.log2(), 2.0, 1e-5); }
+fn log2() {
+    check_reverse_elemental(|x| x.log2(), |x| x.log2(), 2.0, 1e-5);
+}
 
 #[test]
-fn log10() { check_reverse_elemental(|x| x.log10(), |x| x.log10(), 2.0, 1e-5); }
+fn log10() {
+    check_reverse_elemental(|x| x.log10(), |x| x.log10(), 2.0, 1e-5);
+}
 
 #[test]
-fn cbrt() { check_reverse_elemental(|x| x.cbrt(), |x| x.cbrt(), 8.0, 1e-5); }
+fn cbrt() {
+    check_reverse_elemental(|x| x.cbrt(), |x| x.cbrt(), 8.0, 1e-5);
+}
 
 #[test]
-fn exp_m1() { check_reverse_elemental(|x| x.exp_m1(), |x| x.exp_m1(), 0.5, 1e-5); }
+fn exp_m1() {
+    check_reverse_elemental(|x| x.exp_m1(), |x| x.exp_m1(), 0.5, 1e-5);
+}
 
 #[test]
-fn ln_1p() { check_reverse_elemental(|x| x.ln_1p(), |x| x.ln_1p(), 0.5, 1e-5); }
+fn ln_1p() {
+    check_reverse_elemental(|x| x.ln_1p(), |x| x.ln_1p(), 0.5, 1e-5);
+}
 
 #[test]
 fn abs_positive() {
@@ -178,8 +227,7 @@ fn complex_composition() {
     // f(x) = x * sin(x) + cos(x²)
     let x_val = 1.5;
     let grad = reverse_grad(|x| x * x.sin() + (x * x).cos(), x_val);
-    let expected = x_val.sin() + x_val * x_val.cos()
-        - 2.0 * x_val * (x_val * x_val).sin();
+    let expected = x_val.sin() + x_val * x_val.cos() - 2.0 * x_val * (x_val * x_val).sin();
     assert_relative_eq!(grad, expected, max_relative = 1e-10);
 }
 

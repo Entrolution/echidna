@@ -95,13 +95,7 @@ impl<F: Float> Tape<F> {
 
     /// Record a binary operation with precomputed partial derivatives.
     #[inline]
-    pub fn push_binary(
-        &mut self,
-        lhs_idx: u32,
-        lhs_mult: F,
-        rhs_idx: u32,
-        rhs_mult: F,
-    ) -> u32 {
+    pub fn push_binary(&mut self, lhs_idx: u32, lhs_mult: F, rhs_idx: u32, rhs_mult: F) -> u32 {
         let result_idx = self.num_variables;
         self.num_variables += 1;
 
@@ -195,7 +189,10 @@ impl TapeThreadLocal for f64 {
 pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R) -> R {
     F::cell().with(|cell| {
         let ptr = cell.get();
-        assert!(!ptr.is_null(), "No active tape. Use echidna::grad() or similar API.");
+        assert!(
+            !ptr.is_null(),
+            "No active tape. Use echidna::grad() or similar API."
+        );
         // SAFETY: The TapeGuard guarantees the pointer is valid for the
         // duration of the closure-based API scope, and only one mutable
         // reference exists at a time (single-threaded access via thread-local).

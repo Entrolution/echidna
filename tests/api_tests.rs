@@ -48,7 +48,11 @@ fn grad_rosenbrock_at_minimum() {
     let x = vec![1.0; 10];
     let g = grad(|v| rosenbrock(v), &x);
     for gi in &g {
-        assert!(gi.abs() < 1e-12, "gradient at minimum should be zero, got {}", gi);
+        assert!(
+            gi.abs() < 1e-12,
+            "gradient at minimum should be zero, got {}",
+            gi
+        );
     }
 }
 
@@ -128,10 +132,7 @@ fn jvp_vjp_transpose_consistency() {
 fn jacobian_linear() {
     // f(x) = [2*x[0] + x[1], x[0] - x[1]]
     // J = [[2, 1], [1, -1]]
-    let (vals, jac) = jacobian(
-        |x| vec![x[0] + x[0] + x[1], x[0] - x[1]],
-        &[3.0, 4.0],
-    );
+    let (vals, jac) = jacobian(|x| vec![x[0] + x[0] + x[1], x[0] - x[1]], &[3.0, 4.0]);
     assert_relative_eq!(vals[0], 10.0, max_relative = 1e-12);
     assert_relative_eq!(vals[1], -1.0, max_relative = 1e-12);
     assert_relative_eq!(jac[0][0], 2.0, max_relative = 1e-12);
@@ -144,10 +145,7 @@ fn jacobian_linear() {
 fn jacobian_nonlinear() {
     // f(x) = [x[0]², x[0]*x[1]]
     // J = [[2*x[0], 0], [x[1], x[0]]]
-    let (_, jac) = jacobian(
-        |x| vec![x[0] * x[0], x[0] * x[1]],
-        &[3.0, 4.0],
-    );
+    let (_, jac) = jacobian(|x| vec![x[0] * x[0], x[0] * x[1]], &[3.0, 4.0]);
     assert_relative_eq!(jac[0][0], 6.0, max_relative = 1e-12);
     assert_relative_eq!(jac[0][1], 0.0, epsilon = 1e-14);
     assert_relative_eq!(jac[1][0], 4.0, max_relative = 1e-12);
@@ -158,7 +156,9 @@ fn jacobian_nonlinear() {
 
 #[test]
 fn scalar_generic_function() {
-    fn square<T: Scalar>(x: T) -> T { x * x }
+    fn square<T: Scalar>(x: T) -> T {
+        x * x
+    }
 
     // Works with f64
     assert_relative_eq!(square(3.0_f64), 9.0);

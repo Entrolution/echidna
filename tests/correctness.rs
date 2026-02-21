@@ -97,7 +97,10 @@ fn cross_validate(
         assert!(
             (fwd_grad[i] - rev_grad[i]).abs() <= 1e-10 * fwd_grad[i].abs().max(1e-12),
             "{} fwd vs rev, component {}: fwd={}, rev={}",
-            label, i, fwd_grad[i], rev_grad[i]
+            label,
+            i,
+            fwd_grad[i],
+            rev_grad[i]
         );
     }
 
@@ -107,7 +110,10 @@ fn cross_validate(
         assert!(
             (fwd_grad[i] - fd_grad[i]).abs() <= 1e-4 * scale,
             "{} fwd vs fd, component {}: fwd={}, fd={}",
-            label, i, fwd_grad[i], fd_grad[i]
+            label,
+            i,
+            fwd_grad[i],
+            fd_grad[i]
         );
     }
 }
@@ -139,37 +145,19 @@ fn cross_validate_rosenbrock_10d() {
 #[test]
 fn cross_validate_beale() {
     let x = [1.0, 0.5];
-    cross_validate(
-        |v| beale(v),
-        |v| beale(v),
-        |v| beale(v),
-        &x,
-        "beale",
-    );
+    cross_validate(|v| beale(v), |v| beale(v), |v| beale(v), &x, "beale");
 }
 
 #[test]
 fn cross_validate_sphere_5d() {
     let x = [1.0, -2.0, 3.0, -0.5, 0.7];
-    cross_validate(
-        |v| sphere(v),
-        |v| sphere(v),
-        |v| sphere(v),
-        &x,
-        "sphere-5d",
-    );
+    cross_validate(|v| sphere(v), |v| sphere(v), |v| sphere(v), &x, "sphere-5d");
 }
 
 #[test]
 fn cross_validate_booth() {
     let x = [2.0, 3.0];
-    cross_validate(
-        |v| booth(v),
-        |v| booth(v),
-        |v| booth(v),
-        &x,
-        "booth",
-    );
+    cross_validate(|v| booth(v), |v| booth(v), |v| booth(v), &x, "booth");
 }
 
 /// Test transcendental-heavy function.
@@ -193,9 +181,12 @@ fn cross_validate_trig_mix() {
 fn ackley<T: Scalar>(x: &[T]) -> T {
     let a = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(20.0).unwrap());
     let b = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(0.2).unwrap());
-    let c = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(std::f64::consts::TAU).unwrap());
+    let c = T::from_f(
+        <T::Float as num_traits::FromPrimitive>::from_f64(std::f64::consts::TAU).unwrap(),
+    );
     let half = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(0.5).unwrap());
-    let e_const = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(std::f64::consts::E).unwrap());
+    let e_const =
+        T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(std::f64::consts::E).unwrap());
 
     let sum_sq = x[0] * x[0] + x[1] * x[1];
     let sum_cos = (c * x[0]).cos() + (c * x[1]).cos();
@@ -209,13 +200,7 @@ fn ackley<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn cross_validate_ackley() {
     let x = [0.5, -0.3];
-    cross_validate(
-        |v| ackley(v),
-        |v| ackley(v),
-        |v| ackley(v),
-        &x,
-        "ackley",
-    );
+    cross_validate(|v| ackley(v), |v| ackley(v), |v| ackley(v), &x, "ackley");
 }
 
 /// Test: forward and reverse agree on a deeply nested function.

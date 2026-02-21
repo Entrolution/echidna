@@ -1,7 +1,7 @@
 use std::fmt::{self, Display};
 
-use crate::Float;
 use crate::tape::CONSTANT;
+use crate::Float;
 
 /// Reverse-mode AD variable.
 ///
