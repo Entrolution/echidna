@@ -87,3 +87,18 @@ impl<F: Float + TapeThreadLocal> Scalar for Reverse<F> {
         self.value
     }
 }
+
+#[cfg(feature = "bytecode")]
+impl<F: Float + crate::bytecode_tape::BtapeThreadLocal> Scalar for crate::breverse::BReverse<F> {
+    type Float = F;
+
+    #[inline]
+    fn from_f(val: F) -> Self {
+        crate::breverse::BReverse::constant(val)
+    }
+
+    #[inline]
+    fn value(&self) -> F {
+        self.value
+    }
+}

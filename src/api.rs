@@ -3,6 +3,11 @@ use crate::float::Float;
 use crate::reverse::Reverse;
 use crate::tape::{Tape, TapeGuard, TapeThreadLocal};
 
+#[cfg(feature = "bytecode")]
+use crate::breverse::BReverse;
+#[cfg(feature = "bytecode")]
+use crate::bytecode_tape::{BtapeGuard, BtapeThreadLocal, BytecodeTape};
+
 /// Compute the gradient of a scalar function `f : R^n → R` using reverse mode.
 ///
 /// ```
@@ -133,4 +138,53 @@ pub fn jacobian<F: Float>(
     }
 
     (values, jac)
+}
+
+/// Record a function into a [`BytecodeTape`] that can be re-evaluated at
+/// different inputs without re-recording.
+///
+/// Returns the tape and the output value from the recording pass.
+///
+/// # Limitations
+///
+/// The tape records one execution path. If `f` contains branches
+/// (`if x > 0 { ... } else { ... }`), re-evaluating at inputs that take a
+/// different branch produces **incorrect results**.
+///
+/// # Example
+///
+/// ```ignore
+/// let (mut tape, val) = echidna::record(
+///     |x| x[0] * x[0] + x[1] * x[1],
+///     &[3.0, 4.0],
+/// );
+/// assert!((val - 25.0).abs() < 1e-10);
+///
+/// let g = tape.gradient(&[3.0, 4.0]);
+/// assert!((g[0] - 6.0).abs() < 1e-10);
+/// assert!((g[1] - 8.0).abs() < 1e-10);
+/// ```
+#[cfg(feature = "bytecode")]
+pub fn record<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &[F],
+) -> (BytecodeTape<F>, F) {
+    let n = x.len();
+    let mut tape = BytecodeTape::with_capacity(n * 10);
+
+    // Register inputs.
+    let inputs: Vec<BReverse<F>> = x
+        .iter()
+        .map(|&val| {
+            let idx = tape.new_input(val);
+            BReverse::from_tape(val, idx)
+        })
+        .collect();
+
+    let _guard = BtapeGuard::new(&mut tape);
+    let output = f(&inputs);
+
+    tape.set_output(output.index);
+    let value = output.value;
+    (tape, value)
 }

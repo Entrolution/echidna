@@ -1,5 +1,8 @@
 use echidna::{grad, Dual, Scalar};
 
+#[cfg(feature = "bytecode")]
+use echidna::{record, BReverse};
+
 /// Central finite difference gradient.
 fn finite_diff_grad(f: impl Fn(&[f64]) -> f64, x: &[f64], h: f64) -> Vec<f64> {
     let n = x.len();
@@ -266,5 +269,112 @@ fn cross_validate_logistic_chain() {
         |v| logistic_chain(v),
         &x,
         "logistic-chain",
+    );
+}
+
+// ══════════════════════════════════════════════
+//  Bytecode tape cross-validation
+// ══════════════════════════════════════════════
+
+#[cfg(feature = "bytecode")]
+fn bytecode_grad(
+    f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
+    x: &[f64],
+) -> Vec<f64> {
+    let (mut tape, _) = record(f, x);
+    tape.gradient(x)
+}
+
+/// Cross-validate forward, reverse (Adept), and bytecode reverse.
+#[cfg(feature = "bytecode")]
+fn cross_validate_all(
+    f_dual: impl Fn(&[Dual<f64>]) -> Dual<f64>,
+    f_rev: impl FnOnce(&[echidna::Reverse<f64>]) -> echidna::Reverse<f64>,
+    f_brev: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
+    f_f64: impl Fn(&[f64]) -> f64,
+    x: &[f64],
+    label: &str,
+) {
+    let fwd_grad = forward_grad(&f_dual, x);
+    let rev_grad = grad(f_rev, x);
+    let btape_grad = bytecode_grad(f_brev, x);
+    let fd_grad = finite_diff_grad(&f_f64, x, 1e-7);
+
+    for i in 0..x.len() {
+        // Forward vs Adept reverse.
+        assert!(
+            (fwd_grad[i] - rev_grad[i]).abs() <= 1e-10 * fwd_grad[i].abs().max(1e-12),
+            "{} fwd vs rev, component {}: fwd={}, rev={}",
+            label, i, fwd_grad[i], rev_grad[i]
+        );
+        // Adept reverse vs bytecode reverse.
+        assert!(
+            (rev_grad[i] - btape_grad[i]).abs() <= 1e-10 * rev_grad[i].abs().max(1e-12),
+            "{} rev vs btape, component {}: rev={}, btape={}",
+            label, i, rev_grad[i], btape_grad[i]
+        );
+        // Forward vs finite diff.
+        let scale = fwd_grad[i].abs().max(1.0);
+        assert!(
+            (fwd_grad[i] - fd_grad[i]).abs() <= 1e-4 * scale,
+            "{} fwd vs fd, component {}: fwd={}, fd={}",
+            label, i, fwd_grad[i], fd_grad[i]
+        );
+    }
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn cross_validate_all_rosenbrock_2d() {
+    let x = [1.5, 2.0];
+    cross_validate_all(
+        |v| rosenbrock(v),
+        |v| rosenbrock(v),
+        |v| rosenbrock(v),
+        |v| rosenbrock(v),
+        &x,
+        "all-rosenbrock-2d",
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn cross_validate_all_trig_mix() {
+    let x = [1.0, 2.0];
+    cross_validate_all(
+        |v| trig_mix(v),
+        |v| trig_mix(v),
+        |v| trig_mix(v),
+        |v| trig_mix(v),
+        &x,
+        "all-trig-mix",
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn cross_validate_all_deep_nest() {
+    let x = [0.5];
+    cross_validate_all(
+        |v| deep_nest(v),
+        |v| deep_nest(v),
+        |v| deep_nest(v),
+        |v| deep_nest(v),
+        &x,
+        "all-deep-nest",
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn cross_validate_all_logistic_chain() {
+    let x = [0.5];
+    cross_validate_all(
+        |v| logistic_chain(v),
+        |v| logistic_chain(v),
+        |v| logistic_chain(v),
+        |v| logistic_chain(v),
+        &x,
+        "all-logistic-chain",
     );
 }
