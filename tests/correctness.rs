@@ -277,10 +277,7 @@ fn cross_validate_logistic_chain() {
 // ══════════════════════════════════════════════
 
 #[cfg(feature = "bytecode")]
-fn bytecode_grad(
-    f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
-    x: &[f64],
-) -> Vec<f64> {
+fn bytecode_grad(f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>, x: &[f64]) -> Vec<f64> {
     let (mut tape, _) = record(f, x);
     tape.gradient(x)
 }
@@ -305,20 +302,29 @@ fn cross_validate_all(
         assert!(
             (fwd_grad[i] - rev_grad[i]).abs() <= 1e-10 * fwd_grad[i].abs().max(1e-12),
             "{} fwd vs rev, component {}: fwd={}, rev={}",
-            label, i, fwd_grad[i], rev_grad[i]
+            label,
+            i,
+            fwd_grad[i],
+            rev_grad[i]
         );
         // Adept reverse vs bytecode reverse.
         assert!(
             (rev_grad[i] - btape_grad[i]).abs() <= 1e-10 * rev_grad[i].abs().max(1e-12),
             "{} rev vs btape, component {}: rev={}, btape={}",
-            label, i, rev_grad[i], btape_grad[i]
+            label,
+            i,
+            rev_grad[i],
+            btape_grad[i]
         );
         // Forward vs finite diff.
         let scale = fwd_grad[i].abs().max(1.0);
         assert!(
             (fwd_grad[i] - fd_grad[i]).abs() <= 1e-4 * scale,
             "{} fwd vs fd, component {}: fwd={}, fd={}",
-            label, i, fwd_grad[i], fd_grad[i]
+            label,
+            i,
+            fwd_grad[i],
+            fd_grad[i]
         );
     }
 }

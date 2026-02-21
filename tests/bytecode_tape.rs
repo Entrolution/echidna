@@ -237,21 +237,27 @@ fn scalar_multiplication() {
 #[test]
 fn matches_adept_rosenbrock_2d() {
     let x = [1.5, 2.0];
-    let adept = echidna::grad(|v| {
-        let one = echidna::Reverse::constant(1.0);
-        let hundred = echidna::Reverse::constant(100.0);
-        let t1 = one - v[0];
-        let t2 = v[1] - v[0] * v[0];
-        t1 * t1 + hundred * t2 * t2
-    }, &x);
+    let adept = echidna::grad(
+        |v| {
+            let one = echidna::Reverse::constant(1.0);
+            let hundred = echidna::Reverse::constant(100.0);
+            let t1 = one - v[0];
+            let t2 = v[1] - v[0] * v[0];
+            t1 * t1 + hundred * t2 * t2
+        },
+        &x,
+    );
 
-    let (mut tape, _) = record(|v| {
-        let one = BReverse::constant(1.0);
-        let hundred = BReverse::constant(100.0);
-        let t1 = one - v[0];
-        let t2 = v[1] - v[0] * v[0];
-        t1 * t1 + hundred * t2 * t2
-    }, &x);
+    let (mut tape, _) = record(
+        |v| {
+            let one = BReverse::constant(1.0);
+            let hundred = BReverse::constant(100.0);
+            let t1 = one - v[0];
+            let t2 = v[1] - v[0] * v[0];
+            t1 * t1 + hundred * t2 * t2
+        },
+        &x,
+    );
     let btape = tape.gradient(&x);
 
     for i in 0..x.len() {
