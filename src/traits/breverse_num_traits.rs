@@ -28,11 +28,7 @@ fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 
 
 /// Record a unary opcode, promoting constant if needed.
 #[inline]
-fn brev_unary<F: Float + BtapeThreadLocal>(
-    x: BReverse<F>,
-    op: OpCode,
-    f_val: F,
-) -> BReverse<F> {
+fn brev_unary<F: Float + BtapeThreadLocal>(x: BReverse<F>, op: OpCode, f_val: F) -> BReverse<F> {
     let index = bytecode_tape::with_active_btape(|t| {
         let xi = ensure_on_tape(&x, t);
         t.push_op(op, xi, UNUSED, f_val)
@@ -416,19 +412,29 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
     }
 
     fn max(self, other: Self) -> Self {
-        brev_binary(self, other, OpCode::Max, if self.value >= other.value {
-            self.value
-        } else {
-            other.value
-        })
+        brev_binary(
+            self,
+            other,
+            OpCode::Max,
+            if self.value >= other.value {
+                self.value
+            } else {
+                other.value
+            },
+        )
     }
 
     fn min(self, other: Self) -> Self {
-        brev_binary(self, other, OpCode::Min, if self.value <= other.value {
-            self.value
-        } else {
-            other.value
-        })
+        brev_binary(
+            self,
+            other,
+            OpCode::Min,
+            if self.value <= other.value {
+                self.value
+            } else {
+                other.value
+            },
+        )
     }
 
     fn abs_sub(self, other: Self) -> Self {

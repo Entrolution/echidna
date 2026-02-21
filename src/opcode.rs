@@ -246,9 +246,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
 
         // Exp/Log
-        OpCode::Exp => (r, zero),          // d/da e^a = e^a = r
+        OpCode::Exp => (r, zero), // d/da e^a = e^a = r
         OpCode::Exp2 => (r * T::ln(T::from(2.0).unwrap()), zero),
-        OpCode::ExpM1 => (r + one, zero),  // d/da (e^a - 1) = e^a = r+1
+        OpCode::ExpM1 => (r + one, zero), // d/da (e^a - 1) = e^a = r+1
         OpCode::Ln => (one / a, zero),
         OpCode::Log2 => (one / (a * T::ln(T::from(2.0).unwrap())), zero),
         OpCode::Log10 => (one / (a * T::ln(T::from(10.0).unwrap())), zero),
@@ -301,4 +301,3 @@ fn powi_exp_decode<T: Float>(b: T) -> i32 {
 pub fn powi_exp_encode(exp: i32) -> u32 {
     exp as u32
 }
-

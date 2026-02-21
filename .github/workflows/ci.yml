@@ -151,13 +151,18 @@ jobs:
           restore-keys: benchmark-baseline-main
 
       - name: Run benchmarks
-        run: cargo bench -- --save-baseline pr
+        run: |
+          cargo bench --bench forward -- --save-baseline pr
+          cargo bench --bench reverse -- --save-baseline pr
+          cargo bench --features bytecode --bench bytecode -- --save-baseline pr
 
       - name: Compare benchmarks
         run: |
           if [ -d "target/criterion" ] && [ -f "target/criterion/main/estimates.json" ]; then
             echo "Comparing against baseline..."
-            cargo bench -- --baseline main --noplot 2>&1 | tee benchmark_results.txt || true
+            cargo bench --bench forward -- --baseline main --noplot 2>&1 | tee benchmark_results.txt || true
+            cargo bench --bench reverse -- --baseline main --noplot 2>&1 | tee -a benchmark_results.txt || true
+            cargo bench --features bytecode --bench bytecode -- --baseline main --noplot 2>&1 | tee -a benchmark_results.txt || true
           else
             echo "No baseline found, skipping comparison"
           fi

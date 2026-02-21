@@ -92,5 +92,10 @@ fn bench_buf_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_bytecode_vs_adept, bench_tape_reuse, bench_buf_reuse);
+criterion_group!(
+    benches,
+    bench_bytecode_vs_adept,
+    bench_tape_reuse,
+    bench_buf_reuse
+);
 criterion_main!(benches);

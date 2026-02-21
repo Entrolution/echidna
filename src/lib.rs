@@ -7,11 +7,11 @@ pub mod tape;
 mod traits;
 
 #[cfg(feature = "bytecode")]
-pub mod opcode;
+pub mod breverse;
 #[cfg(feature = "bytecode")]
 pub mod bytecode_tape;
 #[cfg(feature = "bytecode")]
-pub mod breverse;
+pub mod opcode;
 
 pub use api::{grad, jacobian, jvp, vjp};
 pub use dual::Dual;
