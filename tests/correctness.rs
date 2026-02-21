@@ -384,3 +384,90 @@ fn cross_validate_all_logistic_chain() {
         "all-logistic-chain",
     );
 }
+
+// ══════════════════════════════════════════════
+//  HVP cross-validation (forward-over-reverse vs finite differences)
+// ══════════════════════════════════════════════
+
+#[cfg(feature = "bytecode")]
+fn finite_diff_hvp(
+    tape: &mut echidna::BytecodeTape<f64>,
+    x: &[f64],
+    v: &[f64],
+    h: f64,
+) -> Vec<f64> {
+    let n = x.len();
+    let mut xp = x.to_vec();
+    let mut xm = x.to_vec();
+    for i in 0..n {
+        xp[i] = x[i] + h * v[i];
+        xm[i] = x[i] - h * v[i];
+    }
+    let gp = tape.gradient(&xp);
+    let gm = tape.gradient(&xm);
+    (0..n).map(|i| (gp[i] - gm[i]) / (2.0 * h)).collect()
+}
+
+#[cfg(feature = "bytecode")]
+fn cross_validate_hvp(
+    f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
+    x: &[f64],
+    v: &[f64],
+    label: &str,
+) {
+    let (mut tape, _) = record(f, x);
+    let (_, analytic_hv) = tape.hvp(x, v);
+    let fd_hv = finite_diff_hvp(&mut tape, x, v, 1e-5);
+
+    for i in 0..x.len() {
+        let scale = analytic_hv[i].abs().max(1.0);
+        assert!(
+            (analytic_hv[i] - fd_hv[i]).abs() <= 1e-4 * scale,
+            "{} hvp vs fd, component {}: analytic={}, fd={}",
+            label,
+            i,
+            analytic_hv[i],
+            fd_hv[i]
+        );
+    }
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn hvp_cross_validate_rosenbrock() {
+    let x = [1.5, 2.0];
+    let v = [0.7, -0.3];
+    cross_validate_hvp(|v| rosenbrock(v), &x, &v, "rosenbrock-hvp");
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn hvp_cross_validate_beale() {
+    let x = [1.0, 0.5];
+    let v = [1.0, -1.0];
+    cross_validate_hvp(|v| beale(v), &x, &v, "beale-hvp");
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn hvp_cross_validate_sphere() {
+    let x = [1.0, -2.0, 3.0, -0.5, 0.7];
+    let v = [0.1, 0.2, -0.3, 0.4, -0.5];
+    cross_validate_hvp(|v| sphere(v), &x, &v, "sphere-hvp");
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn hvp_cross_validate_booth() {
+    let x = [2.0, 3.0];
+    let v = [1.0, 1.0];
+    cross_validate_hvp(|v| booth(v), &x, &v, "booth-hvp");
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn hvp_cross_validate_trig_mix() {
+    let x = [1.0, 2.0];
+    let v = [0.5, -0.5];
+    cross_validate_hvp(|v| trig_mix(v), &x, &v, "trig-mix-hvp");
+}

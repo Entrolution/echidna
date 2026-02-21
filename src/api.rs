@@ -188,3 +188,34 @@ pub fn record<F: Float + BtapeThreadLocal>(
     let value = output.value;
     (tape, value)
 }
+
+/// Hessian-vector product via forward-over-reverse on a bytecode tape.
+///
+/// Records `f` into a [`BytecodeTape`], then computes the gradient and
+/// Hessian-vector product at `x` in direction `v`.
+///
+/// Returns `(gradient, H·v)` where both are `Vec<F>` of length `x.len()`.
+#[cfg(feature = "bytecode")]
+pub fn hvp<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &[F],
+    v: &[F],
+) -> (Vec<F>, Vec<F>) {
+    let (tape, _) = record(f, x);
+    tape.hvp(x, v)
+}
+
+/// Full Hessian matrix via forward-over-reverse on a bytecode tape.
+///
+/// Records `f` into a [`BytecodeTape`], then computes the function value,
+/// gradient, and full Hessian at `x`.
+///
+/// Returns `(value, gradient, hessian)` where `hessian[i][j] = ∂²f/∂x_i∂x_j`.
+#[cfg(feature = "bytecode")]
+pub fn hessian<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &[F],
+) -> (F, Vec<F>, Vec<Vec<F>>) {
+    let (tape, _) = record(f, x);
+    tape.hessian(x)
+}

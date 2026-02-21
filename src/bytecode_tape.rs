@@ -13,6 +13,7 @@
 
 use std::cell::Cell;
 
+use crate::dual::Dual;
 use crate::float::Float;
 use crate::opcode::{self, OpCode, UNUSED};
 
@@ -251,6 +252,159 @@ impl<F: Float> BytecodeTape<F> {
             }
         }
         adjoint_buf[..self.num_inputs as usize].to_vec()
+    }
+
+    // ── Forward-over-reverse (second-order) ──
+
+    /// Forward sweep with dual numbers. Reads opcodes and constants from `self`,
+    /// writing dual-valued results into `buf`. Does not mutate the tape.
+    fn forward_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+        assert_eq!(
+            inputs.len(),
+            self.num_inputs as usize,
+            "wrong number of inputs"
+        );
+
+        let n = self.num_variables as usize;
+        buf.clear();
+        buf.resize(n, Dual::constant(F::zero()));
+
+        let mut input_idx = 0usize;
+        for i in 0..self.opcodes.len() {
+            match self.opcodes[i] {
+                OpCode::Input => {
+                    buf[i] = inputs[input_idx];
+                    input_idx += 1;
+                }
+                OpCode::Const => {
+                    buf[i] = Dual::constant(self.values[i]);
+                }
+                op => {
+                    let [a_idx, b_idx] = self.arg_indices[i];
+                    let a = buf[a_idx as usize];
+                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                        buf[b_idx as usize]
+                    } else if op == OpCode::Powi {
+                        Dual::constant(F::from(b_idx).unwrap_or_else(|| F::zero()))
+                    } else {
+                        Dual::constant(F::zero())
+                    };
+                    buf[i] = opcode::eval_forward(op, a, b);
+                }
+            }
+        }
+    }
+
+    /// Reverse sweep with dual-valued adjoints. Uses dual values from
+    /// [`forward_dual`](Self::forward_dual). The zero-adjoint skip is disabled
+    /// because `Dual::PartialEq` compares `.re` only, which would incorrectly
+    /// drop tangent contributions.
+    fn reverse_dual(&self, dual_vals: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+        let n = self.num_variables as usize;
+        buf.clear();
+        buf.resize(n, Dual::constant(F::zero()));
+        buf[self.output_index as usize] = Dual::constant(F::one());
+
+        for i in (0..self.opcodes.len()).rev() {
+            match self.opcodes[i] {
+                OpCode::Input | OpCode::Const => continue,
+                op => {
+                    let adj = buf[i];
+                    buf[i] = Dual::constant(F::zero());
+
+                    let [a_idx, b_idx] = self.arg_indices[i];
+                    let a = dual_vals[a_idx as usize];
+                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                        dual_vals[b_idx as usize]
+                    } else if op == OpCode::Powi {
+                        Dual::constant(F::from(b_idx).unwrap_or_else(|| F::zero()))
+                    } else {
+                        Dual::constant(F::zero())
+                    };
+                    let r = dual_vals[i];
+                    let (da, db) = opcode::reverse_partials(op, a, b, r);
+
+                    buf[a_idx as usize] += da * adj;
+                    if b_idx != UNUSED && op != OpCode::Powi {
+                        buf[b_idx as usize] += db * adj;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hessian-vector product via forward-over-reverse.
+    ///
+    /// Returns `(gradient, H·v)` where both are `Vec<F>` of length
+    /// [`num_inputs`](Self::num_inputs). The tape is not mutated.
+    pub fn hvp(&self, x: &[F], v: &[F]) -> (Vec<F>, Vec<F>) {
+        let mut dual_vals = Vec::new();
+        let mut adjoint_buf = Vec::new();
+        self.hvp_with_buf(x, v, &mut dual_vals, &mut adjoint_buf)
+    }
+
+    /// Like [`hvp`](Self::hvp) but reuses caller-provided buffers to avoid
+    /// allocation on repeated calls (e.g. inside [`hessian`](Self::hessian)).
+    pub fn hvp_with_buf(
+        &self,
+        x: &[F],
+        v: &[F],
+        dual_vals_buf: &mut Vec<Dual<F>>,
+        adjoint_buf: &mut Vec<Dual<F>>,
+    ) -> (Vec<F>, Vec<F>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+        assert_eq!(v.len(), n, "wrong number of directions");
+
+        let dual_inputs: Vec<Dual<F>> = x
+            .iter()
+            .zip(v.iter())
+            .map(|(&xi, &vi)| Dual::new(xi, vi))
+            .collect();
+
+        self.forward_dual(&dual_inputs, dual_vals_buf);
+        self.reverse_dual(dual_vals_buf, adjoint_buf);
+
+        let gradient: Vec<F> = (0..n).map(|i| adjoint_buf[i].re).collect();
+        let hvp: Vec<F> = (0..n).map(|i| adjoint_buf[i].eps).collect();
+        (gradient, hvp)
+    }
+
+    /// Full Hessian matrix via `n` Hessian-vector products.
+    ///
+    /// Returns `(value, gradient, hessian)` where `hessian[i][j] = ∂²f/∂x_i∂x_j`.
+    /// The tape is not mutated.
+    pub fn hessian(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+
+        let mut dual_vals_buf = Vec::new();
+        let mut adjoint_buf = Vec::new();
+        let mut hessian = vec![vec![F::zero(); n]; n];
+        let mut gradient = vec![F::zero(); n];
+        let mut value = F::zero();
+
+        for j in 0..n {
+            let dual_inputs: Vec<Dual<F>> = (0..n)
+                .map(|i| Dual::new(x[i], if i == j { F::one() } else { F::zero() }))
+                .collect();
+
+            self.forward_dual(&dual_inputs, &mut dual_vals_buf);
+            self.reverse_dual(&dual_vals_buf, &mut adjoint_buf);
+
+            if j == 0 {
+                value = dual_vals_buf[self.output_index as usize].re;
+                for i in 0..n {
+                    gradient[i] = adjoint_buf[i].re;
+                }
+            }
+
+            for (row, adj) in hessian.iter_mut().zip(adjoint_buf.iter()) {
+                row[j] = adj.eps;
+            }
+        }
+
+        (value, gradient, hessian)
     }
 }
 

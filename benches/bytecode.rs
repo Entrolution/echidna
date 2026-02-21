@@ -92,10 +92,79 @@ fn bench_buf_reuse(c: &mut Criterion) {
     group.finish();
 }
 
+/// HVP via forward-over-reverse vs finite-difference HVP.
+fn bench_hvp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hvp");
+    for n in [2, 10, 100] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let v: Vec<f64> = (0..n).map(|i| 0.1 * (i as f64 + 1.0)).collect();
+        let (tape, _) = record(|v| rosenbrock_generic(v), &x);
+
+        group.bench_with_input(BenchmarkId::new("fwd_over_rev", n), &x, |b, x| {
+            b.iter(|| black_box(tape.hvp(black_box(x), black_box(&v))))
+        });
+
+        // Finite-difference HVP via two gradient calls.
+        let h = 1e-5;
+        group.bench_with_input(BenchmarkId::new("finite_diff", n), &x, |b, x| {
+            let (mut tape2, _) = record(|v| rosenbrock_generic(v), x);
+            let xp: Vec<f64> = x.iter().zip(v.iter()).map(|(xi, vi)| xi + h * vi).collect();
+            let xm: Vec<f64> = x.iter().zip(v.iter()).map(|(xi, vi)| xi - h * vi).collect();
+            b.iter(|| {
+                let gp = tape2.gradient(black_box(&xp));
+                let gm = tape2.gradient(black_box(&xm));
+                let hvp: Vec<f64> = gp.iter().zip(gm.iter()).map(|(a, b)| (a - b) / (2.0 * h)).collect();
+                black_box(hvp)
+            })
+        });
+    }
+    group.finish();
+}
+
+/// Full Hessian computation.
+fn bench_hessian(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hessian");
+    for n in [2, 10] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let (tape, _) = record(|v| rosenbrock_generic(v), &x);
+
+        group.bench_with_input(BenchmarkId::new("full_hessian", n), &x, |b, x| {
+            b.iter(|| black_box(tape.hessian(black_box(x))))
+        });
+    }
+    group.finish();
+}
+
+/// hvp_with_buf vs hvp (buffer reuse benefit).
+fn bench_hvp_buf_reuse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hvp_buf_reuse");
+    for n in [2, 10, 100] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let v: Vec<f64> = (0..n).map(|i| 0.1 * (i as f64 + 1.0)).collect();
+        let (tape, _) = record(|v| rosenbrock_generic(v), &x);
+
+        group.bench_with_input(BenchmarkId::new("hvp", n), &x, |b, x| {
+            b.iter(|| black_box(tape.hvp(black_box(x), black_box(&v))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("hvp_with_buf", n), &x, |b, x| {
+            let mut dv_buf = Vec::new();
+            let mut adj_buf = Vec::new();
+            b.iter(|| {
+                black_box(tape.hvp_with_buf(black_box(x), black_box(&v), &mut dv_buf, &mut adj_buf))
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bytecode_vs_adept,
     bench_tape_reuse,
-    bench_buf_reuse
+    bench_buf_reuse,
+    bench_hvp,
+    bench_hessian,
+    bench_hvp_buf_reuse
 );
 criterion_main!(benches);
