@@ -20,7 +20,7 @@ pub use reverse::Reverse;
 pub use scalar::Scalar;
 
 #[cfg(feature = "bytecode")]
-pub use api::record;
+pub use api::{hessian, hvp, record};
 #[cfg(feature = "bytecode")]
 pub use breverse::BReverse;
 #[cfg(feature = "bytecode")]
