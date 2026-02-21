@@ -113,7 +113,11 @@ fn bench_hvp(c: &mut Criterion) {
             b.iter(|| {
                 let gp = tape2.gradient(black_box(&xp));
                 let gm = tape2.gradient(black_box(&xm));
-                let hvp: Vec<f64> = gp.iter().zip(gm.iter()).map(|(a, b)| (a - b) / (2.0 * h)).collect();
+                let hvp: Vec<f64> = gp
+                    .iter()
+                    .zip(gm.iter())
+                    .map(|(a, b)| (a - b) / (2.0 * h))
+                    .collect();
                 black_box(hvp)
             })
         });

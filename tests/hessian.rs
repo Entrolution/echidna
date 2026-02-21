@@ -103,8 +103,7 @@ mod forward_over_reverse {
 
     #[test]
     fn api_hessian_sphere() {
-        let (val, grad, hess) =
-            echidna::hessian(|x| x[0] * x[0] + x[1] * x[1], &[3.0_f64, 4.0]);
+        let (val, grad, hess) = echidna::hessian(|x| x[0] * x[0] + x[1] * x[1], &[3.0_f64, 4.0]);
 
         assert!((val - 25.0_f64).abs() < 1e-10);
         assert!((grad[0] - 6.0_f64).abs() < 1e-10);
@@ -115,8 +114,7 @@ mod forward_over_reverse {
 
     #[test]
     fn api_hvp_cross_term() {
-        let (grad, hv) =
-            echidna::hvp(|x| x[0] * x[1], &[2.0_f64, 3.0], &[1.0_f64, 0.0]);
+        let (grad, hv) = echidna::hvp(|x| x[0] * x[1], &[2.0_f64, 3.0], &[1.0_f64, 0.0]);
 
         // H = [[0,1],[1,0]], v = [1,0] → H·v = [0, 1]
         assert!((grad[0] - 3.0_f64).abs() < 1e-10);
@@ -189,8 +187,7 @@ mod forward_over_reverse {
 
     fn rosenbrock<T: Scalar>(x: &[T]) -> T {
         let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
-        let hundred =
-            T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(100.0).unwrap());
+        let hundred = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(100.0).unwrap());
         let mut sum = T::zero();
         for i in 0..x.len() - 1 {
             let t1 = one - x[i];
@@ -259,18 +256,37 @@ mod forward_over_reverse {
         // H[1][1] = 200
         let h11 = 200.0;
 
-        assert!((hess[0][0] - h00).abs() < 1e-10, "H[0][0]: {} vs {}", hess[0][0], h00);
-        assert!((hess[0][1] - h01).abs() < 1e-10, "H[0][1]: {} vs {}", hess[0][1], h01);
-        assert!((hess[1][0] - h01).abs() < 1e-10, "H[1][0]: {} vs {}", hess[1][0], h01);
-        assert!((hess[1][1] - h11).abs() < 1e-10, "H[1][1]: {} vs {}", hess[1][1], h11);
+        assert!(
+            (hess[0][0] - h00).abs() < 1e-10,
+            "H[0][0]: {} vs {}",
+            hess[0][0],
+            h00
+        );
+        assert!(
+            (hess[0][1] - h01).abs() < 1e-10,
+            "H[0][1]: {} vs {}",
+            hess[0][1],
+            h01
+        );
+        assert!(
+            (hess[1][0] - h01).abs() < 1e-10,
+            "H[1][0]: {} vs {}",
+            hess[1][0],
+            h01
+        );
+        assert!(
+            (hess[1][1] - h11).abs() < 1e-10,
+            "H[1][1]: {} vs {}",
+            hess[1][1],
+            h11
+        );
     }
 
     // ── Tape reuse ──
 
     #[test]
     fn tape_reuse_hvp() {
-        let (tape, _) =
-            record(|v| v[0] * v[0] * v[1] + v[1] * v[1] * v[1], &[1.0_f64, 1.0]);
+        let (tape, _) = record(|v| v[0] * v[0] * v[1] + v[1] * v[1] * v[1], &[1.0_f64, 1.0]);
 
         // HVP with different directions using the same tape.
         let (g1, hv1) = tape.hvp(&[1.5_f64, 2.0], &[1.0_f64, 0.0]);
