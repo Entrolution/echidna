@@ -188,3 +188,80 @@ pub fn piggyback_adjoint_solve<F: Float>(
 
     None
 }
+
+/// Interleaved forward-adjoint piggyback solve.
+///
+/// Simultaneously iterates the primal fixed-point `z_{k+1} = G(z_k, x)` and
+/// the adjoint equation `λ_{k+1} = G_z^T · λ_k + z̄`. This cuts the total
+/// iteration count from `K_primal + K_adjoint` to `max(K_primal, K_adjoint)`.
+///
+/// Returns `Some((z_star, x_bar, iterations))` when both z and λ converge,
+/// `None` on divergence or exceeding `max_iter`.
+pub fn piggyback_forward_adjoint_solve<F: Float>(
+    step_tape: &mut BytecodeTape<F>,
+    z0: &[F],
+    x: &[F],
+    z_bar: &[F],
+    num_states: usize,
+    max_iter: usize,
+    tol: F,
+) -> Option<(Vec<F>, Vec<F>, usize)> {
+    validate_step_tape(step_tape, z0, x, num_states);
+    let m = num_states;
+    assert_eq!(z_bar.len(), m, "z_bar length must equal num_states");
+
+    // Pre-allocate input buffer [z, x]
+    let mut input = Vec::with_capacity(m + x.len());
+    input.extend_from_slice(z0);
+    input.extend_from_slice(x);
+
+    let mut lambda = z_bar.to_vec();
+
+    for k in 0..max_iter {
+        // Forward pass at current z
+        step_tape.forward(&input);
+        let z_new = step_tape.output_values();
+
+        // Reverse pass with current λ
+        let adj = step_tape.reverse_seeded(&lambda);
+
+        // Primal convergence: ||z_new - z|| / (1 + ||z||)
+        let mut z_delta_sq = F::zero();
+        let mut z_sq = F::zero();
+        for i in 0..m {
+            let d = z_new[i] - input[i];
+            z_delta_sq = z_delta_sq + d * d;
+            z_sq = z_sq + input[i] * input[i];
+        }
+        let z_norm = z_delta_sq.sqrt() / (F::one() + z_sq.sqrt());
+        if !z_norm.is_finite() {
+            return None;
+        }
+
+        // Adjoint update and convergence: λ_new = G_z^T · λ + z̄
+        let mut lam_delta_sq = F::zero();
+        let mut lam_sq = F::zero();
+        let mut lambda_new = Vec::with_capacity(m);
+        for i in 0..m {
+            let l_new = adj[i] + z_bar[i];
+            let d = l_new - lambda[i];
+            lam_delta_sq = lam_delta_sq + d * d;
+            lam_sq = lam_sq + lambda[i] * lambda[i];
+            lambda_new.push(l_new);
+        }
+        let lam_norm = lam_delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
+        if !lam_norm.is_finite() {
+            return None;
+        }
+
+        if z_norm < tol && lam_norm < tol {
+            return Some((z_new, adj[m..].to_vec(), k + 1));
+        }
+
+        // Update z in the input buffer
+        input[..m].copy_from_slice(&z_new[..m]);
+        lambda = lambda_new;
+    }
+
+    None
+}

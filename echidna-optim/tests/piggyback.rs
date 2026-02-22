@@ -1,7 +1,7 @@
 use echidna::record_multi;
 use echidna_optim::{
-    implicit_tangent, piggyback_adjoint_solve, piggyback_tangent_solve, piggyback_tangent_step,
-    piggyback_tangent_step_with_buf,
+    implicit_tangent, piggyback_adjoint_solve, piggyback_forward_adjoint_solve,
+    piggyback_tangent_solve, piggyback_tangent_step, piggyback_tangent_step_with_buf,
 };
 
 // ============================================================
@@ -339,4 +339,194 @@ fn adjoint_non_convergent() {
     // z* doesn't really exist for this system, but test that adjoint detects divergence
     let result = piggyback_adjoint_solve(&mut tape, &[1.0], &[1.0], &[1.0], 1, 100, 1e-12);
     assert!(result.is_none(), "should not converge for non-contraction");
+}
+
+// ============================================================
+// Test 9: forward_adjoint_solve_linear
+// ============================================================
+
+#[test]
+fn forward_adjoint_solve_linear() {
+    // G(z, x) = 0.5*z + x, z* = 2*x = 6 at x=3
+    // z̄=1 => x̄ = dz*/dx = 2
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            let half = x / (x + x);
+            vec![half * z + x]
+        },
+        &[0.0_f64, 3.0],
+    );
+
+    let result =
+        piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[3.0], &[1.0], 1, 200, 1e-12);
+    let (z_star, x_bar, iters) = result.expect("should converge");
+
+    assert!(
+        (z_star[0] - 6.0).abs() < 1e-10,
+        "z* = {}, expected 6",
+        z_star[0]
+    );
+    assert!(
+        (x_bar[0] - 2.0).abs() < 1e-8,
+        "x̄ = {}, expected 2",
+        x_bar[0]
+    );
+    assert!(iters > 0);
+}
+
+// ============================================================
+// Test 10: forward_adjoint_solve_2d
+// ============================================================
+
+#[test]
+fn forward_adjoint_solve_2d() {
+    // G([z0,z1], [x0,x1]) = [0.4*z0 + x0, 0.3*z1 + x1]
+    // z0* = x0/0.6, z1* = x1/0.7
+    // dz*/dx = diag(1/0.6, 1/0.7)
+    // z̄=[1,0] => x̄ = (dz*/dx)^T · [1,0] = [1/0.6, 0]
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z0 = v[0];
+            let z1 = v[1];
+            let x0 = v[2];
+            let x1 = v[3];
+            let one = x0 / x0;
+            let pt4 = (one + one) / (one + one + one + one + one);
+            let pt3 =
+                (one + one + one) / (one + one + one + one + one + one + one + one + one + one);
+            vec![pt4 * z0 + x0, pt3 * z1 + x1]
+        },
+        &[0.0_f64, 0.0, 1.2, 2.1],
+    );
+
+    let result = piggyback_forward_adjoint_solve(
+        &mut tape,
+        &[0.0, 0.0],
+        &[1.2, 2.1],
+        &[1.0, 0.0],
+        2,
+        200,
+        1e-12,
+    );
+    let (z_star, x_bar, _) = result.expect("should converge");
+
+    assert!(
+        (z_star[0] - 1.2 / 0.6).abs() < 1e-9,
+        "z0* = {}, expected {}",
+        z_star[0],
+        1.2 / 0.6
+    );
+    assert!(
+        (z_star[1] - 2.1 / 0.7).abs() < 1e-9,
+        "z1* = {}, expected {}",
+        z_star[1],
+        2.1 / 0.7
+    );
+    assert!(
+        (x_bar[0] - 1.0 / 0.6).abs() < 1e-7,
+        "x̄[0] = {}, expected {}",
+        x_bar[0],
+        1.0 / 0.6
+    );
+    assert!(
+        x_bar[1].abs() < 1e-7,
+        "x̄[1] = {}, expected 0",
+        x_bar[1]
+    );
+}
+
+// ============================================================
+// Test 11: forward_adjoint_matches_sequential
+// ============================================================
+
+#[test]
+fn forward_adjoint_matches_sequential() {
+    // Interleaved should give the same result as tangent_solve + adjoint_solve
+    let make_tape = || {
+        record_multi(
+            |v| {
+                let z0 = v[0];
+                let z1 = v[1];
+                let x0 = v[2];
+                let x1 = v[3];
+                let one = x0 / x0;
+                let pt4 = (one + one) / (one + one + one + one + one);
+                let pt3 = (one + one + one)
+                    / (one + one + one + one + one + one + one + one + one + one);
+                vec![pt4 * z0 + x0, pt3 * z1 + x1]
+            },
+            &[0.0_f64, 0.0, 1.2, 2.1],
+        )
+    };
+
+    let x = [1.2, 2.1];
+    let z_bar = [1.0, 0.5];
+
+    // Sequential: adjoint after convergence
+    let (mut tape_seq, _) = make_tape();
+    let (z_star_seq, _, _) =
+        piggyback_tangent_solve(&tape_seq, &[0.0, 0.0], &x, &[1.0, 0.0], 2, 200, 1e-12)
+            .expect("tangent should converge");
+    let (x_bar_seq, _) =
+        piggyback_adjoint_solve(&mut tape_seq, &z_star_seq, &x, &z_bar, 2, 200, 1e-12)
+            .expect("adjoint should converge");
+
+    // Interleaved
+    let (mut tape_int, _) = make_tape();
+    let (z_star_int, x_bar_int, _) = piggyback_forward_adjoint_solve(
+        &mut tape_int,
+        &[0.0, 0.0],
+        &x,
+        &z_bar,
+        2,
+        200,
+        1e-12,
+    )
+    .expect("interleaved should converge");
+
+    for i in 0..2 {
+        assert!(
+            (z_star_int[i] - z_star_seq[i]).abs() < 1e-9,
+            "z*[{}]: interleaved={}, sequential={}",
+            i,
+            z_star_int[i],
+            z_star_seq[i]
+        );
+    }
+    for j in 0..2 {
+        assert!(
+            (x_bar_int[j] - x_bar_seq[j]).abs() < 1e-7,
+            "x̄[{}]: interleaved={}, sequential={}",
+            j,
+            x_bar_int[j],
+            x_bar_seq[j]
+        );
+    }
+}
+
+// ============================================================
+// Test 12: forward_adjoint_non_convergent
+// ============================================================
+
+#[test]
+fn forward_adjoint_non_convergent() {
+    // G(z, x) = 2*z + x — not a contraction
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            let two = (x + x) / x;
+            vec![two * z + x]
+        },
+        &[1.0_f64, 1.0],
+    );
+
+    let result =
+        piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12);
+    assert!(
+        result.is_none(),
+        "should not converge for non-contraction"
+    );
 }

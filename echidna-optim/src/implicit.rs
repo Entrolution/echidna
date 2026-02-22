@@ -1,4 +1,4 @@
-use echidna::{BytecodeTape, Float};
+use echidna::{BytecodeTape, Dual, Float};
 
 use crate::linalg::{lu_back_solve, lu_factor, lu_solve};
 
@@ -222,4 +222,154 @@ pub fn implicit_adjoint<F: Float>(
     }
 
     Some(x_bar)
+}
+
+/// Compute the implicit Hessian-vector-vector product `d²z*/dx² · v · w` (m-vector).
+///
+/// Given a residual tape `F: R^(m+n) → R^m` with `F(z*, x) = 0`, computes the
+/// second-order sensitivity by differentiating the IFT identity twice:
+///
+///   `F_z · h + [ṗ^T · Hess(F_i) · ẇ]_i = 0`
+///
+/// where `ṗ = [dz*/dx · v; v]`, `ẇ = [dz*/dx · w; w]`, and `h = d²z*/dx² · v · w`.
+///
+/// Uses nested `Dual<Dual<F>>` forward passes to compute the second-order correction
+/// in a single O(tape_length) pass per direction pair.
+///
+/// Returns `None` if `F_z` is singular.
+pub fn implicit_hvp<F: Float>(
+    tape: &mut BytecodeTape<F>,
+    z_star: &[F],
+    x: &[F],
+    v: &[F],
+    w: &[F],
+    num_states: usize,
+) -> Option<Vec<F>> {
+    let n = x.len();
+    let m = num_states;
+    assert_eq!(v.len(), n, "v length ({}) must equal x length ({})", v.len(), n);
+    assert_eq!(w.len(), n, "w length ({}) must equal x length ({})", w.len(), n);
+    validate_inputs(tape, z_star, x, num_states);
+
+    let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
+    let factors = lu_factor(&f_z)?;
+
+    // First-order sensitivities: ż_v = -F_z^{-1} · (F_x · v)
+    let mut fx_v = vec![F::zero(); m];
+    let mut fx_w = vec![F::zero(); m];
+    for i in 0..m {
+        for j in 0..n {
+            fx_v[i] = fx_v[i] + f_x[i][j] * v[j];
+            fx_w[i] = fx_w[i] + f_x[i][j] * w[j];
+        }
+    }
+    let neg_fx_v: Vec<F> = fx_v.iter().map(|&val| F::zero() - val).collect();
+    let neg_fx_w: Vec<F> = fx_w.iter().map(|&val| F::zero() - val).collect();
+    let z_dot_v = lu_back_solve(&factors, &neg_fx_v);
+    let z_dot_w = lu_back_solve(&factors, &neg_fx_w);
+
+    // Build Dual<Dual<F>> inputs for nested forward pass
+    // ṗ = [ż_v; v], ẇ = [ż_w; w]
+    // Input j: Dual { re: Dual(u_j, ṗ_j), eps: Dual(ẇ_j, 0) }
+    let mut dd_inputs: Vec<Dual<Dual<F>>> = Vec::with_capacity(m + n);
+    for i in 0..m {
+        dd_inputs.push(Dual::new(
+            Dual::new(z_star[i], z_dot_v[i]),
+            Dual::new(z_dot_w[i], F::zero()),
+        ));
+    }
+    for j in 0..n {
+        dd_inputs.push(Dual::new(
+            Dual::new(x[j], v[j]),
+            Dual::new(w[j], F::zero()),
+        ));
+    }
+
+    let mut buf = Vec::new();
+    tape.forward_tangent(&dd_inputs, &mut buf);
+
+    // Extract second-order correction: buf[out_idx].eps.eps for each output
+    let out_indices = tape.all_output_indices();
+    let mut rhs = Vec::with_capacity(m);
+    for &idx in out_indices {
+        rhs.push(buf[idx as usize].eps.eps);
+    }
+
+    // Solve F_z · h = -rhs
+    let neg_rhs: Vec<F> = rhs.iter().map(|&val| F::zero() - val).collect();
+    let h = lu_back_solve(&factors, &neg_rhs);
+
+    Some(h)
+}
+
+/// Compute the full implicit Hessian tensor `d²z*/dx²` (m × n × n).
+///
+/// Returns `result[i][j][k]` = ∂²z*_i / (∂x_j ∂x_k). The tensor is symmetric
+/// in the last two indices (j, k).
+///
+/// Cost: `n(n+1)/2` nested `Dual<Dual<F>>` forward passes plus `n(n+1)/2` back-solves,
+/// all sharing a single LU factorization of `F_z`.
+///
+/// Returns `None` if `F_z` is singular.
+pub fn implicit_hessian<F: Float>(
+    tape: &mut BytecodeTape<F>,
+    z_star: &[F],
+    x: &[F],
+    num_states: usize,
+) -> Option<Vec<Vec<Vec<F>>>> {
+    let n = x.len();
+    let m = num_states;
+    validate_inputs(tape, z_star, x, num_states);
+
+    let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
+    let factors = lu_factor(&f_z)?;
+
+    // First-order sensitivity columns: S[:,j] = -F_z^{-1} · F_x[:,j]
+    let mut sens_cols: Vec<Vec<F>> = Vec::with_capacity(n);
+    for j in 0..n {
+        let neg_col: Vec<F> = f_x.iter().map(|row| F::zero() - row[j]).collect();
+        sens_cols.push(lu_back_solve(&factors, &neg_col));
+    }
+
+    let out_indices = tape.all_output_indices();
+    let mut result = vec![vec![vec![F::zero(); n]; n]; m];
+    let mut buf: Vec<Dual<Dual<F>>> = Vec::new();
+
+    for j in 0..n {
+        for k in j..n {
+            // ṗ = [S[:,j]; e_j], ẇ = [S[:,k]; e_k]
+            let mut dd_inputs: Vec<Dual<Dual<F>>> = Vec::with_capacity(m + n);
+            for i in 0..m {
+                dd_inputs.push(Dual::new(
+                    Dual::new(z_star[i], sens_cols[j][i]),
+                    Dual::new(sens_cols[k][i], F::zero()),
+                ));
+            }
+            for (l, &x_l) in x.iter().enumerate() {
+                let p_l = if l == j { F::one() } else { F::zero() };
+                let w_l = if l == k { F::one() } else { F::zero() };
+                dd_inputs.push(Dual::new(
+                    Dual::new(x_l, p_l),
+                    Dual::new(w_l, F::zero()),
+                ));
+            }
+
+            tape.forward_tangent(&dd_inputs, &mut buf);
+
+            // Extract RHS and solve
+            let mut rhs = Vec::with_capacity(m);
+            for &idx in out_indices {
+                rhs.push(buf[idx as usize].eps.eps);
+            }
+            let neg_rhs: Vec<F> = rhs.iter().map(|&val| F::zero() - val).collect();
+            let h = lu_back_solve(&factors, &neg_rhs);
+
+            for i in 0..m {
+                result[i][j][k] = h[i];
+                result[i][k][j] = h[i]; // Symmetric
+            }
+        }
+    }
+
+    Some(result)
 }

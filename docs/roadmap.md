@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 414 tests passing (378 core + 36 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 424 tests passing (378 core + 46 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -27,6 +27,8 @@ This roadmap synthesizes:
 | R2a+R2c | STDE module: jet propagation, Laplacian estimator, Hessian diagonal, directional derivatives, TaylorDyn variants, 20 tests | Complete |
 | R2b | STDE variance reduction: `EstimatorResult` with sample statistics, `laplacian_with_stats` (Welford's online variance), `laplacian_with_control` (diagonal control variate), 13 tests | Complete |
 | R4a | Piggyback differentiation: tangent step/solve via dual-number forward pass, adjoint solve via iterative VJP, `reverse_seeded` optimization (fused single-pass), `all_output_indices()` accessor, 8 tests | Complete |
+| R4b | Interleaved forward-adjoint piggyback: `piggyback_forward_adjoint_solve` runs primal + adjoint in one loop, cutting iterations from K_primal + K_adjoint to max(K_primal, K_adjoint), 4 tests | Complete |
+| R4c | Second-order implicit derivatives: `implicit_hvp` via nested `Dual<Dual<F>>` forward passes, `implicit_hessian` for full m×n×n tensor with LU factor reuse, 6 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -108,15 +110,17 @@ Tangent piggyback propagates `ż_{k+1} = G_z · ż_k + G_x · ẋ` alongside the
 
 Key file: `echidna-optim/src/piggyback.rs`.
 
-**R4b. Fixed-point iteration adjoint**
+**R4b. Interleaved forward-adjoint piggyback** — **COMPLETE**
 
-For `z = G(z, x)` (contraction mapping), the adjoint satisfies `lambda = G_z^T * lambda + z_bar`. This is itself a fixed-point iteration that can run alongside the forward iteration (Griewank Rule 26).
+`piggyback_forward_adjoint_solve` runs the primal fixed-point `z_{k+1} = G(z_k, x)` and adjoint equation `λ_{k+1} = G_z^T · λ_k + z̄` in a single interleaved loop. Total iterations drop from `K_primal + K_adjoint` to `max(K_primal, K_adjoint)`. Pre-allocated input buffer avoids per-iteration allocation. Returns `(z_star, x_bar, iterations)`. 4 tests including cross-validation against sequential tangent+adjoint.
 
-Only needs to record a single step of G, not the entire iteration history.
+Key file: `echidna-optim/src/piggyback.rs`.
 
-**R4c. Second-order implicit derivatives**
+**R4c. Second-order implicit derivatives** — **COMPLETE**
 
-Compose IFT with forward-over-reverse to get implicit Hessians. Needed for second-order optimization through implicit layers (e.g., bilevel optimization).
+`implicit_hvp` computes `d²z*/dx² · v · w` using nested `Dual<Dual<F>>` forward passes through `forward_tangent`. A single O(tape_length) pass extracts the second-order correction `ṗ^T · Hess(F_i) · ẇ` from the `.eps.eps` component, then solves `F_z · h = -RHS`. `implicit_hessian` builds the full m×n×n tensor by iterating over `n(n+1)/2` direction pairs with LU factor reuse. 6 tests including finite-difference cross-validation.
+
+Key file: `echidna-optim/src/implicit.rs`.
 
 **R4d. Sparse F_z exploitation**
 
@@ -228,14 +232,16 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
          └──▶ R2b (variance reduction) ─── ✓ DONE
 
 R4a (piggyback differentiation)      ─── ✓ DONE
-R4b-d (implicit extensions)          ─── Independent of R1, can parallelize
+R4b (interleaved forward-adjoint)    ─── ✓ DONE
+R4c (second-order implicit)          ─── ✓ DONE
+R4d (sparse F_z exploitation)        ─── Independent of R1, can parallelize
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
 All R1 items (Taylor mode AD) are now complete.
 
-R4 (remaining implicit features), R7 (serde), and R8 (benchmarks) are independent and can be started in any order.
+R4d (sparse F_z), R7 (serde), and R8 (benchmarks) are independent and can be started in any order.
 
 R5 (cross-country), R6 (nonsmooth), and R9+ are lower priority and can be scheduled opportunistically.
 

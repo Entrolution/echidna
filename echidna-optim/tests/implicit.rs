@@ -1,6 +1,8 @@
 use echidna::record_multi;
 use echidna_optim::linalg::lu_solve;
-use echidna_optim::{implicit_adjoint, implicit_jacobian, implicit_tangent};
+use echidna_optim::{
+    implicit_adjoint, implicit_hessian, implicit_hvp, implicit_jacobian, implicit_tangent,
+};
 
 /// Simple Newton root-finder for testing: solve F(z, x) = 0 for z given fixed x.
 ///
@@ -350,4 +352,198 @@ fn finite_differences_2d_nonlinear() {
             );
         }
     }
+}
+
+// ============================================================
+// Test 7: HVP of linear F is zero
+// ============================================================
+
+#[test]
+fn implicit_hvp_linear_is_zero() {
+    // F(z, x) = 2z + x (linear), so d²z*/dx² = 0
+    // At x=1, z* = -0.5: F(-0.5, 1) = 2(-0.5) + 1 = 0 ✓
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            let one = x / x;
+            let two = one + one;
+            vec![two * z + x]
+        },
+        &[-0.5_f64, 1.0],
+    );
+
+    let h = implicit_hvp(&mut tape, &[-0.5], &[1.0], &[1.0], &[1.0], 1).unwrap();
+    assert!(h[0].abs() < 1e-12, "hvp = {}, expected 0", h[0]);
+}
+
+// ============================================================
+// Test 8: HVP scalar cubic — F(z,x) = z³ - x
+// ============================================================
+
+#[test]
+fn implicit_hvp_scalar_cubic() {
+    // F(z,x) = z³ - x, at x=8, z*=2
+    // dz*/dx = 1/(3z*²) = 1/12
+    // d²z*/dx² = -2z* / (3z*²)³ * ... let's derive properly:
+    //   z*(x) = x^{1/3}, so dz/dx = (1/3) x^{-2/3}, d²z/dx² = (-2/9) x^{-5/3}
+    //   At x=8: d²z/dx² = (-2/9) * 8^{-5/3} = (-2/9) * (1/32) = -2/288 = -1/144
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            vec![z * z * z - x]
+        },
+        &[2.0_f64, 8.0],
+    );
+
+    let h = implicit_hvp(&mut tape, &[2.0], &[8.0], &[1.0], &[1.0], 1).unwrap();
+    let expected = -1.0 / 144.0;
+    assert!(
+        (h[0] - expected).abs() < 1e-10,
+        "hvp = {}, expected {}",
+        h[0],
+        expected
+    );
+}
+
+// ============================================================
+// Test 9: HVP scalar quadratic — F(z,x) = z² - x
+// ============================================================
+
+#[test]
+fn implicit_hvp_scalar_quadratic() {
+    // F(z,x) = z² - x, at x=4, z*=2
+    // z*(x) = sqrt(x), dz/dx = 1/(2√x), d²z/dx² = -1/(4x^{3/2})
+    // At x=4: d²z/dx² = -1/(4*8) = -1/32
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            vec![z * z - x]
+        },
+        &[2.0_f64, 4.0],
+    );
+
+    let h = implicit_hvp(&mut tape, &[2.0], &[4.0], &[1.0], &[1.0], 1).unwrap();
+    let expected = -1.0 / 32.0;
+    assert!(
+        (h[0] - expected).abs() < 1e-10,
+        "hvp = {}, expected {}",
+        h[0],
+        expected
+    );
+}
+
+// ============================================================
+// Test 10: HVP symmetry — hvp(v,w) = hvp(w,v)
+// ============================================================
+
+#[test]
+fn implicit_hvp_symmetric() {
+    // F(z, x0, x1) = z² - x0*x1, at x=[2,2], z*=2
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x0 = v[1];
+            let x1 = v[2];
+            vec![z * z - x0 * x1]
+        },
+        &[2.0_f64, 2.0, 2.0],
+    );
+
+    let v = [1.0, 0.0];
+    let w = [0.0, 1.0];
+
+    let hvp_vw = implicit_hvp(&mut tape, &[2.0], &[2.0, 2.0], &v, &w, 1).unwrap();
+    let hvp_wv = implicit_hvp(&mut tape, &[2.0], &[2.0, 2.0], &w, &v, 1).unwrap();
+
+    assert!(
+        (hvp_vw[0] - hvp_wv[0]).abs() < 1e-10,
+        "hvp(v,w) = {}, hvp(w,v) = {}",
+        hvp_vw[0],
+        hvp_wv[0]
+    );
+}
+
+// ============================================================
+// Test 11: HVP vs finite differences on implicit_tangent
+// ============================================================
+
+#[test]
+fn implicit_hvp_vs_finite_diff() {
+    // F(z,x) = z² - x, at x=4, z*=2
+    // FD: [implicit_tangent(x+h*w, v) - implicit_tangent(x-h*w, v)] / (2h)
+    let make_tape = || {
+        record_multi(
+            |v| {
+                let z = v[0];
+                let x = v[1];
+                vec![z * z - x]
+            },
+            &[2.0_f64, 4.0],
+        )
+        .0
+    };
+
+    let v = [1.0];
+    let w = [1.0];
+    let h = 1e-5;
+
+    // HVP
+    let mut tape = make_tape();
+    let hvp = implicit_hvp(&mut tape, &[2.0], &[4.0], &v, &w, 1).unwrap();
+
+    // FD on implicit_tangent
+    let x_plus = [4.0_f64 + h];
+    let x_minus = [4.0_f64 - h];
+    let z_plus = x_plus[0].sqrt();
+    let z_minus = x_minus[0].sqrt();
+
+    let mut tape_p = make_tape();
+    let t_plus = implicit_tangent(&mut tape_p, &[z_plus], &x_plus, &v, 1).unwrap();
+    let mut tape_m = make_tape();
+    let t_minus = implicit_tangent(&mut tape_m, &[z_minus], &x_minus, &v, 1).unwrap();
+
+    let fd = (t_plus[0] - t_minus[0]) / (2.0 * h);
+
+    assert!(
+        (hvp[0] - fd).abs() < 1e-4,
+        "hvp = {}, fd = {}, diff = {}",
+        hvp[0],
+        fd,
+        (hvp[0] - fd).abs()
+    );
+}
+
+// ============================================================
+// Test 12: implicit_hessian scalar quadratic
+// ============================================================
+
+#[test]
+fn implicit_hessian_scalar_quadratic() {
+    // F(z,x) = z² - x, at x=4, z*=2
+    // d²z*/dx² = -1/32 (scalar, so [1][1][1] tensor)
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            vec![z * z - x]
+        },
+        &[2.0_f64, 4.0],
+    );
+
+    let hess = implicit_hessian(&mut tape, &[2.0], &[4.0], 1).unwrap();
+
+    assert_eq!(hess.len(), 1);
+    assert_eq!(hess[0].len(), 1);
+    assert_eq!(hess[0][0].len(), 1);
+
+    let expected = -1.0 / 32.0;
+    assert!(
+        (hess[0][0][0] - expected).abs() < 1e-10,
+        "hessian[0][0][0] = {}, expected {}",
+        hess[0][0][0],
+        expected
+    );
 }
