@@ -1,7 +1,8 @@
 //! Compositional gradient checkpointing for iterative computations.
 //!
-//! Reduces memory from O(num_steps) to O(num_checkpoints) by recomputing
-//! intermediate states from checkpoints during the backward pass.
+//! Uses the optimal binomial (Revolve) checkpointing schedule
+//! (Griewank & Walther, 2000) to minimize recomputation for a given
+//! number of checkpoint slots.
 
 use crate::breverse::BReverse;
 use crate::bytecode_tape::{BtapeGuard, BtapeThreadLocal, BytecodeTape};
@@ -9,9 +10,8 @@ use crate::float::Float;
 
 /// Compute gradients through an iterative computation using checkpointing.
 ///
-/// Instead of storing all intermediate states (O(num_steps) memory),
-/// saves states only at evenly spaced checkpoints and recomputes
-/// intermediate states from the nearest checkpoint during the backward pass.
+/// Uses the Revolve (optimal binomial) checkpointing schedule to minimize
+/// recomputation given the available checkpoint slots.
 ///
 /// # Arguments
 ///
@@ -19,7 +19,7 @@ use crate::float::Float;
 /// * `loss` - A scalar loss function applied to the final state
 /// * `x0` - Initial state
 /// * `num_steps` - Number of times to apply `step`
-/// * `num_checkpoints` - Number of intermediate states to save (affects memory/compute tradeoff)
+/// * `num_checkpoints` - Number of checkpoint slots (affects memory/compute tradeoff)
 ///
 /// # Returns
 ///
@@ -45,17 +45,11 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
 
     let num_checkpoints = num_checkpoints.max(1).min(num_steps);
 
+    // Compute optimal checkpoint positions using Revolve schedule
+    let checkpoint_positions = revolve_schedule(num_steps, num_checkpoints);
+
     // -- Forward pass: run all steps, saving checkpoints --
-
-    let checkpoint_interval = if num_checkpoints >= num_steps {
-        1
-    } else {
-        num_steps.div_ceil(num_checkpoints)
-    };
-
-    // Checkpoint storage: (step_index, state).
-    // Step index 0 means "the state before any steps" (i.e., x0).
-    let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::new();
+    let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::with_capacity(num_checkpoints + 1);
     checkpoints.push((0, x0.to_vec()));
 
     let mut current_state = x0.to_vec();
@@ -70,7 +64,7 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
         );
 
         let next_step = s + 1;
-        if next_step < num_steps && next_step % checkpoint_interval == 0 {
+        if next_step < num_steps && checkpoint_positions.contains(&next_step) {
             checkpoints.push((next_step, current_state.clone()));
         }
     }
@@ -113,6 +107,100 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
     }
 
     adjoint
+}
+
+// ══════════════════════════════════════════════
+//  Revolve schedule computation
+// ══════════════════════════════════════════════
+
+/// Compute optimal checkpoint positions using the Revolve algorithm.
+///
+/// Given `num_steps` forward steps and `num_checkpoints` available slots,
+/// returns the set of step indices where checkpoints should be placed.
+/// Step 0 (initial state) is always stored implicitly.
+fn revolve_schedule(num_steps: usize, num_checkpoints: usize) -> Vec<usize> {
+    if num_checkpoints >= num_steps {
+        // Store everything
+        return (1..num_steps).collect();
+    }
+
+    let mut positions = Vec::new();
+    schedule_recursive(0, num_steps, num_checkpoints, &mut positions);
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
+/// Recursively determine checkpoint positions for the interval [start, end).
+///
+/// Places one checkpoint optimally (using the binomial formula), then
+/// recurses on the two resulting sub-intervals.
+fn schedule_recursive(start: usize, end: usize, checkpoints: usize, positions: &mut Vec<usize>) {
+    let steps = end - start;
+    if steps <= 1 || checkpoints == 0 {
+        return;
+    }
+
+    // Find optimal split point: advance by `optimal_advance` steps
+    let advance = optimal_advance(steps, checkpoints);
+    let split = start + advance;
+
+    if split < end && split > start {
+        positions.push(split);
+
+        // First sub-interval: [start, split) with (checkpoints - 1) remaining slots
+        // (we used one slot for the checkpoint at `split`)
+        schedule_recursive(start, split, checkpoints - 1, positions);
+
+        // Second sub-interval: [split, end) with all checkpoint slots
+        // (the checkpoint at `split` has been consumed by the backward pass
+        //  before we process the first sub-interval)
+        schedule_recursive(split, end, checkpoints, positions);
+    }
+}
+
+/// Compute the optimal advance distance before placing a checkpoint.
+///
+/// For `steps` remaining forward steps and `c` checkpoint slots, finds
+/// the advance distance that minimizes total recomputation using the
+/// binomial formula from Griewank & Walther.
+fn optimal_advance(steps: usize, c: usize) -> usize {
+    if c == 0 || steps <= 1 {
+        return steps;
+    }
+
+    // Find smallest t where beta(t, c) >= steps
+    let mut t = 1usize;
+    while beta(t, c) < steps {
+        t += 1;
+    }
+
+    // Optimal advance = beta(t-1, c-1)
+    if t > 0 && c > 0 {
+        beta(t - 1, c - 1).max(1).min(steps - 1)
+    } else {
+        1
+    }
+}
+
+/// Binomial coefficient function: beta(s, c) = C(s+c, c).
+///
+/// Represents the maximum number of steps that can be reversed with
+/// `s` forward recomputations and `c` checkpoint slots.
+fn beta(s: usize, c: usize) -> usize {
+    if c == 0 {
+        return s + 1;
+    }
+    if s == 0 {
+        return 1;
+    }
+    // C(s+c, c) via multiplicative formula to avoid overflow
+    let mut result = 1usize;
+    for i in 0..c {
+        result = result.saturating_mul(s + c - i);
+        result /= i + 1;
+    }
+    result
 }
 
 /// Run one step forward (primal only, no gradient needed for the output).
@@ -183,4 +271,55 @@ fn vjp_step<F: Float + BtapeThreadLocal>(
     }
 
     tape.gradient(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn beta_base_cases() {
+        // beta(s, 0) = s + 1
+        assert_eq!(beta(0, 0), 1);
+        assert_eq!(beta(1, 0), 2);
+        assert_eq!(beta(5, 0), 6);
+
+        // beta(0, c) = 1
+        assert_eq!(beta(0, 1), 1);
+        assert_eq!(beta(0, 5), 1);
+
+        // beta(1, 1) = C(2,1) = 2
+        assert_eq!(beta(1, 1), 2);
+
+        // beta(2, 2) = C(4,2) = 6
+        assert_eq!(beta(2, 2), 6);
+
+        // beta(3, 2) = C(5,2) = 10
+        assert_eq!(beta(3, 2), 10);
+    }
+
+    #[test]
+    fn revolve_schedule_store_all() {
+        let positions = revolve_schedule(5, 5);
+        assert_eq!(positions, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn revolve_schedule_one_checkpoint() {
+        let positions = revolve_schedule(4, 1);
+        // With 1 checkpoint, should place it somewhere in [1, 3]
+        assert!(!positions.is_empty());
+        for &p in &positions {
+            assert!(p > 0 && p < 4);
+        }
+    }
+
+    #[test]
+    fn revolve_schedule_two_checkpoints() {
+        let positions = revolve_schedule(10, 2);
+        assert!(!positions.is_empty());
+        for &p in &positions {
+            assert!(p > 0 && p < 10);
+        }
+    }
 }

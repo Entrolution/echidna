@@ -18,6 +18,7 @@ use crate::dual_vec::DualVec;
 use crate::float::Float;
 use crate::opcode::{self, OpCode, UNUSED};
 
+use crate::float::IsAllZero;
 use num_traits::Float as NumFloat;
 
 /// Sentinel index for constant entries (not tracked).
@@ -34,6 +35,8 @@ pub struct BytecodeTape<F: Float> {
     num_inputs: u32,
     num_variables: u32,
     output_index: u32,
+    /// Indices of multiple output variables (empty = single-output mode).
+    output_indices: Vec<u32>,
 }
 
 impl<F: Float> BytecodeTape<F> {
@@ -46,6 +49,7 @@ impl<F: Float> BytecodeTape<F> {
             num_inputs: 0,
             num_variables: 0,
             output_index: 0,
+            output_indices: Vec::new(),
         }
     }
 
@@ -58,6 +62,7 @@ impl<F: Float> BytecodeTape<F> {
             num_inputs: 0,
             num_variables: 0,
             output_index: 0,
+            output_indices: Vec::new(),
         }
     }
 
@@ -128,6 +133,152 @@ impl<F: Float> BytecodeTape<F> {
     #[inline]
     pub fn num_ops(&self) -> usize {
         self.opcodes.len()
+    }
+
+    // ── Multi-output support ──
+
+    /// Mark multiple output variables.
+    ///
+    /// When set, [`num_outputs`](Self::num_outputs), [`output_values`](Self::output_values),
+    /// [`jacobian`](Self::jacobian), and [`vjp_multi`](Self::vjp_multi) become available.
+    /// Single-output methods (`output_index`, `gradient`, etc.) continue to work using
+    /// the first output.
+    pub fn set_outputs(&mut self, indices: &[u32]) {
+        self.output_indices = indices.to_vec();
+        if let Some(&first) = indices.first() {
+            self.output_index = first;
+        }
+    }
+
+    /// Number of output variables. Returns 1 in single-output mode.
+    pub fn num_outputs(&self) -> usize {
+        if self.output_indices.is_empty() {
+            1
+        } else {
+            self.output_indices.len()
+        }
+    }
+
+    /// Get all output values (available after `forward()` or initial recording).
+    ///
+    /// In single-output mode, returns a single-element vector.
+    pub fn output_values(&self) -> Vec<F> {
+        if self.output_indices.is_empty() {
+            vec![self.values[self.output_index as usize]]
+        } else {
+            self.output_indices
+                .iter()
+                .map(|&idx| self.values[idx as usize])
+                .collect()
+        }
+    }
+
+    /// Reverse sweep seeded at a specific index with a given weight.
+    ///
+    /// Like [`reverse`](Self::reverse) but with an arbitrary seed value instead of 1.
+    fn reverse_weighted(&self, seed_index: u32, seed_value: F) -> Vec<F> {
+        let n = self.num_variables as usize;
+        let mut adjoints = vec![F::zero(); n];
+        adjoints[seed_index as usize] = seed_value;
+
+        for i in (0..self.opcodes.len()).rev() {
+            let adj = adjoints[i];
+            if adj == F::zero() {
+                continue;
+            }
+
+            match self.opcodes[i] {
+                OpCode::Input | OpCode::Const => continue,
+                op => {
+                    adjoints[i] = F::zero();
+                    let [a_idx, b_idx] = self.arg_indices[i];
+                    let a = self.values[a_idx as usize];
+                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                        self.values[b_idx as usize]
+                    } else if op == OpCode::Powi {
+                        F::from(b_idx).unwrap_or_else(|| F::zero())
+                    } else {
+                        F::zero()
+                    };
+                    let r = self.values[i];
+                    let (da, db) = opcode::reverse_partials(op, a, b, r);
+
+                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                    if b_idx != UNUSED && op != OpCode::Powi {
+                        adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
+                    }
+                }
+            }
+        }
+        adjoints
+    }
+
+    /// Reverse sweep with weighted seeds for multiple outputs.
+    ///
+    /// Computes `∑_i weights[i] * ∂output_i/∂x` — a vector-Jacobian product.
+    ///
+    /// Returns the gradient with respect to all inputs (length [`num_inputs`](Self::num_inputs)).
+    pub fn reverse_seeded(&self, seeds: &[F]) -> Vec<F> {
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        assert_eq!(
+            seeds.len(),
+            out_indices.len(),
+            "seeds length must match number of outputs"
+        );
+
+        let n = self.num_variables as usize;
+        let ni = self.num_inputs as usize;
+        let mut total_adjoints = vec![F::zero(); n];
+
+        for (k, (&out_idx, &weight)) in out_indices.iter().zip(seeds.iter()).enumerate() {
+            if weight == F::zero() {
+                continue;
+            }
+            let adjoints = self.reverse_weighted(out_idx, weight);
+            for j in 0..n {
+                total_adjoints[j] = total_adjoints[j] + adjoints[j];
+            }
+            let _ = k;
+        }
+
+        total_adjoints[..ni].to_vec()
+    }
+
+    /// Compute the full Jacobian of a multi-output tape via reverse mode.
+    ///
+    /// Performs `m` reverse sweeps (one per output). Returns `J[i][j] = ∂f_i/∂x_j`.
+    pub fn jacobian(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
+        self.forward(inputs);
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let ni = self.num_inputs as usize;
+        let mut jac = Vec::with_capacity(out_indices.len());
+
+        for &out_idx in &out_indices {
+            let adjoints = self.reverse(out_idx);
+            jac.push(adjoints[..ni].to_vec());
+        }
+
+        jac
+    }
+
+    /// Vector-Jacobian product for a multi-output tape.
+    ///
+    /// Computes `wᵀ · J` where `J` is the Jacobian. More efficient than
+    /// computing the full Jacobian when only the weighted combination is needed.
+    pub fn vjp_multi(&mut self, inputs: &[F], weights: &[F]) -> Vec<F> {
+        self.forward(inputs);
+        self.reverse_seeded(weights)
     }
 
     /// Re-evaluate the tape at new inputs (forward sweep).
@@ -302,10 +453,9 @@ impl<F: Float> BytecodeTape<F> {
     }
 
     /// Reverse sweep with tangent-carrying adjoints. Uses values from
-    /// [`forward_tangent`](Self::forward_tangent). The zero-adjoint skip is
-    /// disabled because `PartialEq` compares `.re` only, which would
-    /// incorrectly drop tangent contributions.
-    fn reverse_tangent<T: NumFloat>(&self, tangent_vals: &[T], buf: &mut Vec<T>) {
+    /// [`forward_tangent`](Self::forward_tangent). Uses [`IsAllZero`] to
+    /// safely skip zero adjoints without dropping tangent contributions.
+    fn reverse_tangent<T: NumFloat + IsAllZero>(&self, tangent_vals: &[T], buf: &mut Vec<T>) {
         let n = self.num_variables as usize;
         buf.clear();
         buf.resize(n, T::zero());
@@ -316,6 +466,9 @@ impl<F: Float> BytecodeTape<F> {
                 OpCode::Input | OpCode::Const => continue,
                 op => {
                     let adj = buf[i];
+                    if adj.is_all_zero() {
+                        continue;
+                    }
                     buf[i] = T::zero();
 
                     let [a_idx, b_idx] = self.arg_indices[i];
@@ -376,6 +529,27 @@ impl<F: Float> BytecodeTape<F> {
         (gradient, hvp)
     }
 
+    /// Like [`hvp_with_buf`](Self::hvp_with_buf) but also reuses a caller-provided
+    /// input buffer, eliminating all allocations on repeated calls.
+    fn hvp_with_all_bufs(
+        &self,
+        x: &[F],
+        v: &[F],
+        dual_input_buf: &mut Vec<Dual<F>>,
+        dual_vals_buf: &mut Vec<Dual<F>>,
+        adjoint_buf: &mut Vec<Dual<F>>,
+    ) {
+        let n = self.num_inputs as usize;
+
+        // Reuse the input buffer instead of allocating
+        dual_input_buf.clear();
+        dual_input_buf.extend(x.iter().zip(v.iter()).map(|(&xi, &vi)| Dual::new(xi, vi)));
+
+        self.forward_tangent(dual_input_buf, dual_vals_buf);
+        self.reverse_tangent(dual_vals_buf, adjoint_buf);
+        let _ = n; // suppress unused warning
+    }
+
     /// Full Hessian matrix via `n` Hessian-vector products.
     ///
     /// Returns `(value, gradient, hessian)` where `hessian[i][j] = ∂²f/∂x_i∂x_j`.
@@ -384,6 +558,7 @@ impl<F: Float> BytecodeTape<F> {
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
+        let mut dual_input_buf: Vec<Dual<F>> = Vec::with_capacity(n);
         let mut dual_vals_buf = Vec::new();
         let mut adjoint_buf = Vec::new();
         let mut hessian = vec![vec![F::zero(); n]; n];
@@ -391,11 +566,12 @@ impl<F: Float> BytecodeTape<F> {
         let mut value = F::zero();
 
         for j in 0..n {
-            let dual_inputs: Vec<Dual<F>> = (0..n)
-                .map(|i| Dual::new(x[i], if i == j { F::one() } else { F::zero() }))
-                .collect();
+            // Reuse input buffer
+            dual_input_buf.clear();
+            dual_input_buf
+                .extend((0..n).map(|i| Dual::new(x[i], if i == j { F::one() } else { F::zero() })));
 
-            self.forward_tangent(&dual_inputs, &mut dual_vals_buf);
+            self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
             self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
 
             if j == 0 {
@@ -421,6 +597,7 @@ impl<F: Float> BytecodeTape<F> {
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
+        let mut dual_input_buf: Vec<DualVec<F, N>> = Vec::with_capacity(n);
         let mut dual_vals_buf: Vec<DualVec<F, N>> = Vec::new();
         let mut adjoint_buf: Vec<DualVec<F, N>> = Vec::new();
         let mut hessian = vec![vec![F::zero(); n]; n];
@@ -431,21 +608,21 @@ impl<F: Float> BytecodeTape<F> {
         for batch in 0..num_batches {
             let base = batch * N;
 
-            let dual_inputs: Vec<DualVec<F, N>> = (0..n)
-                .map(|i| {
-                    let eps = std::array::from_fn(|lane| {
-                        let col = base + lane;
-                        if col < n && i == col {
-                            F::one()
-                        } else {
-                            F::zero()
-                        }
-                    });
-                    DualVec::new(x[i], eps)
-                })
-                .collect();
+            // Reuse input buffer
+            dual_input_buf.clear();
+            dual_input_buf.extend((0..n).map(|i| {
+                let eps = std::array::from_fn(|lane| {
+                    let col = base + lane;
+                    if col < n && i == col {
+                        F::one()
+                    } else {
+                        F::zero()
+                    }
+                });
+                DualVec::new(x[i], eps)
+            }));
 
-            self.forward_tangent(&dual_inputs, &mut dual_vals_buf);
+            self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
             self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
 
             if batch == 0 {
@@ -501,41 +678,106 @@ impl<F: Float> BytecodeTape<F> {
         let mut gradient = vec![F::zero(); n];
         let mut value = F::zero();
 
+        let mut dual_input_buf: Vec<Dual<F>> = Vec::with_capacity(n);
         let mut dual_vals_buf = Vec::new();
         let mut adjoint_buf = Vec::new();
+        let mut v = vec![F::zero(); n];
 
         for color in 0..num_colors {
             // Form direction vector: v[i] = 1 if colors[i] == color, else 0
-            let v: Vec<F> = (0..n)
-                .map(|i| {
-                    if colors[i] == color {
+            for i in 0..n {
+                v[i] = if colors[i] == color {
+                    F::one()
+                } else {
+                    F::zero()
+                };
+            }
+
+            self.hvp_with_all_bufs(
+                x,
+                &v,
+                &mut dual_input_buf,
+                &mut dual_vals_buf,
+                &mut adjoint_buf,
+            );
+
+            if color == 0 {
+                value = dual_vals_buf[self.output_index as usize].re;
+                for i in 0..n {
+                    gradient[i] = adjoint_buf[i].re;
+                }
+            }
+
+            // Extract Hessian entries for this color.
+            for (k, (&row, &col)) in pattern.rows.iter().zip(pattern.cols.iter()).enumerate() {
+                if colors[col as usize] == color {
+                    hessian_values[k] = adjoint_buf[row as usize].eps;
+                }
+            }
+        }
+
+        (value, gradient, pattern, hessian_values)
+    }
+
+    /// Batched sparse Hessian: packs N colors per sweep using DualVec.
+    ///
+    /// Reduces the number of forward+reverse sweeps from `num_colors` to
+    /// `ceil(num_colors / N)`. Each sweep processes N colors simultaneously.
+    ///
+    /// Returns `(value, gradient, pattern, hessian_values)`.
+    pub fn sparse_hessian_vec<const N: usize>(
+        &self,
+        x: &[F],
+    ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+
+        let pattern = self.detect_sparsity();
+        let (colors, num_colors) = crate::sparse::greedy_coloring(&pattern);
+
+        let mut hessian_values = vec![F::zero(); pattern.nnz()];
+        let mut gradient = vec![F::zero(); n];
+        let mut value = F::zero();
+
+        let mut dual_input_buf: Vec<DualVec<F, N>> = Vec::with_capacity(n);
+        let mut dual_vals_buf: Vec<DualVec<F, N>> = Vec::new();
+        let mut adjoint_buf: Vec<DualVec<F, N>> = Vec::new();
+
+        let num_batches = (num_colors as usize).div_ceil(N);
+        for batch in 0..num_batches {
+            let base_color = (batch * N) as u32;
+
+            // Build DualVec inputs: lane k has v[i]=1 if colors[i] == base_color+k
+            dual_input_buf.clear();
+            dual_input_buf.extend((0..n).map(|i| {
+                let eps = std::array::from_fn(|lane| {
+                    let target_color = base_color + lane as u32;
+                    if target_color < num_colors && colors[i] == target_color {
                         F::one()
                     } else {
                         F::zero()
                     }
-                })
-                .collect();
+                });
+                DualVec::new(x[i], eps)
+            }));
 
-            let (g, hv) = self.hvp_with_buf(x, &v, &mut dual_vals_buf, &mut adjoint_buf);
+            self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
+            self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
 
-            if color == 0 {
-                gradient = g;
+            if batch == 0 {
                 value = dual_vals_buf[self.output_index as usize].re;
+                for i in 0..n {
+                    gradient[i] = adjoint_buf[i].re;
+                }
             }
 
-            // Extract Hessian entries for this color.
-            // For entry (row, col) with col colored `color`:
-            //   (H * v)[row] = ∑_j H[row,j] * v[j]
-            // Since coloring guarantees no two variables adjacent to `row` share a color,
-            // the only non-zero contribution from color `color` is H[row, col].
-            //
-            // For diagonal entries (row == col), extract when row has this color.
-            // For off-diagonal entries, extract from BOTH directions (symmetry):
-            //   when col has this color: hv[row] = H[row, col]
-            //   when row has this color: hv[col] = H[col, row] = H[row, col]
+            // Extract Hessian entries: for entry (row, col) with colors[col] == base_color+lane,
+            // read adjoint_buf[row].eps[lane]
             for (k, (&row, &col)) in pattern.rows.iter().zip(pattern.cols.iter()).enumerate() {
-                if colors[col as usize] == color {
-                    hessian_values[k] = hv[row as usize];
+                let col_color = colors[col as usize];
+                if col_color >= base_color && col_color < base_color + N as u32 {
+                    let lane = (col_color - base_color) as usize;
+                    hessian_values[k] = adjoint_buf[row as usize].eps[lane];
                 }
             }
         }
