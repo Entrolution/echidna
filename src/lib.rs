@@ -18,6 +18,11 @@ pub mod opcode;
 #[cfg(feature = "bytecode")]
 pub mod sparse;
 
+#[cfg(feature = "ndarray")]
+pub mod ndarray_support;
+#[cfg(feature = "faer")]
+pub mod faer_support;
+
 pub use api::{grad, jacobian, jvp, vjp};
 pub use dual::Dual;
 pub use dual_vec::DualVec;
@@ -28,15 +33,16 @@ pub use scalar::Scalar;
 #[cfg(feature = "bytecode")]
 pub use api::{
     hessian, hessian_vec, hvp, record, record_multi, sparse_hessian, sparse_hessian_vec,
+    sparse_jacobian,
 };
 #[cfg(feature = "bytecode")]
 pub use breverse::BReverse;
 #[cfg(feature = "bytecode")]
-pub use bytecode_tape::BytecodeTape;
+pub use bytecode_tape::{BytecodeTape, CustomOp, CustomOpHandle};
 #[cfg(feature = "bytecode")]
 pub use checkpoint::grad_checkpointed;
 #[cfg(feature = "bytecode")]
-pub use sparse::{CsrPattern, SparsityPattern};
+pub use sparse::{CsrPattern, JacobianSparsityPattern, SparsityPattern};
 
 /// Type alias for forward-mode dual numbers over `f64`.
 pub type Dual64 = Dual<f64>;

@@ -7,7 +7,7 @@
 
 use std::fmt::{self, Display};
 
-use crate::bytecode_tape::CONSTANT;
+use crate::bytecode_tape::{BtapeThreadLocal, CustomOpHandle, CONSTANT};
 use crate::float::Float;
 
 /// Bytecode-tape reverse-mode AD variable.
@@ -40,6 +40,43 @@ impl<F: Float> BReverse<F> {
     #[inline]
     pub fn index(&self) -> u32 {
         self.index
+    }
+
+    /// Apply a unary custom operation.
+    pub fn custom_unary(self, handle: CustomOpHandle, value: F) -> Self
+    where
+        F: BtapeThreadLocal,
+    {
+        let index = crate::bytecode_tape::with_active_btape(|t| {
+            let xi = if self.index == CONSTANT {
+                t.push_const(self.value)
+            } else {
+                self.index
+            };
+            t.push_custom_unary(xi, handle, value)
+        });
+        BReverse { value, index }
+    }
+
+    /// Apply a binary custom operation.
+    pub fn custom_binary(self, other: Self, handle: CustomOpHandle, value: F) -> Self
+    where
+        F: BtapeThreadLocal,
+    {
+        let index = crate::bytecode_tape::with_active_btape(|t| {
+            let li = if self.index == CONSTANT {
+                t.push_const(self.value)
+            } else {
+                self.index
+            };
+            let ri = if other.index == CONSTANT {
+                t.push_const(other.value)
+            } else {
+                other.index
+            };
+            t.push_custom_binary(li, ri, handle, value)
+        });
+        BReverse { value, index }
     }
 }
 
