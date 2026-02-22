@@ -1245,6 +1245,67 @@ impl<F: Float> BytecodeTape<F> {
         (output, adj_buf[..n].to_vec())
     }
 
+    // ── ODE Taylor integration ──
+
+    /// Compute the Taylor expansion of the ODE solution `y(t)` to order K.
+    ///
+    /// Given a tape representing the right-hand side `f: R^n → R^n` of the ODE
+    /// `y' = f(y)`, and an initial condition `y(0) = y0`, computes the Taylor
+    /// coefficients `y_0, y_1, ..., y_{K-1}` such that
+    /// `y(t) ≈ y_0 + y_1·t + y_2·t² + ... + y_{K-1}·t^{K-1}`.
+    ///
+    /// The tape must have `num_outputs == num_inputs` (autonomous ODE: f maps R^n → R^n).
+    ///
+    /// Returns one `Taylor<F, K>` per state variable. Use [`Taylor::eval_at`] to
+    /// evaluate at a step size `h`, or inspect coefficients for error estimation.
+    #[cfg(feature = "taylor")]
+    pub fn ode_taylor_step<const K: usize>(&self, y0: &[F]) -> Vec<Taylor<F, K>> {
+        let mut buf = Vec::new();
+        self.ode_taylor_step_with_buf(y0, &mut buf)
+    }
+
+    /// Like [`ode_taylor_step`](Self::ode_taylor_step) but reuses a caller-provided
+    /// buffer to avoid allocation on repeated calls.
+    #[cfg(feature = "taylor")]
+    pub fn ode_taylor_step_with_buf<const K: usize>(
+        &self,
+        y0: &[F],
+        buf: &mut Vec<Taylor<F, K>>,
+    ) -> Vec<Taylor<F, K>> {
+        let n = self.num_inputs as usize;
+        assert_eq!(y0.len(), n, "y0 length must match num_inputs");
+        assert_eq!(
+            self.num_outputs(),
+            n,
+            "ODE tape must have num_outputs == num_inputs (f: R^n -> R^n)"
+        );
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let mut y_coeffs = vec![[F::zero(); K]; n];
+        for i in 0..n {
+            y_coeffs[i][0] = y0[i];
+        }
+
+        for k in 0..K - 1 {
+            let inputs: Vec<Taylor<F, K>> =
+                (0..n).map(|i| Taylor::new(y_coeffs[i])).collect();
+
+            self.forward_tangent(&inputs, buf);
+
+            let divisor = F::from(k + 1).unwrap();
+            for i in 0..n {
+                y_coeffs[i][k + 1] = buf[out_indices[i] as usize].coeff(k) / divisor;
+            }
+        }
+
+        (0..n).map(|i| Taylor::new(y_coeffs[i])).collect()
+    }
+
     // ── Tape optimizations ──
 
     /// Eliminate dead (unreachable) entries from the tape.

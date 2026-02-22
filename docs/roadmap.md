@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R1c+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 370 tests passing.
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 378 tests passing.
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -23,6 +23,7 @@ This roadmap synthesizes:
 | R3 | Public `forward_tangent` on BytecodeTape, `output_index()` accessor | Complete |
 | R1a | `Taylor<F, K>` (const-generic) + `TaylorDyn<F>` (arena-based) + shared `taylor_ops` propagation rules, 35+ elementals, `Float`/`Scalar`/`num_traits::Float` impls, 33 tests | Complete |
 | R1c | `taylor_grad` / `taylor_grad_with_buf` — reverse-over-Taylor for gradient + HVP + higher-order directional adjoints in a single pass, 11 tests | Complete |
+| R1d | `ode_taylor_step` / `ode_taylor_step_with_buf` — ODE Taylor series integration via coefficient bootstrapping, `eval_at` Horner evaluation, 8 tests | Complete |
 | R2a+R2c | STDE module: jet propagation, Laplacian estimator, Hessian diagonal, directional derivatives, TaylorDyn variants, 20 tests | Complete |
 | R2b | STDE variance reduction: `EstimatorResult` with sample statistics, `laplacian_with_stats` (Welford's online variance), `laplacian_with_control` (diagonal control variate), 13 tests | Complete |
 
@@ -59,14 +60,11 @@ Reverse-over-Taylor: `taylor_grad` builds Taylor inputs `x_i(t) = x_i + v_i·t`,
 
 Key file: `src/bytecode_tape.rs`.
 
-**R1d. ODE Taylor series integration**
+**R1d. ODE Taylor series integration** — **COMPLETE**
 
-Given `y' = f(y)`, compute the Taylor expansion of `y(t)` to order K by bootstrapping:
-1. `y_0` = initial condition
-2. `y_1 = f(y_0)` (evaluate f)
-3. `y_k` for k >= 2: push `y_0, y_1, ..., y_{k-1}` as a jet through f, read off the degree-k coefficient
+Given `y' = f(y)`, computes the Taylor expansion of `y(t)` to order K via coefficient bootstrapping: `y_{k+1} = coeff_k(f(y(t))) / (k+1)`. Uses K-1 forward passes through the tape, building up Taylor inputs incrementally. Returns `Vec<Taylor<F, K>>` so users get `eval_at(h)` for stepping, `coeff(k)` for error estimation, and `derivative(k)` for the solution derivatives. Feature-gated behind `taylor`. Follows the `taylor_grad` / `hvp` dual-method pattern (allocating + buffer-reusing). 8 tests covering exponential growth/decay, quadratic blowup, 2D rotation, step evaluation, minimal K=2, buffer reuse, and standalone `eval_at`.
 
-This gives an automatic high-order ODE integrator with adaptive step control via coefficient monitoring.
+Key file: `src/bytecode_tape.rs`.
 
 ### R2. Stochastic Taylor Derivative Estimators (STDE)
 **STDE paper (Schatz et al., NeurIPS 2024)**
@@ -223,7 +221,7 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
   │      │
   │      ├──▶ R1c (Taylor reverse)  ─── ✓ DONE
   │      │
-  │      └──▶ R1d (ODE Taylor)
+  │      └──▶ R1d (ODE Taylor)    ─── ✓ DONE
   │
   └──▶ R2a (jet construction)       ─── ✓ DONE
          │
@@ -236,9 +234,9 @@ R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
-The next unblocked item is **R1d** (ODE Taylor integration).
+All R1 items (Taylor mode AD) are now complete.
 
-R4 (remaining implicit features), R7 (serde), and R8 (benchmarks) are independent and can be interleaved as needed.
+R4 (remaining implicit features), R7 (serde), and R8 (benchmarks) are independent and can be started in any order.
 
 R5 (cross-country), R6 (nonsmooth), and R9+ are lower priority and can be scheduled opportunistically.
 

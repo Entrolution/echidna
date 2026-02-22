@@ -95,6 +95,18 @@ impl<F: Float, const K: usize> Taylor<F, K> {
         self.coeffs[k] * factorial
     }
 
+    /// Evaluate the Taylor polynomial at point `h` via Horner's method.
+    ///
+    /// Computes `Σ_{k=0}^{K-1} coeffs[k] · h^k`.
+    #[inline]
+    pub fn eval_at(&self, h: F) -> F {
+        let mut val = self.coeffs[K - 1];
+        for k in (0..K - 1).rev() {
+            val = val * h + self.coeffs[k];
+        }
+        val
+    }
+
     // ── Elemental methods ──
     // Each delegates to taylor_ops with stack arrays as scratch.
 

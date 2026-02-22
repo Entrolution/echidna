@@ -478,6 +478,123 @@ mod bytecode_tests {
             }
         }
     }
+
+    // ── ODE Taylor integration tests ──
+
+    #[test]
+    fn ode_taylor_exp_growth() {
+        // y' = y, y(0) = 1 → y(t) = exp(t), y_k = 1/k!
+        let (tape, _) = echidna::record_multi(|x| vec![x[0]], &[1.0]);
+        let result = tape.ode_taylor_step::<6>(&[1.0]);
+        assert_eq!(result.len(), 1);
+        let y = &result[0];
+        let mut factorial = 1.0;
+        for k in 0..6 {
+            assert_relative_eq!(y.coeff(k), 1.0 / factorial, epsilon = 1e-12);
+            factorial *= (k + 1) as f64;
+        }
+    }
+
+    #[test]
+    fn ode_taylor_exp_decay() {
+        // y' = -y, y(0) = 1 → y(t) = exp(-t), y_k = (-1)^k / k!
+        let (tape, _) = echidna::record_multi(|x| vec![-x[0]], &[1.0]);
+        let result = tape.ode_taylor_step::<6>(&[1.0]);
+        assert_eq!(result.len(), 1);
+        let y = &result[0];
+        let mut factorial = 1.0;
+        for k in 0..6 {
+            let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+            assert_relative_eq!(y.coeff(k), sign / factorial, epsilon = 1e-12);
+            factorial *= (k + 1) as f64;
+        }
+    }
+
+    #[test]
+    fn ode_taylor_quadratic_blowup() {
+        // y' = y², y(0) = 1 → y(t) = 1/(1-t), y_k = 1 for all k
+        let (tape, _) = echidna::record_multi(|x| vec![x[0] * x[0]], &[1.0]);
+        let result = tape.ode_taylor_step::<6>(&[1.0]);
+        assert_eq!(result.len(), 1);
+        let y = &result[0];
+        for k in 0..6 {
+            assert_relative_eq!(y.coeff(k), 1.0, epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn ode_taylor_rotation() {
+        // y' = [-y₁, y₀], y(0) = [1, 0] → [cos(t), sin(t)]
+        let (tape, _) = echidna::record_multi(|x| vec![-x[1], x[0]], &[1.0, 0.0]);
+        let result = tape.ode_taylor_step::<6>(&[1.0, 0.0]);
+        assert_eq!(result.len(), 2);
+
+        // cos(t) coeffs: [1, 0, -1/2, 0, 1/24, 0]
+        assert_relative_eq!(result[0].coeff(0), 1.0, epsilon = 1e-12);
+        assert_relative_eq!(result[0].coeff(1), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(result[0].coeff(2), -0.5, epsilon = 1e-12);
+        assert_relative_eq!(result[0].coeff(3), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(result[0].coeff(4), 1.0 / 24.0, epsilon = 1e-12);
+        assert_relative_eq!(result[0].coeff(5), 0.0, epsilon = 1e-12);
+
+        // sin(t) coeffs: [0, 1, 0, -1/6, 0, 1/120]
+        assert_relative_eq!(result[1].coeff(0), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(result[1].coeff(1), 1.0, epsilon = 1e-12);
+        assert_relative_eq!(result[1].coeff(2), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(result[1].coeff(3), -1.0 / 6.0, epsilon = 1e-12);
+        assert_relative_eq!(result[1].coeff(4), 0.0, epsilon = 1e-12);
+        assert_relative_eq!(result[1].coeff(5), 1.0 / 120.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn ode_taylor_step_eval() {
+        // y' = -y, y(0) = 1, K=8 → y(0.1) ≈ exp(-0.1)
+        let (tape, _) = echidna::record_multi(|x| vec![-x[0]], &[1.0]);
+        let result = tape.ode_taylor_step::<8>(&[1.0]);
+        let y_at_h = result[0].eval_at(0.1);
+        assert_relative_eq!(y_at_h, (-0.1_f64).exp(), epsilon = 1e-12);
+    }
+
+    #[test]
+    fn ode_taylor_k2_minimal() {
+        // y' = y, y(0) = 1, K=2 → y_0 = 1, y_1 = 1
+        let (tape, _) = echidna::record_multi(|x| vec![x[0]], &[1.0]);
+        let result = tape.ode_taylor_step::<2>(&[1.0]);
+        assert_eq!(result.len(), 1);
+        assert_relative_eq!(result[0].coeff(0), 1.0, epsilon = 1e-12);
+        assert_relative_eq!(result[0].coeff(1), 1.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn ode_taylor_buffer_reuse() {
+        // Two calls with same buffer should give identical results
+        let (tape, _) = echidna::record_multi(|x| vec![x[0] * x[0]], &[1.0]);
+        let mut buf = Vec::new();
+
+        let result1 = tape.ode_taylor_step_with_buf::<6>(&[1.0], &mut buf);
+        let result2 = tape.ode_taylor_step_with_buf::<6>(&[1.0], &mut buf);
+
+        for k in 0..6 {
+            assert_relative_eq!(result1[0].coeff(k), result2[0].coeff(k), epsilon = 1e-14);
+        }
+    }
+}
+
+// ══════════════════════════════════════════════
+//  5b. eval_at
+// ══════════════════════════════════════════════
+
+#[test]
+fn eval_at_known_polynomial() {
+    // p(t) = 1 + 2t + 3t²
+    let p = Taylor::<f64, 3>::new([1.0, 2.0, 3.0]);
+
+    // p(0) = 1
+    assert_relative_eq!(p.eval_at(0.0), 1.0, epsilon = 1e-14);
+    // p(0.5) = 1 + 1 + 0.75 = 2.75
+    assert_relative_eq!(p.eval_at(0.5), 2.75, epsilon = 1e-14);
+    // p(1) = 1 + 2 + 3 = 6
+    assert_relative_eq!(p.eval_at(1.0), 6.0, epsilon = 1e-14);
 }
 
 // ══════════════════════════════════════════════
