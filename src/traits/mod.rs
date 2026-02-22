@@ -1,3 +1,5 @@
+pub mod dual_vec_num_traits;
+pub mod dual_vec_ops;
 pub mod num_traits_impls;
 pub mod std_ops;
 

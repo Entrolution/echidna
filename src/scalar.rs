@@ -3,6 +3,7 @@ use std::fmt::{Debug, Display};
 use num_traits::FromPrimitive;
 
 use crate::dual::Dual;
+use crate::dual_vec::DualVec;
 use crate::float::Float;
 use crate::reverse::Reverse;
 use crate::tape::TapeThreadLocal;
@@ -66,6 +67,20 @@ impl<F: Float> Scalar for Dual<F> {
     #[inline]
     fn from_f(val: F) -> Self {
         Dual::constant(val)
+    }
+
+    #[inline]
+    fn value(&self) -> F {
+        self.re
+    }
+}
+
+impl<F: Float, const N: usize> Scalar for DualVec<F, N> {
+    type Float = F;
+
+    #[inline]
+    fn from_f(val: F) -> Self {
+        DualVec::constant(val)
     }
 
     #[inline]

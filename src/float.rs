@@ -3,6 +3,7 @@ use std::fmt::{Debug, Display};
 use num_traits::{Float as NumFloat, FloatConst, FromPrimitive};
 
 use crate::dual::Dual;
+use crate::dual_vec::DualVec;
 
 /// Marker trait for floating-point types that can serve as the base of AD computations.
 ///
@@ -17,3 +18,4 @@ pub trait Float:
 impl Float for f32 {}
 impl Float for f64 {}
 impl<F: Float> Float for Dual<F> {}
+impl<F: Float, const N: usize> Float for DualVec<F, N> {}
