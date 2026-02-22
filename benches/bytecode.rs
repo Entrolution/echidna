@@ -162,6 +162,130 @@ fn bench_hvp_buf_reuse(c: &mut Criterion) {
     group.finish();
 }
 
+/// Sparse Hessian vs dense Hessian.
+fn bench_sparse_hessian(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_hessian");
+
+    // Tridiagonal function: sparse should win dramatically
+    for n in [10, 50, 100] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let (tape_tri, _) = record(
+            |v| {
+                let mut sum = v[0] - v[0];
+                for i in 0..v.len() - 1 {
+                    sum = sum + v[i] * v[i + 1];
+                }
+                sum
+            },
+            &x,
+        );
+
+        group.bench_with_input(BenchmarkId::new("tridiag_dense", n), &x, |b, x| {
+            b.iter(|| black_box(tape_tri.hessian(black_box(x))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("tridiag_sparse", n), &x, |b, x| {
+            b.iter(|| black_box(tape_tri.sparse_hessian(black_box(x))))
+        });
+    }
+
+    // Rosenbrock
+    for n in [10] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let (tape_ros, _) = record(|v| rosenbrock_generic(v), &x);
+
+        group.bench_with_input(BenchmarkId::new("rosenbrock_dense", n), &x, |b, x| {
+            b.iter(|| black_box(tape_ros.hessian(black_box(x))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("rosenbrock_sparse", n), &x, |b, x| {
+            b.iter(|| black_box(tape_ros.sparse_hessian(black_box(x))))
+        });
+    }
+
+    group.finish();
+}
+
+/// Checkpointed gradient vs naive (all steps in one tape).
+fn bench_checkpointing(c: &mut Criterion) {
+    let mut group = c.benchmark_group("checkpointing");
+
+    let x0 = [0.5_f64, 0.3];
+
+    for num_steps in [10, 100] {
+        group.bench_with_input(BenchmarkId::new("naive", num_steps), &x0, |b, x0| {
+            b.iter(|| {
+                let (mut tape, _) = record(
+                    |x| {
+                        let mut state = x.to_vec();
+                        for _ in 0..num_steps {
+                            let half = BReverse::constant(0.5_f64);
+                            state = vec![
+                                state[0].sin() * half + state[1] * half,
+                                state[0] * half + state[1].cos() * half,
+                            ];
+                        }
+                        state[0] + state[1]
+                    },
+                    black_box(x0),
+                );
+                black_box(tape.gradient(x0))
+            })
+        });
+
+        let step = |x: &[BReverse<f64>]| {
+            let half = BReverse::constant(0.5_f64);
+            vec![
+                x[0].sin() * half + x[1] * half,
+                x[0] * half + x[1].cos() * half,
+            ]
+        };
+
+        for num_ckpts in [1, 3, 10] {
+            let ckpts = num_ckpts.min(num_steps);
+            group.bench_with_input(
+                BenchmarkId::new(format!("ckpt_{}", ckpts), num_steps),
+                &x0,
+                |b, x0| {
+                    b.iter(|| {
+                        black_box(echidna::grad_checkpointed(
+                            step,
+                            |x| x[0] + x[1],
+                            black_box(x0),
+                            num_steps,
+                            ckpts,
+                        ))
+                    })
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+/// Batched Hessian (hessian_vec) vs scalar Hessian.
+fn bench_hessian_vec(c: &mut Criterion) {
+    let mut group = c.benchmark_group("hessian_vec");
+    for n in [2, 10, 100] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let (tape, _) = record(|v| rosenbrock_generic(v), &x);
+
+        group.bench_with_input(BenchmarkId::new("hessian", n), &x, |b, x| {
+            b.iter(|| black_box(tape.hessian(black_box(x))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("hessian_vec_4", n), &x, |b, x| {
+            b.iter(|| black_box(tape.hessian_vec::<4>(black_box(x))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("hessian_vec_8", n), &x, |b, x| {
+            b.iter(|| black_box(tape.hessian_vec::<8>(black_box(x))))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bytecode_vs_adept,
@@ -169,6 +293,9 @@ criterion_group!(
     bench_buf_reuse,
     bench_hvp,
     bench_hessian,
-    bench_hvp_buf_reuse
+    bench_hvp_buf_reuse,
+    bench_sparse_hessian,
+    bench_checkpointing,
+    bench_hessian_vec
 );
 criterion_main!(benches);

@@ -219,3 +219,29 @@ pub fn hessian<F: Float + BtapeThreadLocal>(
     let (tape, _) = record(f, x);
     tape.hessian(x)
 }
+
+/// Full Hessian matrix via batched forward-over-reverse.
+///
+/// Like [`hessian`] but processes N tangent directions simultaneously,
+/// reducing the number of tape traversals from 2n to 2·ceil(n/N).
+#[cfg(feature = "bytecode")]
+pub fn hessian_vec<F: Float + BtapeThreadLocal, const N: usize>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &[F],
+) -> (F, Vec<F>, Vec<Vec<F>>) {
+    let (tape, _) = record(f, x);
+    tape.hessian_vec::<N>(x)
+}
+
+/// Sparse Hessian via structural sparsity detection and graph coloring.
+///
+/// Returns `(value, gradient, pattern, hessian_values)`.
+/// For sparse problems, this is dramatically faster than [`hessian`].
+#[cfg(feature = "bytecode")]
+pub fn sparse_hessian<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &[F],
+) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+    let (tape, _) = record(f, x);
+    tape.sparse_hessian(x)
+}

@@ -14,8 +14,11 @@
 use std::cell::Cell;
 
 use crate::dual::Dual;
+use crate::dual_vec::DualVec;
 use crate::float::Float;
 use crate::opcode::{self, OpCode, UNUSED};
+
+use num_traits::Float as NumFloat;
 
 /// Sentinel index for constant entries (not tracked).
 pub const CONSTANT: u32 = u32::MAX;
@@ -256,9 +259,12 @@ impl<F: Float> BytecodeTape<F> {
 
     // ── Forward-over-reverse (second-order) ──
 
-    /// Forward sweep with dual numbers. Reads opcodes and constants from `self`,
-    /// writing dual-valued results into `buf`. Does not mutate the tape.
-    fn forward_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+    /// Forward sweep with tangent-carrying numbers. Reads opcodes and constants
+    /// from `self`, writing results into `buf`. Does not mutate the tape.
+    ///
+    /// Generic over `T: NumFloat` so it works with both `Dual<F>` and
+    /// `DualVec<F, N>`.
+    fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         assert_eq!(
             inputs.len(),
             self.num_inputs as usize,
@@ -267,7 +273,7 @@ impl<F: Float> BytecodeTape<F> {
 
         let n = self.num_variables as usize;
         buf.clear();
-        buf.resize(n, Dual::constant(F::zero()));
+        buf.resize(n, T::zero());
 
         let mut input_idx = 0usize;
         for i in 0..self.opcodes.len() {
@@ -277,7 +283,7 @@ impl<F: Float> BytecodeTape<F> {
                     input_idx += 1;
                 }
                 OpCode::Const => {
-                    buf[i] = Dual::constant(self.values[i]);
+                    buf[i] = T::from(self.values[i]).unwrap();
                 }
                 op => {
                     let [a_idx, b_idx] = self.arg_indices[i];
@@ -285,9 +291,9 @@ impl<F: Float> BytecodeTape<F> {
                     let b = if b_idx != UNUSED && op != OpCode::Powi {
                         buf[b_idx as usize]
                     } else if op == OpCode::Powi {
-                        Dual::constant(F::from(b_idx).unwrap_or_else(|| F::zero()))
+                        T::from(b_idx).unwrap_or_else(|| T::zero())
                     } else {
-                        Dual::constant(F::zero())
+                        T::zero()
                     };
                     buf[i] = opcode::eval_forward(op, a, b);
                 }
@@ -295,38 +301,38 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
-    /// Reverse sweep with dual-valued adjoints. Uses dual values from
-    /// [`forward_dual`](Self::forward_dual). The zero-adjoint skip is disabled
-    /// because `Dual::PartialEq` compares `.re` only, which would incorrectly
-    /// drop tangent contributions.
-    fn reverse_dual(&self, dual_vals: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+    /// Reverse sweep with tangent-carrying adjoints. Uses values from
+    /// [`forward_tangent`](Self::forward_tangent). The zero-adjoint skip is
+    /// disabled because `PartialEq` compares `.re` only, which would
+    /// incorrectly drop tangent contributions.
+    fn reverse_tangent<T: NumFloat>(&self, tangent_vals: &[T], buf: &mut Vec<T>) {
         let n = self.num_variables as usize;
         buf.clear();
-        buf.resize(n, Dual::constant(F::zero()));
-        buf[self.output_index as usize] = Dual::constant(F::one());
+        buf.resize(n, T::zero());
+        buf[self.output_index as usize] = T::one();
 
         for i in (0..self.opcodes.len()).rev() {
             match self.opcodes[i] {
                 OpCode::Input | OpCode::Const => continue,
                 op => {
                     let adj = buf[i];
-                    buf[i] = Dual::constant(F::zero());
+                    buf[i] = T::zero();
 
                     let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = dual_vals[a_idx as usize];
+                    let a = tangent_vals[a_idx as usize];
                     let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        dual_vals[b_idx as usize]
+                        tangent_vals[b_idx as usize]
                     } else if op == OpCode::Powi {
-                        Dual::constant(F::from(b_idx).unwrap_or_else(|| F::zero()))
+                        T::from(b_idx).unwrap_or_else(|| T::zero())
                     } else {
-                        Dual::constant(F::zero())
+                        T::zero()
                     };
-                    let r = dual_vals[i];
+                    let r = tangent_vals[i];
                     let (da, db) = opcode::reverse_partials(op, a, b, r);
 
-                    buf[a_idx as usize] += da * adj;
+                    buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
                     if b_idx != UNUSED && op != OpCode::Powi {
-                        buf[b_idx as usize] += db * adj;
+                        buf[b_idx as usize] = buf[b_idx as usize] + db * adj;
                     }
                 }
             }
@@ -362,8 +368,8 @@ impl<F: Float> BytecodeTape<F> {
             .map(|(&xi, &vi)| Dual::new(xi, vi))
             .collect();
 
-        self.forward_dual(&dual_inputs, dual_vals_buf);
-        self.reverse_dual(dual_vals_buf, adjoint_buf);
+        self.forward_tangent(&dual_inputs, dual_vals_buf);
+        self.reverse_tangent(dual_vals_buf, adjoint_buf);
 
         let gradient: Vec<F> = (0..n).map(|i| adjoint_buf[i].re).collect();
         let hvp: Vec<F> = (0..n).map(|i| adjoint_buf[i].eps).collect();
@@ -389,8 +395,8 @@ impl<F: Float> BytecodeTape<F> {
                 .map(|i| Dual::new(x[i], if i == j { F::one() } else { F::zero() }))
                 .collect();
 
-            self.forward_dual(&dual_inputs, &mut dual_vals_buf);
-            self.reverse_dual(&dual_vals_buf, &mut adjoint_buf);
+            self.forward_tangent(&dual_inputs, &mut dual_vals_buf);
+            self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
 
             if j == 0 {
                 value = dual_vals_buf[self.output_index as usize].re;
@@ -405,6 +411,136 @@ impl<F: Float> BytecodeTape<F> {
         }
 
         (value, gradient, hessian)
+    }
+
+    /// Full Hessian matrix via batched forward-over-reverse.
+    ///
+    /// Processes `ceil(n/N)` batches instead of `n` individual HVPs,
+    /// computing N Hessian columns simultaneously.
+    pub fn hessian_vec<const N: usize>(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+
+        let mut dual_vals_buf: Vec<DualVec<F, N>> = Vec::new();
+        let mut adjoint_buf: Vec<DualVec<F, N>> = Vec::new();
+        let mut hessian = vec![vec![F::zero(); n]; n];
+        let mut gradient = vec![F::zero(); n];
+        let mut value = F::zero();
+
+        let num_batches = n.div_ceil(N);
+        for batch in 0..num_batches {
+            let base = batch * N;
+
+            let dual_inputs: Vec<DualVec<F, N>> = (0..n)
+                .map(|i| {
+                    let eps = std::array::from_fn(|lane| {
+                        let col = base + lane;
+                        if col < n && i == col {
+                            F::one()
+                        } else {
+                            F::zero()
+                        }
+                    });
+                    DualVec::new(x[i], eps)
+                })
+                .collect();
+
+            self.forward_tangent(&dual_inputs, &mut dual_vals_buf);
+            self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
+
+            if batch == 0 {
+                value = dual_vals_buf[self.output_index as usize].re;
+                for i in 0..n {
+                    gradient[i] = adjoint_buf[i].re;
+                }
+            }
+
+            for lane in 0..N {
+                let col = base + lane;
+                if col >= n {
+                    break;
+                }
+                for i in 0..n {
+                    hessian[i][col] = adjoint_buf[i].eps[lane];
+                }
+            }
+        }
+
+        (value, gradient, hessian)
+    }
+
+    /// Detect the structural sparsity pattern of the Hessian.
+    ///
+    /// Walks the tape forward propagating input-dependency bitsets.
+    /// At nonlinear operations, marks cross-pairs as potential Hessian interactions.
+    pub fn detect_sparsity(&self) -> crate::sparse::SparsityPattern {
+        crate::sparse::detect_sparsity_impl(
+            &self.opcodes,
+            &self.arg_indices,
+            self.num_inputs as usize,
+            self.num_variables as usize,
+        )
+    }
+
+    /// Compute a sparse Hessian using structural sparsity detection and graph coloring.
+    ///
+    /// Returns `(value, gradient, pattern, hessian_values)` where
+    /// `hessian_values[k]` corresponds to `(pattern.rows[k], pattern.cols[k])`.
+    ///
+    /// For problems with sparse Hessians, this requires only `chromatic_number`
+    /// HVP calls instead of `n`, which can be dramatically fewer for banded
+    /// or sparse interaction structures.
+    pub fn sparse_hessian(&self, x: &[F]) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+
+        let pattern = self.detect_sparsity();
+        let (colors, num_colors) = crate::sparse::greedy_coloring(&pattern);
+
+        let mut hessian_values = vec![F::zero(); pattern.nnz()];
+        let mut gradient = vec![F::zero(); n];
+        let mut value = F::zero();
+
+        let mut dual_vals_buf = Vec::new();
+        let mut adjoint_buf = Vec::new();
+
+        for color in 0..num_colors {
+            // Form direction vector: v[i] = 1 if colors[i] == color, else 0
+            let v: Vec<F> = (0..n)
+                .map(|i| {
+                    if colors[i] == color {
+                        F::one()
+                    } else {
+                        F::zero()
+                    }
+                })
+                .collect();
+
+            let (g, hv) = self.hvp_with_buf(x, &v, &mut dual_vals_buf, &mut adjoint_buf);
+
+            if color == 0 {
+                gradient = g;
+                value = dual_vals_buf[self.output_index as usize].re;
+            }
+
+            // Extract Hessian entries for this color.
+            // For entry (row, col) with col colored `color`:
+            //   (H * v)[row] = ∑_j H[row,j] * v[j]
+            // Since coloring guarantees no two variables adjacent to `row` share a color,
+            // the only non-zero contribution from color `color` is H[row, col].
+            //
+            // For diagonal entries (row == col), extract when row has this color.
+            // For off-diagonal entries, extract from BOTH directions (symmetry):
+            //   when col has this color: hv[row] = H[row, col]
+            //   when row has this color: hv[col] = H[col, row] = H[row, col]
+            for (k, (&row, &col)) in pattern.rows.iter().zip(pattern.cols.iter()).enumerate() {
+                if colors[col as usize] == color {
+                    hessian_values[k] = hv[row as usize];
+                }
+            }
+        }
+
+        (value, gradient, pattern, hessian_values)
     }
 }
 
