@@ -14,7 +14,8 @@ pub const UNUSED: u32 = u32::MAX;
 /// unary ops use slot 0 only (slot 1 = [`UNUSED`], except for [`OpCode::Powi`]
 /// which stores the `i32` exponent reinterpreted as `u32` in slot 1).
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OpCode {
     // ── Structural ──
     /// Input variable (leaf node).
@@ -80,6 +81,11 @@ pub enum OpCode {
     /// Zero derivative but needed for re-evaluation.
     Trunc,
     Fract,
+
+    // ── Custom ──
+    /// User-registered custom operation. The callback index is stored in
+    /// `arg_indices[1]` (for unary ops) or in a side table (for binary ops).
+    Custom,
 }
 
 /// Evaluate a single opcode in the forward direction.
@@ -164,6 +170,8 @@ pub fn eval_forward<T: Float>(op: OpCode, a: T, b: T) -> T {
         OpCode::Round => a.round(),
         OpCode::Trunc => a.trunc(),
         OpCode::Fract => a.fract(),
+
+        OpCode::Custom => unreachable!("Custom ops are dispatched separately in the tape"),
     }
 }
 
@@ -282,6 +290,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             (zero, zero)
         }
         OpCode::Fract => (one, zero),
+
+        OpCode::Custom => unreachable!("Custom ops are dispatched separately in the tape"),
     }
 }
 

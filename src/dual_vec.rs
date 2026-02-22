@@ -34,6 +34,13 @@ impl<F: Float, const N: usize> Display for DualVec<F, N> {
     }
 }
 
+impl<F: Float, const N: usize> From<F> for DualVec<F, N> {
+    #[inline]
+    fn from(val: F) -> Self {
+        DualVec::constant(val)
+    }
+}
+
 impl<F: Float, const N: usize> DualVec<F, N> {
     /// Create a new batched dual number.
     #[inline]

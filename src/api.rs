@@ -297,3 +297,17 @@ pub fn sparse_hessian_vec<F: Float + BtapeThreadLocal, const N: usize>(
     let (tape, _) = record(f, x);
     tape.sparse_hessian_vec::<N>(x)
 }
+
+/// Sparse Jacobian of a multi-output function via sparsity detection and coloring.
+///
+/// Records `f` and auto-selects forward or reverse mode based on which requires fewer sweeps.
+///
+/// Returns `(output_values, pattern, jacobian_values)`.
+#[cfg(feature = "bytecode")]
+pub fn sparse_jacobian<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
+    x: &[F],
+) -> (Vec<F>, crate::sparse::JacobianSparsityPattern, Vec<F>) {
+    let (mut tape, _) = record_multi(f, x);
+    tape.sparse_jacobian(x)
+}

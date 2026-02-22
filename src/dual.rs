@@ -19,6 +19,13 @@ impl<F: Float> Display for Dual<F> {
     }
 }
 
+impl<F: Float> From<F> for Dual<F> {
+    #[inline]
+    fn from(val: F) -> Self {
+        Dual::constant(val)
+    }
+}
+
 impl<F: Float> Dual<F> {
     /// Create a new dual number.
     #[inline]
