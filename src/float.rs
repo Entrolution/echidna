@@ -20,6 +20,11 @@ impl Float for f64 {}
 impl<F: Float> Float for Dual<F> {}
 impl<F: Float, const N: usize> Float for DualVec<F, N> {}
 
+#[cfg(feature = "taylor")]
+impl<F: Float, const K: usize> Float for crate::taylor::Taylor<F, K> {}
+#[cfg(feature = "taylor")]
+impl<F: Float + crate::taylor_dyn::TaylorArenaLocal> Float for crate::taylor_dyn::TaylorDyn<F> {}
+
 /// Checks whether all components (primal + tangent) are zero.
 ///
 /// Used by `reverse_tangent` to safely skip zero adjoints without
@@ -56,5 +61,29 @@ impl<F: Float, const N: usize> IsAllZero for DualVec<F, N> {
     #[inline(always)]
     fn is_all_zero(&self) -> bool {
         self.re == F::zero() && self.eps.iter().all(|&e| e == F::zero())
+    }
+}
+
+#[cfg(feature = "taylor")]
+impl<F: Float, const K: usize> IsAllZero for crate::taylor::Taylor<F, K> {
+    #[inline(always)]
+    fn is_all_zero(&self) -> bool {
+        self.coeffs.iter().all(|&c| c == F::zero())
+    }
+}
+
+#[cfg(feature = "taylor")]
+impl<F: Float + crate::taylor_dyn::TaylorArenaLocal> IsAllZero for crate::taylor_dyn::TaylorDyn<F> {
+    #[inline(always)]
+    fn is_all_zero(&self) -> bool {
+        if self.value != F::zero() {
+            return false;
+        }
+        if self.index == crate::taylor_dyn::CONSTANT {
+            return true;
+        }
+        crate::taylor_dyn::with_active_arena(|arena: &mut crate::taylor_dyn::TaylorArena<F>| {
+            arena.coeffs(self.index).iter().all(|&c| c == F::zero())
+        })
     }
 }

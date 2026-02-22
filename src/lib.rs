@@ -18,6 +18,13 @@ pub mod opcode;
 #[cfg(feature = "bytecode")]
 pub mod sparse;
 
+#[cfg(feature = "taylor")]
+pub mod taylor;
+#[cfg(feature = "taylor")]
+pub mod taylor_dyn;
+#[cfg(feature = "taylor")]
+pub mod taylor_ops;
+
 #[cfg(feature = "faer")]
 pub mod faer_support;
 #[cfg(feature = "ndarray")]
@@ -44,6 +51,11 @@ pub use checkpoint::grad_checkpointed;
 #[cfg(feature = "bytecode")]
 pub use sparse::{CsrPattern, JacobianSparsityPattern, SparsityPattern};
 
+#[cfg(feature = "taylor")]
+pub use taylor::Taylor;
+#[cfg(feature = "taylor")]
+pub use taylor_dyn::{TaylorArena, TaylorDyn, TaylorDynGuard};
+
 /// Type alias for forward-mode dual numbers over `f64`.
 pub type Dual64 = Dual<f64>;
 /// Type alias for forward-mode dual numbers over `f32`.
@@ -63,3 +75,16 @@ pub type BReverse64 = BReverse<f64>;
 /// Type alias for bytecode-tape reverse-mode variables over `f32`.
 #[cfg(feature = "bytecode")]
 pub type BReverse32 = BReverse<f32>;
+
+/// Type alias for Taylor coefficients over `f64` with K coefficients.
+#[cfg(feature = "taylor")]
+pub type Taylor64<const K: usize> = Taylor<f64, K>;
+/// Type alias for Taylor coefficients over `f32` with K coefficients.
+#[cfg(feature = "taylor")]
+pub type Taylor32<const K: usize> = Taylor<f32, K>;
+/// Type alias for dynamic Taylor coefficients over `f64`.
+#[cfg(feature = "taylor")]
+pub type TaylorDyn64 = TaylorDyn<f64>;
+/// Type alias for dynamic Taylor coefficients over `f32`.
+#[cfg(feature = "taylor")]
+pub type TaylorDyn32 = TaylorDyn<f32>;

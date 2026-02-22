@@ -224,6 +224,15 @@ impl<F: Float> BytecodeTape<F> {
         self.values[self.output_index as usize]
     }
 
+    /// Index of the (single) output variable.
+    ///
+    /// Use this with the buffer produced by [`forward_tangent`](Self::forward_tangent)
+    /// to read the output: `buf[tape.output_index()]`.
+    #[inline]
+    pub fn output_index(&self) -> usize {
+        self.output_index as usize
+    }
+
     /// Number of input variables.
     #[inline]
     pub fn num_inputs(&self) -> usize {
@@ -678,7 +687,7 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// Generic over `T: NumFloat` so it works with both `Dual<F>` and
     /// `DualVec<F, N>`.
-    fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
+    pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         assert_eq!(
             inputs.len(),
             self.num_inputs as usize,

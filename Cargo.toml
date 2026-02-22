@@ -38,6 +38,7 @@ parallel = ["dep:rayon", "bytecode"]
 serde = ["dep:serde"]
 ndarray = ["dep:ndarray", "bytecode"]
 faer = ["dep:faer", "bytecode"]
+taylor = []
 
 [[bench]]
 name = "forward"
