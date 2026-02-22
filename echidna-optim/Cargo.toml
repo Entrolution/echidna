@@ -7,6 +7,7 @@ rust-version = "1.80"
 [dependencies]
 echidna = { path = "..", features = ["bytecode"] }
 num-traits = "0.2"
+faer = { version = "0.20", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
@@ -14,3 +15,4 @@ approx = "0.5"
 [features]
 default = []
 parallel = ["echidna/parallel"]
+sparse-implicit = ["dep:faer"]

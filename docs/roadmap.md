@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 424 tests passing (378 core + 46 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 433 tests passing (378 core + 55 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -29,6 +29,7 @@ This roadmap synthesizes:
 | R4a | Piggyback differentiation: tangent step/solve via dual-number forward pass, adjoint solve via iterative VJP, `reverse_seeded` optimization (fused single-pass), `all_output_indices()` accessor, 8 tests | Complete |
 | R4b | Interleaved forward-adjoint piggyback: `piggyback_forward_adjoint_solve` runs primal + adjoint in one loop, cutting iterations from K_primal + K_adjoint to max(K_primal, K_adjoint), 4 tests | Complete |
 | R4c | Second-order implicit derivatives: `implicit_hvp` via nested `Dual<Dual<F>>` forward passes, `implicit_hessian` for full m×n×n tensor with LU factor reuse, 6 tests | Complete |
+| R4d | Sparse F_z exploitation: `SparseImplicitContext` precomputes sparsity + coloring, `implicit_tangent_sparse`/`implicit_adjoint_sparse`/`implicit_jacobian_sparse` via faer sparse LU, feature-gated behind `sparse-implicit`, 9 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -122,9 +123,11 @@ Key file: `echidna-optim/src/piggyback.rs`.
 
 Key file: `echidna-optim/src/implicit.rs`.
 
-**R4d. Sparse F_z exploitation**
+**R4d. Sparse F_z exploitation** — **COMPLETE**
 
-For large-scale systems (PDE discretizations), F_z is typically sparse. Use graph coloring (already implemented in Phase 4) to compute the sparse Jacobian of F_z efficiently, then use a sparse LU solver.
+Exploits structural sparsity in F_z via `SparseImplicitContext` (precomputes full m×(m+n) sparsity pattern, graph coloring, COO index partitions). Three public functions mirror the dense API: `implicit_tangent_sparse`, `implicit_adjoint_sparse`, `implicit_jacobian_sparse`. Uses echidna's sparse Jacobian infrastructure for compressed evaluation and faer's sparse LU for the F_z solve. f64-only, feature-gated behind `sparse-implicit`. 9 tests including cross-validation with dense implementations, tridiagonal/block-diagonal structure verification, context reuse, singular detection, and dimension-mismatch panics.
+
+Key file: `echidna-optim/src/sparse_implicit.rs`.
 
 ### R5. Cross-Country Elimination
 **Book Phase 5 (Ch 10)**
@@ -234,14 +237,16 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
 R4a (piggyback differentiation)      ─── ✓ DONE
 R4b (interleaved forward-adjoint)    ─── ✓ DONE
 R4c (second-order implicit)          ─── ✓ DONE
-R4d (sparse F_z exploitation)        ─── Independent of R1, can parallelize
+R4d (sparse F_z exploitation)        ─── ✓ DONE
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
 All R1 items (Taylor mode AD) are now complete.
 
-R4d (sparse F_z), R7 (serde), and R8 (benchmarks) are independent and can be started in any order.
+All R4 items (implicit/iterative features) are now complete.
+
+R7 (serde) and R8 (benchmarks) are independent and can be started in any order.
 
 R5 (cross-country), R6 (nonsmooth), and R9+ are lower priority and can be scheduled opportunistically.
 

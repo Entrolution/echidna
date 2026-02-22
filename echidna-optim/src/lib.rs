@@ -7,8 +7,17 @@ pub mod piggyback;
 pub mod result;
 pub mod solvers;
 
+#[cfg(feature = "sparse-implicit")]
+pub mod sparse_implicit;
+
 pub use convergence::ConvergenceParams;
 pub use implicit::{implicit_adjoint, implicit_hessian, implicit_hvp, implicit_jacobian, implicit_tangent};
+
+#[cfg(feature = "sparse-implicit")]
+pub use sparse_implicit::{
+    SparseImplicitContext, implicit_adjoint_sparse, implicit_jacobian_sparse,
+    implicit_tangent_sparse,
+};
 pub use piggyback::{
     piggyback_adjoint_solve, piggyback_forward_adjoint_solve, piggyback_tangent_solve,
     piggyback_tangent_step, piggyback_tangent_step_with_buf,
