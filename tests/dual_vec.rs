@@ -15,8 +15,16 @@ fn dualvec_1_matches_dual() {
         ("sqrt", x_dual.sqrt(), x_vec.sqrt()),
         ("cbrt", x_dual.cbrt(), x_vec.cbrt()),
         ("recip", x_dual.recip(), x_vec.recip()),
-        ("asin", Dual::new(0.5, 1.0).asin(), DualVec::<f64, 1>::new(0.5, [1.0]).asin()),
-        ("acos", Dual::new(0.5, 1.0).acos(), DualVec::<f64, 1>::new(0.5, [1.0]).acos()),
+        (
+            "asin",
+            Dual::new(0.5, 1.0).asin(),
+            DualVec::<f64, 1>::new(0.5, [1.0]).asin(),
+        ),
+        (
+            "acos",
+            Dual::new(0.5, 1.0).acos(),
+            DualVec::<f64, 1>::new(0.5, [1.0]).acos(),
+        ),
         ("atan", x_dual.atan(), x_vec.atan()),
         ("sinh", x_dual.sinh(), x_vec.sinh()),
         ("cosh", x_dual.cosh(), x_vec.cosh()),
@@ -28,7 +36,11 @@ fn dualvec_1_matches_dual() {
         ("log2", x_dual.log2(), x_vec.log2()),
         ("log10", x_dual.log10(), x_vec.log10()),
         ("ln_1p", x_dual.ln_1p(), x_vec.ln_1p()),
-        ("abs", Dual::new(-2.0, 1.0).abs(), DualVec::<f64, 1>::new(-2.0, [1.0]).abs()),
+        (
+            "abs",
+            Dual::new(-2.0, 1.0).abs(),
+            DualVec::<f64, 1>::new(-2.0, [1.0]).abs(),
+        ),
         ("powi3", x_dual.powi(3), x_vec.powi(3)),
     ];
 

@@ -73,12 +73,7 @@ fn tridiagonal() {
 
     // Check banded structure: only (i, i+1) pairs
     for i in 0..n - 1 {
-        assert!(
-            pattern.contains(i, i + 1),
-            "missing ({}, {})",
-            i,
-            i + 1
-        );
+        assert!(pattern.contains(i, i + 1), "missing ({}, {})", i, i + 1);
     }
     // No far-off-diagonal entries
     for i in 0..n {

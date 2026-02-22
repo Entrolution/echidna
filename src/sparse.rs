@@ -52,8 +52,7 @@ pub(crate) fn detect_sparsity_impl(
     let mut deps: Vec<Vec<u64>> = vec![vec![0u64; num_words]; num_vars];
 
     // Interaction pairs: HashSet<(u32, u32)> where row >= col
-    let mut interactions: std::collections::HashSet<(u32, u32)> =
-        std::collections::HashSet::new();
+    let mut interactions: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
 
     let mut input_idx = 0u32;
     for i in 0..opcodes.len() {

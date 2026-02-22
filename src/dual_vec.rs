@@ -210,9 +210,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         let denom = self.re * self.re + other.re * other.re;
         DualVec {
             re: self.re.atan2(other.re),
-            eps: std::array::from_fn(|k| {
-                (other.re * self.eps[k] - self.re * other.eps[k]) / denom
-            }),
+            eps: std::array::from_fn(|k| (other.re * self.eps[k] - self.re * other.eps[k]) / denom),
         }
     }
 
@@ -252,10 +250,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
 
     #[inline]
     pub fn atanh(self) -> Self {
-        self.chain(
-            self.re.atanh(),
-            F::one() / (F::one() - self.re * self.re),
-        )
+        self.chain(self.re.atanh(), F::one() / (F::one() - self.re * self.re))
     }
 
     // -- Misc --
@@ -326,9 +321,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         let h = self.re.hypot(other.re);
         DualVec {
             re: h,
-            eps: std::array::from_fn(|k| {
-                (self.re * self.eps[k] + other.re * other.eps[k]) / h
-            }),
+            eps: std::array::from_fn(|k| (self.re * self.eps[k] + other.re * other.eps[k]) / h),
         }
     }
 
