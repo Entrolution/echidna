@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 433 tests passing (378 core + 55 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), and R5 (cross-country elimination) are complete. 443 tests passing (388 core + 55 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -30,6 +30,7 @@ This roadmap synthesizes:
 | R4b | Interleaved forward-adjoint piggyback: `piggyback_forward_adjoint_solve` runs primal + adjoint in one loop, cutting iterations from K_primal + K_adjoint to max(K_primal, K_adjoint), 4 tests | Complete |
 | R4c | Second-order implicit derivatives: `implicit_hvp` via nested `Dual<Dual<F>>` forward passes, `implicit_hessian` for full m×n×n tensor with LU factor reuse, 6 tests | Complete |
 | R4d | Sparse F_z exploitation: `SparseImplicitContext` precomputes sparsity + coloring, `implicit_tangent_sparse`/`implicit_adjoint_sparse`/`implicit_jacobian_sparse` via faer sparse LU, feature-gated behind `sparse-implicit`, 9 tests | Complete |
+| R5 | Cross-country elimination: `LinearizedGraph` + Markowitz vertex elimination for Jacobian computation, `jacobian_cross_country` on BytecodeTape, 10 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -129,12 +130,14 @@ Exploits structural sparsity in F_z via `SparseImplicitContext` (precomputes ful
 
 Key file: `echidna-optim/src/sparse_implicit.rs`.
 
-### R5. Cross-Country Elimination
+### R5. Cross-Country Elimination — **COMPLETE**
 **Book Phase 5 (Ch 10)**
 
-Vertex/edge/face elimination on the computational graph with Markowitz-based ordering. Computes Jacobians with fewer operations than either pure forward or pure reverse mode.
+Vertex elimination on the linearized computational graph with Markowitz-based ordering (Griewank & Walther, Chapter 10). Builds a linearized DAG from the tape with edge weights = local partial derivatives, then eliminates intermediate vertices in greedy Markowitz order (smallest |preds| × |succs| first), accumulating fill-in edges. After elimination, remaining edges connect inputs to outputs directly, yielding the full m×n Jacobian.
 
-Most valuable for functions with comparable input/output dimensions where neither forward nor reverse has a clear advantage. Lower priority than Taylor mode but completes the theoretical picture.
+Public API: `BytecodeTape::jacobian_cross_country(&mut self, inputs: &[F]) -> Vec<Vec<F>>`. Handles identity/passthrough (output-is-input), custom ops, constant nodes, and all standard opcodes. Generic over `F: Float`. 10 tests cross-validating against `jacobian()` (reverse mode) and `jacobian_forward()`.
+
+Key files: `src/cross_country.rs`, `src/bytecode_tape.rs`.
 
 ### R6. Nonsmooth Extensions
 **Book Phase 7 (Ch 14)**
@@ -238,6 +241,7 @@ R4a (piggyback differentiation)      ─── ✓ DONE
 R4b (interleaved forward-adjoint)    ─── ✓ DONE
 R4c (second-order implicit)          ─── ✓ DONE
 R4d (sparse F_z exploitation)        ─── ✓ DONE
+R5 (cross-country elimination)       ─── ✓ DONE
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
@@ -246,9 +250,11 @@ All R1 items (Taylor mode AD) are now complete.
 
 All R4 items (implicit/iterative features) are now complete.
 
+R5 (cross-country elimination) is now complete.
+
 R7 (serde) and R8 (benchmarks) are independent and can be started in any order.
 
-R5 (cross-country), R6 (nonsmooth), and R9+ are lower priority and can be scheduled opportunistically.
+R6 (nonsmooth) and R9+ are lower priority and can be scheduled opportunistically.
 
 ---
 
@@ -267,7 +273,7 @@ R5 (cross-country), R6 (nonsmooth), and R9+ are lower priority and can be schedu
 | R4a | Piggyback | ~300-400 lines |
 | R4b | Fixed-point adjoint | ~200-300 lines |
 | R4c | Second-order implicit | ~200-300 lines |
-| R5 | Cross-country | ~600-1000 lines |
+| R5 | Cross-country | ~600-1000 lines | ~450 lines (234 impl + 212 tests) |
 | R6a-b | Nonsmooth | ~500-800 lines |
 
 ---

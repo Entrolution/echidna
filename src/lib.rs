@@ -14,6 +14,8 @@ pub mod bytecode_tape;
 #[cfg(feature = "bytecode")]
 pub mod checkpoint;
 #[cfg(feature = "bytecode")]
+pub mod cross_country;
+#[cfg(feature = "bytecode")]
 pub mod opcode;
 #[cfg(feature = "bytecode")]
 pub mod sparse;

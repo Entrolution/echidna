@@ -1736,6 +1736,35 @@ impl<F: Float> BytecodeTape<F> {
         jac
     }
 
+    /// Dense Jacobian via cross-country (vertex) elimination.
+    ///
+    /// Builds a linearized DAG from the tape, then eliminates intermediate
+    /// vertices in Markowitz order. For functions where `m ≈ n` and the
+    /// graph has moderate connectivity, this can require fewer operations
+    /// than either pure forward mode (`n` passes) or reverse mode (`m` passes).
+    pub fn jacobian_cross_country(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
+        self.forward(inputs);
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let mut graph = crate::cross_country::LinearizedGraph::from_tape(
+            &self.opcodes,
+            &self.arg_indices,
+            &self.values,
+            self.num_inputs as usize,
+            &out_indices,
+            &self.custom_ops,
+            &self.custom_second_args,
+        );
+
+        graph.eliminate_all();
+        graph.extract_jacobian()
+    }
+
     /// Sparse Hessian with a precomputed sparsity pattern and coloring.
     ///
     /// Skips re-detection on repeated calls (e.g. in solver loops).
