@@ -241,6 +241,243 @@ mod bytecode_tests {
         assert_relative_eq!(output.coeffs[1], 2.0 + 1.0_f64.cos(), epsilon = 1e-10);
         assert_relative_eq!(output.coeffs[2], -1.0_f64.sin() / 2.0, epsilon = 1e-10);
     }
+
+    // ── taylor_grad (reverse-over-Taylor) tests ──
+
+    fn sum_of_squares<T: echidna::Scalar>(x: &[T]) -> T {
+        x[0] * x[0] + x[1] * x[1] + x[2] * x[2]
+    }
+
+    fn cubic_mix<T: echidna::Scalar>(x: &[T]) -> T {
+        x[0] * x[0] * x[1] + x[1] * x[1] * x[0] + x[0] * x[1] * x[2]
+    }
+
+    fn cube_1d<T: echidna::Scalar>(x: &[T]) -> T {
+        x[0] * x[0] * x[0]
+    }
+
+    fn linear_fn<T: echidna::Scalar>(x: &[T]) -> T {
+        let three = T::from(3.0).unwrap();
+        let two = T::from(2.0).unwrap();
+        three * x[0] + two * x[1]
+    }
+
+    fn exp_plus_sin<T: echidna::Scalar>(x: &[T]) -> T {
+        x[0].exp() + x[1].sin()
+    }
+
+    #[test]
+    fn taylor_grad_k2_gradient_matches_hvp_sum_of_squares() {
+        let x = [1.0, 2.0, 3.0];
+        let v = [0.5, -1.0, 0.3];
+        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+
+        let (hvp_grad, _) = tape.hvp(&x, &v);
+        let (_, adj) = tape.taylor_grad::<2>(&x, &v);
+
+        for i in 0..3 {
+            assert_relative_eq!(adj[i].coeff(0), hvp_grad[i], epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn taylor_grad_k2_gradient_matches_hvp_cubic_mix() {
+        let x = [1.5, -0.5, 2.0];
+        let v = [1.0, 0.0, -1.0];
+        let (tape, _) = echidna::record(|x| cubic_mix(x), &x);
+
+        let (hvp_grad, _) = tape.hvp(&x, &v);
+        let (_, adj) = tape.taylor_grad::<2>(&x, &v);
+
+        for i in 0..3 {
+            assert_relative_eq!(adj[i].coeff(0), hvp_grad[i], epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn taylor_grad_k2_hvp_matches_hvp() {
+        let x = [1.0, 2.0, 3.0];
+        let v = [0.5, -1.0, 0.3];
+        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+
+        let (_, hvp_vec) = tape.hvp(&x, &v);
+        let (_, adj) = tape.taylor_grad::<2>(&x, &v);
+
+        for i in 0..3 {
+            assert_relative_eq!(adj[i].coeff(1), hvp_vec[i], epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn taylor_grad_k3_matches_third_order_hvvp_same_direction() {
+        let x = [1.5, -0.5, 2.0];
+        let v = [1.0, 0.5, -1.0];
+        let (tape, _) = echidna::record(|x| cubic_mix(x), &x);
+
+        // third_order_hvvp with v1=v, v2=v gives the same-direction case
+        let (grad_ref, hvp_ref, third_ref) = tape.third_order_hvvp(&x, &v, &v);
+        let (_, adj) = tape.taylor_grad::<3>(&x, &v);
+
+        for i in 0..3 {
+            assert_relative_eq!(adj[i].coeff(0), grad_ref[i], epsilon = 1e-10);
+            assert_relative_eq!(adj[i].coeff(1), hvp_ref[i], epsilon = 1e-10);
+            assert_relative_eq!(adj[i].derivative(2), third_ref[i], epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn taylor_grad_k3_gradient_matches_standard_gradient() {
+        let x = [1.5, -0.5, 2.0];
+        let v = [1.0, 0.0, -1.0];
+        let (mut tape, _) = echidna::record(|x| cubic_mix(x), &x);
+
+        let grad_ref = tape.gradient(&x);
+        let (_, adj) = tape.taylor_grad::<3>(&x, &v);
+
+        for i in 0..3 {
+            assert_relative_eq!(adj[i].coeff(0), grad_ref[i], epsilon = 1e-10);
+        }
+    }
+
+    #[test]
+    fn taylor_grad_k2_full_hessian_via_basis() {
+        let x = [1.0, 2.0, 3.0];
+        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+        let n = 3;
+
+        let (_, _, hess_ref) = tape.hessian(&x);
+
+        // Reconstruct Hessian via n taylor_grad calls with basis directions
+        for j in 0..n {
+            let mut e_j = vec![0.0; n];
+            e_j[j] = 1.0;
+            let (_, adj) = tape.taylor_grad::<2>(&x, &e_j);
+            for i in 0..n {
+                assert_relative_eq!(adj[i].coeff(1), hess_ref[i][j], epsilon = 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn taylor_grad_linear_higher_order_zero() {
+        let x = [2.0, 3.0];
+        let v = [1.0, -1.0];
+        let (tape, _) = echidna::record(|x| linear_fn(x), &x);
+
+        let (output, adj) = tape.taylor_grad::<3>(&x, &v);
+
+        // f = 3*x0 + 2*x1, grad = [3, 2]
+        assert_relative_eq!(adj[0].coeff(0), 3.0, epsilon = 1e-10);
+        assert_relative_eq!(adj[1].coeff(0), 2.0, epsilon = 1e-10);
+
+        // All higher-order adjoint coefficients zero for linear function
+        for i in 0..2 {
+            for k in 1..3 {
+                assert_relative_eq!(adj[i].coeff(k), 0.0, epsilon = 1e-10);
+            }
+        }
+
+        // Output: f = 3*2 + 2*3 = 12, f' along v = 3*1 + 2*(-1) = 1, f'' = 0
+        assert_relative_eq!(output.coeff(0), 12.0, epsilon = 1e-10);
+        assert_relative_eq!(output.coeff(1), 1.0, epsilon = 1e-10);
+        assert_relative_eq!(output.coeff(2), 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn taylor_grad_cube_1d_k4() {
+        // f(x) = x^3, x=2, v=1
+        // f(x) = 8, f'=12, f''=12, f'''=6
+        // Taylor coeffs: [8, 12, 12/2, 6/6] = [8, 12, 6, 1]
+        // Adjoint: df/dx = 3x^2 = 12
+        // d(df/dx)/dt = 6x*v = 12 → coeff(1) = 12
+        // d²(df/dx)/dt² = 6*v² = 6 → derivative(2) = 6, coeff(2) = 3
+        // d³(df/dx)/dt³ = 0 → derivative(3) = 0
+        let x = [2.0];
+        let v = [1.0];
+        let (tape, _) = echidna::record(|x| cube_1d(x), &x);
+
+        let (output, adj) = tape.taylor_grad::<4>(&x, &v);
+
+        // Output Taylor coefficients
+        assert_relative_eq!(output.coeff(0), 8.0, epsilon = 1e-10);
+        assert_relative_eq!(output.coeff(1), 12.0, epsilon = 1e-10);
+        assert_relative_eq!(output.coeff(2), 6.0, epsilon = 1e-10);
+        assert_relative_eq!(output.coeff(3), 1.0, epsilon = 1e-10);
+
+        // Adjoint: gradient of f w.r.t. x as Taylor series
+        assert_relative_eq!(adj[0].coeff(0), 12.0, epsilon = 1e-10); // 3x^2
+        assert_relative_eq!(adj[0].coeff(1), 12.0, epsilon = 1e-10); // 6x
+        assert_relative_eq!(adj[0].derivative(2), 6.0, epsilon = 1e-10); // 6
+        assert_relative_eq!(adj[0].derivative(3), 0.0, epsilon = 1e-10); // 0
+    }
+
+    #[test]
+    fn taylor_grad_transcendental() {
+        // f(x0, x1) = exp(x0) + sin(x1)
+        // Hessian is diagonal: H = diag(exp(x0), -sin(x1))
+        let x = [1.0, 0.5];
+        let v = [1.0, 0.0]; // direction along x0 only
+        let (tape, _) = echidna::record(|x| exp_plus_sin(x), &x);
+
+        let (_, adj) = tape.taylor_grad::<2>(&x, &v);
+
+        // Gradient: [exp(1), cos(0.5)]
+        assert_relative_eq!(adj[0].coeff(0), 1.0_f64.exp(), epsilon = 1e-10);
+        assert_relative_eq!(adj[1].coeff(0), 0.5_f64.cos(), epsilon = 1e-10);
+
+        // HVP = H * [1, 0] = [exp(1), 0]
+        assert_relative_eq!(adj[0].coeff(1), 1.0_f64.exp(), epsilon = 1e-10);
+        assert_relative_eq!(adj[1].coeff(1), 0.0, epsilon = 1e-10);
+
+        // Cross-validate with hvp
+        let (_, hvp_vec) = tape.hvp(&x, &v);
+        assert_relative_eq!(adj[0].coeff(1), hvp_vec[0], epsilon = 1e-10);
+        assert_relative_eq!(adj[1].coeff(1), hvp_vec[1], epsilon = 1e-10);
+    }
+
+    #[test]
+    fn taylor_grad_with_buf_reuse() {
+        let x = [1.0, 2.0, 3.0];
+        let v = [0.5, -1.0, 0.3];
+        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+
+        let mut fwd_buf = Vec::new();
+        let mut adj_buf = Vec::new();
+
+        let (out1, adj1) = tape.taylor_grad_with_buf::<2>(&x, &v, &mut fwd_buf, &mut adj_buf);
+
+        // Call again with same buffers — should get identical results
+        let (out2, adj2) = tape.taylor_grad_with_buf::<2>(&x, &v, &mut fwd_buf, &mut adj_buf);
+
+        assert_relative_eq!(out1.coeff(0), out2.coeff(0), epsilon = 1e-14);
+        assert_relative_eq!(out1.coeff(1), out2.coeff(1), epsilon = 1e-14);
+        for i in 0..3 {
+            assert_relative_eq!(adj1[i].coeff(0), adj2[i].coeff(0), epsilon = 1e-14);
+            assert_relative_eq!(adj1[i].coeff(1), adj2[i].coeff(1), epsilon = 1e-14);
+        }
+    }
+
+    #[test]
+    fn taylor_grad_zero_direction() {
+        let x = [1.0, 2.0, 3.0];
+        let v = [0.0, 0.0, 0.0]; // zero direction
+        let (mut tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+
+        let (_, adj) = tape.taylor_grad::<3>(&x, &v);
+
+        // Gradient should still be correct
+        let grad_ref = tape.gradient(&x);
+        for i in 0..3 {
+            assert_relative_eq!(adj[i].coeff(0), grad_ref[i], epsilon = 1e-10);
+        }
+
+        // HVP and higher should all be zero (zero direction)
+        for i in 0..3 {
+            for k in 1..3 {
+                assert_relative_eq!(adj[i].coeff(k), 0.0, epsilon = 1e-10);
+            }
+        }
+    }
 }
 
 // ══════════════════════════════════════════════

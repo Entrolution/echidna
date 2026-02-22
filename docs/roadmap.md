@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 359 tests passing.
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R1c+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 370 tests passing.
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -22,6 +22,7 @@ This roadmap synthesizes:
 | optim | L-BFGS, Newton, trust-region solvers, Armijo line search, convergence control | Complete |
 | R3 | Public `forward_tangent` on BytecodeTape, `output_index()` accessor | Complete |
 | R1a | `Taylor<F, K>` (const-generic) + `TaylorDyn<F>` (arena-based) + shared `taylor_ops` propagation rules, 35+ elementals, `Float`/`Scalar`/`num_traits::Float` impls, 33 tests | Complete |
+| R1c | `taylor_grad` / `taylor_grad_with_buf` — reverse-over-Taylor for gradient + HVP + higher-order directional adjoints in a single pass, 11 tests | Complete |
 | R2a+R2c | STDE module: jet propagation, Laplacian estimator, Hessian diagonal, directional derivatives, TaylorDyn variants, 20 tests | Complete |
 | R2b | STDE variance reduction: `EstimatorResult` with sample statistics, `laplacian_with_stats` (Welford's online variance), `laplacian_with_control` (diagonal control variate), 13 tests | Complete |
 
@@ -52,12 +53,11 @@ Key files: `src/taylor.rs`, `src/taylor_dyn.rs`, `src/taylor_ops.rs`, `src/trait
 
 `Taylor<F, K>` and `TaylorDyn<F>` both implement `num_traits::Float`, so they flow through `BytecodeTape::forward_tangent` automatically. No tape modifications needed — existing opcode dispatch calls `num_traits::Float` methods which dispatch to Taylor propagation rules. Verified by integration tests pushing Taylor inputs through recorded tapes.
 
-**R1c. Higher-order adjoint (Taylor reverse)**
+**R1c. Higher-order adjoint (Taylor reverse)** — **COMPLETE**
 
-Reverse mode applied to Taylor coefficients. Needed for:
-- Higher-order gradient computation
-- Combining with forward Taylor to get mixed partial information
-- The "reverse-over-Taylor" pattern from Griewank Ch 13.4
+Reverse-over-Taylor: `taylor_grad` builds Taylor inputs `x_i(t) = x_i + v_i·t`, runs `forward_tangent`, then `reverse_tangent` to get Taylor-valued adjoints. `adjoint[i].coeff(0)` = gradient, `adjoint[i].coeff(1)` = HVP, `adjoint[i].derivative(k)` = k-th order directional adjoint. For K=2 equivalent to `hvp()`; for K≥3 yields third-order and higher. Feature-gated behind `taylor`. `taylor_grad_with_buf` variant reuses buffers. 11 tests cross-validating against `hvp`, `gradient`, `hessian`, and `third_order_hvvp`.
+
+Key file: `src/bytecode_tape.rs`.
 
 **R1d. ODE Taylor series integration**
 
@@ -221,7 +221,7 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
   │
   ├──▶ R1b (tape-based Taylor)      ─── ✓ DONE (delivered via R1a+R3)
   │      │
-  │      ├──▶ R1c (Taylor reverse)
+  │      ├──▶ R1c (Taylor reverse)  ─── ✓ DONE
   │      │
   │      └──▶ R1d (ODE Taylor)
   │
@@ -236,7 +236,7 @@ R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
-R2b is complete. The next unblocked items are **R1c** (Taylor reverse) and **R1d** (ODE Taylor integration).
+The next unblocked item is **R1d** (ODE Taylor integration).
 
 R4 (remaining implicit features), R7 (serde), and R8 (benchmarks) are independent and can be interleaved as needed.
 

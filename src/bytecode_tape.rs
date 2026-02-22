@@ -23,6 +23,9 @@ use crate::opcode::{self, OpCode, UNUSED};
 use crate::float::IsAllZero;
 use num_traits::Float as NumFloat;
 
+#[cfg(feature = "taylor")]
+use crate::taylor::Taylor;
+
 /// Sentinel index for constant entries (not tracked).
 pub const CONSTANT: u32 = u32::MAX;
 
@@ -1178,6 +1181,68 @@ impl<F: Float> BytecodeTape<F> {
         let third: Vec<F> = (0..n).map(|i| dd_adj[i].eps.eps).collect();
 
         (gradient, hvp, third)
+    }
+
+    /// Forward-reverse Taylor pass for gradient + higher-order directional adjoints.
+    ///
+    /// Builds Taylor inputs `x_i(t) = x_i + v_i * t` (with zero higher coefficients),
+    /// runs `forward_tangent`, then `reverse_tangent` to get Taylor-valued adjoints.
+    ///
+    /// Returns `(output, adjoints)` where:
+    /// - `output` is the Taylor expansion of `f` along direction `v`
+    /// - `adjoints[i].coeff(0)` = `∂f/∂x_i` (gradient)
+    /// - `adjoints[i].coeff(1)` = `Σ_j (∂²f/∂x_i∂x_j) v_j` (HVP)
+    /// - `adjoints[i].derivative(k)` = k-th order directional adjoint
+    ///
+    /// For K=2, the HVP component is equivalent to [`hvp`](Self::hvp).
+    /// For K≥3, yields additional higher-order information in the same pass.
+    ///
+    /// Like [`hvp`](Self::hvp), takes `&self` and does not call `forward(x)`
+    /// before the Taylor pass. Custom ops will use primal values from recording time.
+    #[cfg(feature = "taylor")]
+    pub fn taylor_grad<const K: usize>(
+        &self,
+        x: &[F],
+        v: &[F],
+    ) -> (Taylor<F, K>, Vec<Taylor<F, K>>) {
+        let mut fwd_buf = Vec::new();
+        let mut adj_buf = Vec::new();
+        self.taylor_grad_with_buf(x, v, &mut fwd_buf, &mut adj_buf)
+    }
+
+    /// Like [`taylor_grad`](Self::taylor_grad) but reuses caller-provided buffers
+    /// to avoid allocation on repeated calls.
+    #[cfg(feature = "taylor")]
+    pub fn taylor_grad_with_buf<const K: usize>(
+        &self,
+        x: &[F],
+        v: &[F],
+        fwd_buf: &mut Vec<Taylor<F, K>>,
+        adj_buf: &mut Vec<Taylor<F, K>>,
+    ) -> (Taylor<F, K>, Vec<Taylor<F, K>>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+        assert_eq!(v.len(), n, "wrong number of directions");
+
+        // Build Taylor inputs: x_i(t) = x_i + v_i * t
+        let taylor_inputs: Vec<Taylor<F, K>> = x
+            .iter()
+            .zip(v.iter())
+            .map(|(&xi, &vi)| {
+                let mut coeffs = [F::zero(); K];
+                coeffs[0] = xi;
+                if K > 1 {
+                    coeffs[1] = vi;
+                }
+                Taylor::new(coeffs)
+            })
+            .collect();
+
+        self.forward_tangent(&taylor_inputs, fwd_buf);
+        let output = fwd_buf[self.output_index as usize];
+        self.reverse_tangent(fwd_buf, adj_buf);
+
+        (output, adj_buf[..n].to_vec())
     }
 
     // ── Tape optimizations ──
