@@ -128,11 +128,7 @@ fn third_order_cubic() {
         "grad={}, expected=12",
         gradient[0]
     );
-    assert!(
-        (hvp[0] - 12.0).abs() < 1e-10,
-        "hvp={}, expected=12",
-        hvp[0]
-    );
+    assert!((hvp[0] - 12.0).abs() < 1e-10, "hvp={}, expected=12", hvp[0]);
     assert!(
         (third[0] - 6.0).abs() < 1e-10,
         "third={}, expected=6",
@@ -150,12 +146,7 @@ fn third_order_hvvp_gradient_matches_standard() {
     let (third_grad, _, _) = tape.third_order_hvvp(&x, &[1.0, 0.0], &[1.0, 0.0]);
 
     for (s, t) in standard_grad.iter().zip(third_grad.iter()) {
-        assert!(
-            (s - t).abs() < 1e-10,
-            "standard={}, third_order={}",
-            s,
-            t
-        );
+        assert!((s - t).abs() < 1e-10, "standard={}, third_order={}", s, t);
     }
 }
 

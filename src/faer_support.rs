@@ -8,10 +8,7 @@ use crate::bytecode_tape::BytecodeTape;
 use crate::BReverse;
 
 /// Record a function and compute its gradient, returning a `Col<f64>`.
-pub fn grad_faer(
-    f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
-    x: &Col<f64>,
-) -> Col<f64> {
+pub fn grad_faer(f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>, x: &Col<f64>) -> Col<f64> {
     let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
     let (mut tape, _) = crate::api::record(f, &xs);
     let g = tape.gradient(&xs);
@@ -64,10 +61,7 @@ pub fn tape_gradient_faer(tape: &mut BytecodeTape<f64>, x: &Col<f64>) -> Col<f64
 }
 
 /// Evaluate Hessian on a pre-recorded tape, accepting and returning faer types.
-pub fn tape_hessian_faer(
-    tape: &BytecodeTape<f64>,
-    x: &Col<f64>,
-) -> (f64, Col<f64>, Mat<f64>) {
+pub fn tape_hessian_faer(tape: &BytecodeTape<f64>, x: &Col<f64>) -> (f64, Col<f64>, Mat<f64>) {
     let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
     let (val, grad, hess) = tape.hessian(&xs);
     let n = xs.len();

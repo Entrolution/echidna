@@ -78,7 +78,10 @@ fn sparse_jacobian_vs_dense() {
         assert!(
             (sparse_vals[k] - dense_jac[r][c]).abs() < 1e-10,
             "mismatch at ({}, {}): sparse={}, dense={}",
-            r, c, sparse_vals[k], dense_jac[r][c]
+            r,
+            c,
+            sparse_vals[k],
+            dense_jac[r][c]
         );
     }
 }
@@ -101,7 +104,9 @@ fn sparse_jacobian_forward_vs_reverse() {
         assert!(
             (jac_fwd[k] - jac_rev[k]).abs() < 1e-10,
             "mismatch at k={}: fwd={}, rev={}",
-            k, jac_fwd[k], jac_rev[k]
+            k,
+            jac_fwd[k],
+            jac_rev[k]
         );
     }
 }
@@ -164,7 +169,8 @@ fn jacobian_forward_vs_reverse() {
             assert!(
                 (jac_rev[i][j] - jac_fwd[i][j]).abs() < 1e-10,
                 "mismatch at ({}, {})",
-                i, j
+                i,
+                j
             );
         }
     }
@@ -179,8 +185,7 @@ fn sparse_hessian_with_pattern_precomputed() {
     let (colors, num_colors) = echidna::sparse::greedy_coloring(&pattern);
 
     let (val1, grad1, _, hess1) = tape.sparse_hessian(&x);
-    let (val2, grad2, hess2) =
-        tape.sparse_hessian_with_pattern(&x, &pattern, &colors, num_colors);
+    let (val2, grad2, hess2) = tape.sparse_hessian_with_pattern(&x, &pattern, &colors, num_colors);
 
     assert!((val1 - val2).abs() < 1e-10);
     for i in 0..grad1.len() {
@@ -210,7 +215,8 @@ fn api_sparse_jacobian() {
         assert!(
             (jac_vals[k] - dense_jac[r][c]).abs() < 1e-10,
             "api mismatch at ({}, {})",
-            r, c
+            r,
+            c
         );
     }
 }

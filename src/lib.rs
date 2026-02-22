@@ -18,10 +18,10 @@ pub mod opcode;
 #[cfg(feature = "bytecode")]
 pub mod sparse;
 
-#[cfg(feature = "ndarray")]
-pub mod ndarray_support;
 #[cfg(feature = "faer")]
 pub mod faer_support;
+#[cfg(feature = "ndarray")]
+pub mod ndarray_support;
 
 pub use api::{grad, jacobian, jvp, vjp};
 pub use dual::Dual;

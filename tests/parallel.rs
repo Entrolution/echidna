@@ -27,12 +27,7 @@ fn gradient_par_matches_serial() {
     let parallel = tape.gradient_par(&x);
 
     for (s, p) in serial.iter().zip(parallel.iter()) {
-        assert!(
-            (s - p).abs() < 1e-12,
-            "serial={}, parallel={}",
-            s,
-            p
-        );
+        assert!((s - p).abs() < 1e-12, "serial={}, parallel={}", s, p);
     }
 }
 
@@ -49,7 +44,11 @@ fn gradient_par_at_multiple_points() {
             assert!(
                 (s - p).abs() < 1e-10,
                 "at ({},{},{}): serial={}, parallel={}",
-                a, b, c, s, p
+                a,
+                b,
+                c,
+                s,
+                p
             );
         }
     }
@@ -66,12 +65,7 @@ fn jacobian_par_matches_serial() {
     assert_eq!(serial.len(), parallel.len());
     for (si, pi) in serial.iter().zip(parallel.iter()) {
         for (s, p) in si.iter().zip(pi.iter()) {
-            assert!(
-                (s - p).abs() < 1e-12,
-                "serial={}, parallel={}",
-                s,
-                p
-            );
+            assert!((s - p).abs() < 1e-12, "serial={}, parallel={}", s, p);
         }
     }
 }

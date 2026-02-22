@@ -142,8 +142,7 @@ impl<F: Float> BytecodeTape<F> {
     #[inline]
     pub fn push_op(&mut self, op: OpCode, arg0: u32, arg1: u32, value: F) -> u32 {
         // Constant folding: if both args (when present) are Const, emit Const instead.
-        let arg0_const =
-            self.opcodes[arg0 as usize] == OpCode::Const;
+        let arg0_const = self.opcodes[arg0 as usize] == OpCode::Const;
         let arg1_const = arg1 == UNUSED || self.opcodes[arg1 as usize] == OpCode::Const;
         if arg0_const && arg1_const {
             return self.push_const(value);
@@ -574,9 +573,7 @@ impl<F: Float> BytecodeTape<F> {
                     let [a_idx, cb_idx] = self.arg_indices[i];
                     let a = values[a_idx as usize];
                     let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt
-                        .map(|bi| values[bi as usize])
-                        .unwrap_or(F::zero());
+                    let b = b_idx_opt.map(|bi| values[bi as usize]).unwrap_or(F::zero());
                     let r = values[i];
                     let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
                     adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
@@ -716,9 +713,7 @@ impl<F: Float> BytecodeTape<F> {
                         self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, result);
                     // Apply chain rule: tangent = da * a_tangent + db * b_tangent
                     let a_t = buf[a_idx as usize];
-                    let b_t = b_idx_opt
-                        .map(|bi| buf[bi as usize])
-                        .unwrap_or(T::zero());
+                    let b_t = b_idx_opt.map(|bi| buf[bi as usize]).unwrap_or(T::zero());
                     let result_t = T::from(result).unwrap();
                     let da_t = T::from(da).unwrap();
                     let db_t = T::from(db).unwrap();
@@ -1145,12 +1140,7 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// Uses `Dual<Dual<F>>` (nested dual numbers): inner tangent for `v1`,
     /// outer tangent for `v2`.
-    pub fn third_order_hvvp(
-        &self,
-        x: &[F],
-        v1: &[F],
-        v2: &[F],
-    ) -> (Vec<F>, Vec<F>, Vec<F>) {
+    pub fn third_order_hvvp(&self, x: &[F], v1: &[F], v2: &[F]) -> (Vec<F>, Vec<F>, Vec<F>) {
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
         assert_eq!(v1.len(), n, "wrong v1 length");
@@ -1236,7 +1226,11 @@ impl<F: Float> BytecodeTape<F> {
                 self.opcodes[write] = self.opcodes[read];
                 self.values[write] = self.values[read];
                 let [a, b] = self.arg_indices[read];
-                let ra = if a != UNUSED { remap[a as usize] } else { UNUSED };
+                let ra = if a != UNUSED {
+                    remap[a as usize]
+                } else {
+                    UNUSED
+                };
                 let rb = if b != UNUSED && self.opcodes[read] != OpCode::Powi {
                     remap[b as usize]
                 } else {
@@ -1620,8 +1614,7 @@ impl<F: Float> BytecodeTape<F> {
                 let col_color = colors[col as usize];
                 if col_color >= base_color && col_color < base_color + N as u32 {
                     let lane = (col_color - base_color) as usize;
-                    jac_values[k] =
-                        dual_vals_buf[out_indices[row as usize] as usize].eps[lane];
+                    jac_values[k] = dual_vals_buf[out_indices[row as usize] as usize].eps[lane];
                 }
             }
         }
@@ -1650,9 +1643,9 @@ impl<F: Float> BytecodeTape<F> {
         #[allow(clippy::needless_range_loop)]
         for col in 0..n {
             dual_input_buf.clear();
-            dual_input_buf.extend((0..n).map(|i| {
-                Dual::new(x[i], if i == col { F::one() } else { F::zero() })
-            }));
+            dual_input_buf.extend(
+                (0..n).map(|i| Dual::new(x[i], if i == col { F::one() } else { F::zero() })),
+            );
 
             self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
 
@@ -1786,10 +1779,13 @@ impl<F: Float> BytecodeTape<F> {
                 );
             }
             // num_inputs must be preserved.
-            let input_count = self.opcodes.iter().filter(|&&op| op == OpCode::Input).count();
+            let input_count = self
+                .opcodes
+                .iter()
+                .filter(|&&op| op == OpCode::Input)
+                .count();
             assert_eq!(
-                input_count,
-                self.num_inputs as usize,
+                input_count, self.num_inputs as usize,
                 "num_inputs mismatch after optimization"
             );
             let _ = pre_opt_len;
@@ -1914,15 +1910,9 @@ impl<F: Float> BytecodeTape<F> {
         // Compute value/gradient from color 0 (serial).
         let mut v0 = vec![F::zero(); n];
         for i in 0..n {
-            v0[i] = if colors[i] == 0 {
-                F::one()
-            } else {
-                F::zero()
-            };
+            v0[i] = if colors[i] == 0 { F::one() } else { F::zero() };
         }
-        let di: Vec<Dual<F>> = (0..n)
-            .map(|i| Dual::new(x[i], v0[i]))
-            .collect();
+        let di: Vec<Dual<F>> = (0..n).map(|i| Dual::new(x[i], v0[i])).collect();
         let mut dv = Vec::new();
         let mut ab = Vec::new();
         self.forward_tangent(&di, &mut dv);
@@ -1942,9 +1932,7 @@ impl<F: Float> BytecodeTape<F> {
                         F::zero()
                     };
                 }
-                let inputs: Vec<Dual<F>> = (0..n)
-                    .map(|i| Dual::new(x[i], v[i]))
-                    .collect();
+                let inputs: Vec<Dual<F>> = (0..n).map(|i| Dual::new(x[i], v[i])).collect();
                 let mut dv_local = Vec::new();
                 let mut ab_local = Vec::new();
                 self.forward_tangent(&inputs, &mut dv_local);
@@ -1984,15 +1972,17 @@ impl<F: Float> BytecodeTape<F> {
             self.output_indices.clone()
         };
         let m = out_indices.len();
-        let outputs: Vec<F> = out_indices.iter().map(|&oi| values_buf[oi as usize]).collect();
+        let outputs: Vec<F> = out_indices
+            .iter()
+            .map(|&oi| values_buf[oi as usize])
+            .collect();
 
         let jac_pattern = self.detect_jacobian_sparsity();
         let ni = self.num_inputs as usize;
 
         if m <= n {
             // Row compression (reverse mode)
-            let (row_colors, num_colors) =
-                crate::sparse::row_coloring(&jac_pattern);
+            let (row_colors, num_colors) = crate::sparse::row_coloring(&jac_pattern);
 
             let color_results: Vec<Vec<F>> = (0..num_colors)
                 .into_par_iter()
@@ -2016,19 +2006,15 @@ impl<F: Float> BytecodeTape<F> {
                                 adjoints[idx] = F::zero();
                                 let [a_idx, cb_idx] = self.arg_indices[idx];
                                 let a = values_buf[a_idx as usize];
-                                let b_idx_opt =
-                                    self.custom_second_args.get(&(idx as u32)).copied();
+                                let b_idx_opt = self.custom_second_args.get(&(idx as u32)).copied();
                                 let b = b_idx_opt
                                     .map(|bi| values_buf[bi as usize])
                                     .unwrap_or(F::zero());
                                 let r = values_buf[idx];
-                                let (da, db) =
-                                    self.custom_ops[cb_idx as usize].partials(a, b, r);
-                                adjoints[a_idx as usize] =
-                                    adjoints[a_idx as usize] + da * adj;
+                                let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
+                                adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                                 if let Some(bi) = b_idx_opt {
-                                    adjoints[bi as usize] =
-                                        adjoints[bi as usize] + db * adj;
+                                    adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
                                 }
                             }
                             op => {
@@ -2044,11 +2030,9 @@ impl<F: Float> BytecodeTape<F> {
                                 };
                                 let r = values_buf[idx];
                                 let (da, db) = opcode::reverse_partials(op, a, b, r);
-                                adjoints[a_idx as usize] =
-                                    adjoints[a_idx as usize] + da * adj;
+                                adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                                 if b_idx != UNUSED && op != OpCode::Powi {
-                                    adjoints[b_idx as usize] =
-                                        adjoints[b_idx as usize] + db * adj;
+                                    adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
                                 }
                             }
                         }
@@ -2058,8 +2042,11 @@ impl<F: Float> BytecodeTape<F> {
                 .collect();
 
             let mut jac_values = vec![F::zero(); jac_pattern.nnz()];
-            for (k, (&row, &col)) in
-                jac_pattern.rows.iter().zip(jac_pattern.cols.iter()).enumerate()
+            for (k, (&row, &col)) in jac_pattern
+                .rows
+                .iter()
+                .zip(jac_pattern.cols.iter())
+                .enumerate()
             {
                 let color = row_colors[row as usize] as usize;
                 jac_values[k] = color_results[color][col as usize];
@@ -2068,8 +2055,7 @@ impl<F: Float> BytecodeTape<F> {
             (outputs, jac_pattern, jac_values)
         } else {
             // Column compression (forward mode) — parallelize forward tangent sweeps
-            let (col_colors, num_colors) =
-                crate::sparse::column_coloring(&jac_pattern);
+            let (col_colors, num_colors) = crate::sparse::column_coloring(&jac_pattern);
 
             let color_results: Vec<Vec<F>> = (0..num_colors)
                 .into_par_iter()
@@ -2087,9 +2073,7 @@ impl<F: Float> BytecodeTape<F> {
                     // We need to do forward_into first, then forward tangent
                     // But forward_tangent uses self.values, so we need a workaround.
                     // Use Dual<F> with tangent = direction.
-                    let inputs: Vec<Dual<F>> = (0..n)
-                        .map(|i| Dual::new(x[i], dir[i]))
-                        .collect();
+                    let inputs: Vec<Dual<F>> = (0..n).map(|i| Dual::new(x[i], dir[i])).collect();
                     let mut dv = Vec::new();
                     self.forward_tangent(&inputs, &mut dv);
                     out_indices.iter().map(|&oi| dv[oi as usize].eps).collect()
@@ -2097,8 +2081,11 @@ impl<F: Float> BytecodeTape<F> {
                 .collect();
 
             let mut jac_values = vec![F::zero(); jac_pattern.nnz()];
-            for (k, (&row, &col)) in
-                jac_pattern.rows.iter().zip(jac_pattern.cols.iter()).enumerate()
+            for (k, (&row, &col)) in jac_pattern
+                .rows
+                .iter()
+                .zip(jac_pattern.cols.iter())
+                .enumerate()
             {
                 let color = col_colors[col as usize] as usize;
                 jac_values[k] = color_results[color][row as usize];
@@ -2134,10 +2121,7 @@ impl<F: Float> BytecodeTape<F> {
     pub fn hessian_batch_par(&self, inputs: &[&[F]]) -> Vec<(F, Vec<F>, Vec<Vec<F>>)> {
         use rayon::prelude::*;
 
-        inputs
-            .par_iter()
-            .map(|x| self.hessian_par(x))
-            .collect()
+        inputs.par_iter().map(|x| self.hessian_par(x)).collect()
     }
 }
 

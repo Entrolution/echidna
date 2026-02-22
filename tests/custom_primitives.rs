@@ -60,10 +60,7 @@ fn record_with_customs(
 ) -> BytecodeTape<f64> {
     let mut tape = BytecodeTape::with_capacity(x.len() * 10);
 
-    let handles: Vec<CustomOpHandle> = ops
-        .into_iter()
-        .map(|op| tape.register_custom(op))
-        .collect();
+    let handles: Vec<CustomOpHandle> = ops.into_iter().map(|op| tape.register_custom(op)).collect();
 
     let inputs: Vec<BReverse<f64>> = x
         .iter()

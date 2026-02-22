@@ -281,8 +281,7 @@ fn optimize_rosenbrock() {
     let val2 = tape.output_value();
 
     // Compute expected values directly.
-    let expected_val =
-        (1.0 - x2[0]).powi(2) + 100.0 * (x2[1] - x2[0] * x2[0]).powi(2);
+    let expected_val = (1.0 - x2[0]).powi(2) + 100.0 * (x2[1] - x2[0] * x2[0]).powi(2);
     assert_relative_eq!(val2, expected_val, max_relative = 1e-12);
 
     // Finite difference check for gradient.
@@ -356,11 +355,7 @@ fn optimize_preserves_multi_output_correctness() {
 
     for i in 0..2 {
         for j in 0..2 {
-            assert_relative_eq!(
-                jac_before[i][j],
-                jac_after[i][j],
-                max_relative = 1e-12
-            );
+            assert_relative_eq!(jac_before[i][j], jac_after[i][j], max_relative = 1e-12);
         }
     }
 }

@@ -24,12 +24,7 @@ fn roundtrip_tape_json() {
     let grad_deser = tape2.gradient(&x);
 
     for (o, d) in grad_orig.iter().zip(grad_deser.iter()) {
-        assert!(
-            (o - d).abs() < 1e-12,
-            "original={}, deserialized={}",
-            o,
-            d
-        );
+        assert!((o - d).abs() < 1e-12, "original={}, deserialized={}", o, d);
     }
 }
 
@@ -47,12 +42,7 @@ fn roundtrip_tape_at_different_point() {
     let grad_deser = tape2.gradient(&x1);
 
     for (o, d) in grad_orig.iter().zip(grad_deser.iter()) {
-        assert!(
-            (o - d).abs() < 1e-12,
-            "original={}, deserialized={}",
-            o,
-            d
-        );
+        assert!((o - d).abs() < 1e-12, "original={}, deserialized={}", o, d);
     }
 }
 
@@ -80,14 +70,18 @@ fn deserialized_tape_supports_hessian() {
 
 #[test]
 fn custom_op_tape_serialization_fails() {
-    use std::sync::Arc;
     use echidna::bytecode_tape::BtapeGuard;
     use echidna::{BReverse, CustomOp};
+    use std::sync::Arc;
 
     struct Scale;
     impl CustomOp<f64> for Scale {
-        fn eval(&self, a: f64, _b: f64) -> f64 { 2.0 * a }
-        fn partials(&self, _a: f64, _b: f64, _r: f64) -> (f64, f64) { (2.0, 0.0) }
+        fn eval(&self, a: f64, _b: f64) -> f64 {
+            2.0 * a
+        }
+        fn partials(&self, _a: f64, _b: f64, _r: f64) -> (f64, f64) {
+            (2.0, 0.0)
+        }
     }
 
     let x = [1.0_f64];
@@ -100,7 +94,10 @@ fn custom_op_tape_serialization_fails() {
     tape.set_output(output.index());
 
     let result = serde_json::to_string(&tape);
-    assert!(result.is_err(), "should fail to serialize tape with custom ops");
+    assert!(
+        result.is_err(),
+        "should fail to serialize tape with custom ops"
+    );
 }
 
 #[test]
