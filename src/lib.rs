@@ -26,7 +26,7 @@ pub use reverse::Reverse;
 pub use scalar::Scalar;
 
 #[cfg(feature = "bytecode")]
-pub use api::{hessian, hessian_vec, hvp, record, sparse_hessian};
+pub use api::{hessian, hessian_vec, hvp, record, record_multi, sparse_hessian, sparse_hessian_vec};
 #[cfg(feature = "bytecode")]
 pub use breverse::BReverse;
 #[cfg(feature = "bytecode")]
@@ -34,7 +34,7 @@ pub use bytecode_tape::BytecodeTape;
 #[cfg(feature = "bytecode")]
 pub use checkpoint::grad_checkpointed;
 #[cfg(feature = "bytecode")]
-pub use sparse::SparsityPattern;
+pub use sparse::{CsrPattern, SparsityPattern};
 
 /// Type alias for forward-mode dual numbers over `f64`.
 pub type Dual64 = Dual<f64>;

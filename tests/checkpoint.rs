@@ -224,3 +224,52 @@ fn matches_naive_multi_step() {
         );
     }
 }
+
+#[test]
+fn revolve_vs_equal_spacing_identical_gradient() {
+    // The gradient must be identical regardless of the internal scheduling
+    // strategy. This test uses various checkpoint counts.
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 12;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    // Reference: store-all (num_checkpoints >= num_steps)
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+    for ckpts in [1, 2, 3, 4, 6, 8, 11] {
+        let g = echidna::grad_checkpointed(step, loss, &x0, num_steps, ckpts);
+        for i in 0..2 {
+            assert!(
+                (g_ref[i] - g[i]).abs() < 1e-10,
+                "gradient mismatch with {} ckpts at {}: ref={}, got={}",
+                ckpts, i, g_ref[i], g[i]
+            );
+        }
+    }
+}
+
+#[test]
+fn large_step_count() {
+    // Test with a larger step count to exercise revolve scheduling
+    let x0 = [1.0_f64, 0.5];
+    let num_steps = 50;
+
+    let step = |x: &[BReverse<f64>]| {
+        let half = BReverse::constant(0.5_f64);
+        vec![x[0].sin() * half + x[1] * half, x[0] * half + x[1].cos() * half]
+    };
+    let loss = |x: &[BReverse<f64>]| x[0] + x[1];
+
+    let g_all = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+    let g_few = echidna::grad_checkpointed(step, loss, &x0, num_steps, 5);
+
+    for i in 0..2 {
+        assert!(
+            (g_all[i] - g_few[i]).abs() < 1e-8,
+            "large step mismatch at {}: all={}, few={}",
+            i, g_all[i], g_few[i]
+        );
+    }
+}

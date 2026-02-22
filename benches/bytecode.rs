@@ -287,6 +287,38 @@ fn bench_hessian_vec(c: &mut Criterion) {
     group.finish();
 }
 
+/// Sparse Hessian: scalar vs batched (sparse_hessian_vec).
+fn bench_sparse_hessian_vec(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sparse_hessian_vec");
+
+    for n in [10, 50, 100] {
+        let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
+        let (tape, _) = record(
+            |v| {
+                let mut sum = v[0] - v[0];
+                for i in 0..v.len() - 1 {
+                    sum = sum + v[i] * v[i + 1];
+                }
+                sum
+            },
+            &x,
+        );
+
+        group.bench_with_input(BenchmarkId::new("sparse_hessian", n), &x, |b, x| {
+            b.iter(|| black_box(tape.sparse_hessian(black_box(x))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("sparse_hessian_vec_4", n), &x, |b, x| {
+            b.iter(|| black_box(tape.sparse_hessian_vec::<4>(black_box(x))))
+        });
+
+        group.bench_with_input(BenchmarkId::new("sparse_hessian_vec_8", n), &x, |b, x| {
+            b.iter(|| black_box(tape.sparse_hessian_vec::<8>(black_box(x))))
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bytecode_vs_adept,
@@ -297,6 +329,7 @@ criterion_group!(
     bench_hvp_buf_reuse,
     bench_sparse_hessian,
     bench_checkpointing,
-    bench_hessian_vec
+    bench_hessian_vec,
+    bench_sparse_hessian_vec
 );
 criterion_main!(benches);

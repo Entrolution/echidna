@@ -7,6 +7,7 @@ use crate::Float;
 /// `DualVec { re, eps }` represents a value with N independent tangent directions,
 /// enabling batched Hessian computation.
 #[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct DualVec<F: Float, const N: usize> {
     /// Primal (real) value.
     pub re: F,
@@ -59,7 +60,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     }
 
     /// Apply the chain rule: given `f(self.re)` and `f'(self.re)`, produce the dual result.
-    #[inline]
+    #[inline(always)]
     fn chain(self, f_val: F, f_deriv: F) -> Self {
         DualVec {
             re: f_val,

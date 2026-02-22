@@ -51,8 +51,9 @@ pub(crate) fn detect_sparsity_impl(
     // Dependency bitsets: deps[node] = set of input variables this node depends on
     let mut deps: Vec<Vec<u64>> = vec![vec![0u64; num_words]; num_vars];
 
-    // Interaction pairs: HashSet<(u32, u32)> where row >= col
-    let mut interactions: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    // Interaction pairs as Vec (more cache-friendly than HashSet for typical problems).
+    // Deduplicated via sort + dedup at the end.
+    let mut interactions: Vec<(u32, u32)> = Vec::new();
 
     let mut input_idx = 0u32;
     for i in 0..opcodes.len() {
@@ -82,18 +83,36 @@ pub(crate) fn detect_sparsity_impl(
                     OpClass::UnaryNonlinear => {
                         // Union dependencies + mark all cross-pairs within dep set
                         union_into(&mut deps, i, a);
-                        mark_all_pairs(&deps[i].clone(), num_inputs, &mut interactions);
+                        // Safe: we read deps[i] (already updated) — no clone needed
+                        // since mark_all_pairs only reads.
+                        let bits = extract_bits(&deps[i], num_inputs);
+                        for ii in 0..bits.len() {
+                            for jj in 0..=ii {
+                                let (r, c) = if bits[ii] >= bits[jj] {
+                                    (bits[ii], bits[jj])
+                                } else {
+                                    (bits[jj], bits[ii])
+                                };
+                                interactions.push((r, c));
+                            }
+                        }
                     }
                     OpClass::BinaryNonlinear => {
                         let b = b_idx as usize;
-                        // Clone before mutation to avoid borrow issues
-                        let deps_a = deps[a].clone();
-                        let deps_b = deps[b].clone();
+                        // Extract bits before mutation — a and b differ from i,
+                        // so we can read deps[a] and deps[b] directly.
+                        let bits_a = extract_bits(&deps[a], num_inputs);
+                        let bits_b = extract_bits(&deps[b], num_inputs);
                         // Union dependencies
                         union_into(&mut deps, i, a);
                         union_into(&mut deps, i, b);
                         // Mark cross-pairs between operand dependency sets
-                        mark_cross_pairs(&deps_a, &deps_b, num_inputs, &mut interactions);
+                        for &va in &bits_a {
+                            for &vb in &bits_b {
+                                let (r, c) = if va >= vb { (va, vb) } else { (vb, va) };
+                                interactions.push((r, c));
+                            }
+                        }
                     }
                     OpClass::ZeroDerivative => {
                         // Propagate dependencies for downstream ops
@@ -107,9 +126,10 @@ pub(crate) fn detect_sparsity_impl(
         }
     }
 
-    // Convert interactions to sorted COO format
-    let mut entries: Vec<(u32, u32)> = interactions.into_iter().collect();
-    entries.sort();
+    // Convert interactions to sorted, deduplicated COO format
+    interactions.sort_unstable();
+    interactions.dedup();
+    let entries = interactions;
 
     let rows: Vec<u32> = entries.iter().map(|&(r, _)| r).collect();
     let cols: Vec<u32> = entries.iter().map(|&(_, c)| c).collect();
@@ -195,52 +215,20 @@ fn is_binary_op(op: OpCode) -> bool {
     )
 }
 
-/// Union deps[src] into deps[dst].
+/// Union deps[src] into deps[dst] without cloning, using `split_at_mut`.
 fn union_into(deps: &mut [Vec<u64>], dst: usize, src: usize) {
     if dst == src {
         return;
     }
-    let num_words = deps[dst].len();
-    // Clone src to avoid simultaneous mutable+immutable borrow
-    let src_deps: Vec<u64> = deps[src].clone();
-    for w in 0..num_words {
-        deps[dst][w] |= src_deps[w];
-    }
-}
-
-/// Mark all pairs (i, j) where both i and j are in the dependency set.
-fn mark_all_pairs(
-    dep_set: &[u64],
-    num_inputs: usize,
-    interactions: &mut std::collections::HashSet<(u32, u32)>,
-) {
-    let bits = extract_bits(dep_set, num_inputs);
-    for i in 0..bits.len() {
-        for j in 0..=i {
-            let (r, c) = if bits[i] >= bits[j] {
-                (bits[i], bits[j])
-            } else {
-                (bits[j], bits[i])
-            };
-            interactions.insert((r, c));
-        }
-    }
-}
-
-/// Mark cross-pairs between two dependency sets.
-fn mark_cross_pairs(
-    deps_a: &[u64],
-    deps_b: &[u64],
-    num_inputs: usize,
-    interactions: &mut std::collections::HashSet<(u32, u32)>,
-) {
-    let bits_a = extract_bits(deps_a, num_inputs);
-    let bits_b = extract_bits(deps_b, num_inputs);
-    for &a in &bits_a {
-        for &b in &bits_b {
-            let (r, c) = if a >= b { (a, b) } else { (b, a) };
-            interactions.insert((r, c));
-        }
+    let (a, b) = if dst < src {
+        let (left, right) = deps.split_at_mut(src);
+        (&mut left[dst], &right[0] as &[u64])
+    } else {
+        let (left, right) = deps.split_at_mut(dst);
+        (&mut right[0], &left[src] as &[u64])
+    };
+    for w in 0..a.len() {
+        a[w] |= b[w];
     }
 }
 
@@ -290,24 +278,27 @@ pub fn greedy_coloring(pattern: &SparsityPattern) -> (Vec<u32>, u32) {
         }
     }
 
-    // Build G^2: two vertices are adjacent if they share a common neighbor
-    // or are directly adjacent. For symmetric Hessian recovery, this ensures
-    // that no two columns in the same color group have non-zero entries in the
-    // same row.
-    let mut adj2: Vec<std::collections::HashSet<u32>> = vec![std::collections::HashSet::new(); n];
+    // Build G^2 using sorted Vec instead of HashSet (more cache-friendly).
+    // Two vertices are adjacent if they share a common neighbor or are directly
+    // adjacent. For symmetric Hessian recovery, this ensures that no two columns
+    // in the same color group have non-zero entries in the same row.
+    let mut adj2: Vec<Vec<u32>> = vec![Vec::new(); n];
     for v in 0..n {
         // Distance-1 neighbors
         for &u in &adj[v] {
-            adj2[v].insert(u);
+            adj2[v].push(u);
         }
         // Distance-2 neighbors: for each neighbor u of v, add u's neighbors
         for &u in &adj[v] {
             for &w in &adj[u as usize] {
                 if w as usize != v {
-                    adj2[v].insert(w);
+                    adj2[v].push(w);
                 }
             }
         }
+        // Deduplicate
+        adj2[v].sort_unstable();
+        adj2[v].dedup();
     }
 
     // Sort vertices by decreasing degree in G^2
@@ -318,19 +309,45 @@ pub fn greedy_coloring(pattern: &SparsityPattern) -> (Vec<u32>, u32) {
     let mut num_colors = 0u32;
 
     for &v in &order {
-        // Find colors used by G^2-neighbors
-        let mut used = std::collections::HashSet::new();
+        // Find smallest available color using u64 bitset (supports up to 64 colors).
+        // For virtually all practical sparse Hessians, 64 colors is sufficient.
+        // Falls back to linear scan if > 64 colors are needed.
+        let mut used_bits: u64 = 0;
+        let mut needs_fallback = false;
         for &neighbor in &adj2[v] {
-            if colors[neighbor as usize] != u32::MAX {
-                used.insert(colors[neighbor as usize]);
+            let c = colors[neighbor as usize];
+            if c != u32::MAX {
+                if c < 64 {
+                    used_bits |= 1u64 << c;
+                } else {
+                    needs_fallback = true;
+                }
             }
         }
 
-        // Assign smallest available color
-        let mut color = 0u32;
-        while used.contains(&color) {
-            color += 1;
-        }
+        let color = if !needs_fallback {
+            (!used_bits).trailing_zeros()
+        } else {
+            // Fallback: collect all used colors and find first gap
+            let mut used_vec: Vec<u32> = adj2[v]
+                .iter()
+                .filter_map(|&neighbor| {
+                    let c = colors[neighbor as usize];
+                    if c != u32::MAX { Some(c) } else { None }
+                })
+                .collect();
+            used_vec.sort_unstable();
+            used_vec.dedup();
+            let mut c = 0u32;
+            for &u in &used_vec {
+                if u != c {
+                    break;
+                }
+                c += 1;
+            }
+            c
+        };
+
         colors[v] = color;
         if color + 1 > num_colors {
             num_colors = color + 1;
@@ -338,4 +355,136 @@ pub fn greedy_coloring(pattern: &SparsityPattern) -> (Vec<u32>, u32) {
     }
 
     (colors, num_colors)
+}
+
+/// Compressed Sparse Row (CSR) format for sparse matrices.
+pub struct CsrPattern {
+    /// Dimension of the square matrix.
+    pub dim: usize,
+    /// Row pointers (length `dim + 1`). Row `i` spans `col_ind[row_ptr[i]..row_ptr[i+1]]`.
+    pub row_ptr: Vec<u32>,
+    /// Column indices, sorted within each row.
+    pub col_ind: Vec<u32>,
+}
+
+impl CsrPattern {
+    /// Number of stored entries.
+    pub fn nnz(&self) -> usize {
+        self.col_ind.len()
+    }
+
+    /// Reorder values from COO order (matching `SparsityPattern`) to CSR order.
+    ///
+    /// Given Hessian values in COO order from `sparse_hessian`, returns values
+    /// aligned with this CSR pattern's `col_ind` ordering.
+    pub fn reorder_values<F: Copy>(&self, coo: &SparsityPattern, coo_vals: &[F]) -> Vec<F> {
+        assert_eq!(coo_vals.len(), coo.nnz());
+        assert_eq!(self.nnz(), coo.nnz());
+
+        // Build a map from (row, col) -> value from COO
+        let mut result = Vec::with_capacity(self.nnz());
+
+        for row in 0..self.dim {
+            let start = self.row_ptr[row] as usize;
+            let end = self.row_ptr[row + 1] as usize;
+            for csr_idx in start..end {
+                let col = self.col_ind[csr_idx];
+                // Find this (row, col) in the COO pattern
+                let coo_idx = coo
+                    .rows
+                    .iter()
+                    .zip(coo.cols.iter())
+                    .position(|(&r, &c)| r == row as u32 && c == col)
+                    .expect("CSR entry not found in COO pattern");
+                result.push(coo_vals[coo_idx]);
+            }
+        }
+        result
+    }
+}
+
+impl SparsityPattern {
+    /// Convert to CSR format preserving the lower triangle (matching COO storage).
+    pub fn to_csr_lower(&self) -> CsrPattern {
+        let n = self.dim;
+        let mut row_ptr = vec![0u32; n + 1];
+
+        // Count entries per row
+        for &r in &self.rows {
+            row_ptr[r as usize + 1] += 1;
+        }
+        // Prefix sum
+        for i in 1..=n {
+            row_ptr[i] += row_ptr[i - 1];
+        }
+
+        // Fill col_ind in row order (COO is already sorted by (row, col))
+        let nnz = self.nnz();
+        let mut col_ind = vec![0u32; nnz];
+        let mut pos = vec![0u32; n]; // current position within each row
+        for k in 0..nnz {
+            let r = self.rows[k] as usize;
+            let offset = row_ptr[r] + pos[r];
+            col_ind[offset as usize] = self.cols[k];
+            pos[r] += 1;
+        }
+
+        CsrPattern {
+            dim: n,
+            row_ptr,
+            col_ind,
+        }
+    }
+
+    /// Convert to symmetric CSR format (both lower and upper triangle).
+    ///
+    /// For every off-diagonal entry (r, c) in the lower triangle, also stores
+    /// the mirrored entry (c, r). Diagonal entries appear once.
+    pub fn to_csr(&self) -> CsrPattern {
+        let n = self.dim;
+        let mut row_ptr = vec![0u32; n + 1];
+
+        // Count entries per row — each off-diagonal entry contributes to two rows
+        for (&r, &c) in self.rows.iter().zip(self.cols.iter()) {
+            row_ptr[r as usize + 1] += 1;
+            if r != c {
+                row_ptr[c as usize + 1] += 1;
+            }
+        }
+        // Prefix sum
+        for i in 1..=n {
+            row_ptr[i] += row_ptr[i - 1];
+        }
+
+        let nnz = row_ptr[n] as usize;
+        let mut col_ind = vec![0u32; nnz];
+        let mut pos = vec![0u32; n];
+
+        for (&r, &c) in self.rows.iter().zip(self.cols.iter()) {
+            let ri = r as usize;
+            let offset = row_ptr[ri] + pos[ri];
+            col_ind[offset as usize] = c;
+            pos[ri] += 1;
+
+            if r != c {
+                let ci = c as usize;
+                let offset = row_ptr[ci] + pos[ci];
+                col_ind[offset as usize] = r;
+                pos[ci] += 1;
+            }
+        }
+
+        // Sort col_ind within each row
+        for i in 0..n {
+            let start = row_ptr[i] as usize;
+            let end = row_ptr[i + 1] as usize;
+            col_ind[start..end].sort_unstable();
+        }
+
+        CsrPattern {
+            dim: n,
+            row_ptr,
+            col_ind,
+        }
+    }
 }

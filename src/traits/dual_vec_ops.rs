@@ -7,7 +7,7 @@ use crate::float::Float;
 
 impl<F: Float, const N: usize> Add for DualVec<F, N> {
     type Output = Self;
-    #[inline]
+    #[inline(always)]
     fn add(self, rhs: Self) -> Self {
         DualVec {
             re: self.re + rhs.re,
@@ -18,7 +18,7 @@ impl<F: Float, const N: usize> Add for DualVec<F, N> {
 
 impl<F: Float, const N: usize> Sub for DualVec<F, N> {
     type Output = Self;
-    #[inline]
+    #[inline(always)]
     fn sub(self, rhs: Self) -> Self {
         DualVec {
             re: self.re - rhs.re,
@@ -30,7 +30,7 @@ impl<F: Float, const N: usize> Sub for DualVec<F, N> {
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const N: usize> Mul for DualVec<F, N> {
     type Output = Self;
-    #[inline]
+    #[inline(always)]
     fn mul(self, rhs: Self) -> Self {
         DualVec {
             re: self.re * rhs.re,
@@ -41,7 +41,7 @@ impl<F: Float, const N: usize> Mul for DualVec<F, N> {
 
 impl<F: Float, const N: usize> Div for DualVec<F, N> {
     type Output = Self;
-    #[inline]
+    #[inline(always)]
     fn div(self, rhs: Self) -> Self {
         let inv = F::one() / rhs.re;
         DualVec {
@@ -53,7 +53,7 @@ impl<F: Float, const N: usize> Div for DualVec<F, N> {
 
 impl<F: Float, const N: usize> Neg for DualVec<F, N> {
     type Output = Self;
-    #[inline]
+    #[inline(always)]
     fn neg(self) -> Self {
         DualVec {
             re: -self.re,

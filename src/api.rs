@@ -189,6 +189,45 @@ pub fn record<F: Float + BtapeThreadLocal>(
     (tape, value)
 }
 
+/// Record a multi-output function into a [`BytecodeTape`].
+///
+/// Like [`record`] but for vector-valued functions `f : R^n → R^m`.
+/// The returned tape supports [`jacobian`](BytecodeTape::jacobian),
+/// [`vjp_multi`](BytecodeTape::vjp_multi), and [`reverse_seeded`](BytecodeTape::reverse_seeded).
+///
+/// Returns the tape and the output values from the recording pass.
+#[cfg(feature = "bytecode")]
+pub fn record_multi<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
+    x: &[F],
+) -> (BytecodeTape<F>, Vec<F>) {
+    let n = x.len();
+    let mut tape = BytecodeTape::with_capacity(n * 10);
+
+    // Register inputs.
+    let inputs: Vec<BReverse<F>> = x
+        .iter()
+        .map(|&val| {
+            let idx = tape.new_input(val);
+            BReverse::from_tape(val, idx)
+        })
+        .collect();
+
+    let _guard = BtapeGuard::new(&mut tape);
+    let outputs = f(&inputs);
+
+    let values: Vec<F> = outputs.iter().map(|o| o.value).collect();
+    let indices: Vec<u32> = outputs.iter().map(|o| o.index).collect();
+
+    tape.set_outputs(&indices);
+    // Also set single output_index for backward compat
+    if let Some(&first) = indices.first() {
+        tape.set_output(first);
+    }
+
+    (tape, values)
+}
+
 /// Hessian-vector product via forward-over-reverse on a bytecode tape.
 ///
 /// Records `f` into a [`BytecodeTape`], then computes the gradient and
@@ -244,4 +283,17 @@ pub fn sparse_hessian<F: Float + BtapeThreadLocal>(
 ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
     let (tape, _) = record(f, x);
     tape.sparse_hessian(x)
+}
+
+/// Batched sparse Hessian: packs N colors per sweep using DualVec.
+///
+/// Like [`sparse_hessian`] but reduces sweeps from `num_colors` to
+/// `ceil(num_colors / N)`.
+#[cfg(feature = "bytecode")]
+pub fn sparse_hessian_vec<F: Float + BtapeThreadLocal, const N: usize>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &[F],
+) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+    let (tape, _) = record(f, x);
+    tape.sparse_hessian_vec::<N>(x)
 }
