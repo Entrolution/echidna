@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), and R1a+R3 (Taylor mode AD) are complete. 326 tests passing.
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R3 (Taylor mode AD), and R2a+R2c (STDE) are complete. 346 tests passing.
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -22,6 +22,7 @@ This roadmap synthesizes:
 | optim | L-BFGS, Newton, trust-region solvers, Armijo line search, convergence control | Complete |
 | R3 | Public `forward_tangent` on BytecodeTape, `output_index()` accessor | Complete |
 | R1a | `Taylor<F, K>` (const-generic) + `TaylorDyn<F>` (arena-based) + shared `taylor_ops` propagation rules, 35+ elementals, `Float`/`Scalar`/`num_traits::Float` impls, 33 tests | Complete |
+| R2a+R2c | STDE module: jet propagation, Laplacian estimator, Hessian diagonal, directional derivatives, TaylorDyn variants, 20 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -71,18 +72,13 @@ This gives an automatic high-order ODE integrator with adaptive step control via
 
 Builds on R1. Uses random jets to estimate differential operators without computing full derivative tensors.
 
-**R2a. Jet construction for differential operators**
+**R2a. Jet construction for differential operators** — **COMPLETE**
 
-The STDE paper's key insight: for any linear differential operator `L = sum c_alpha * D^alpha`, there exists a sparse jet structure that, when pushed through Taylor mode, yields an unbiased estimator of `L[f]`.
+Implemented `echidna::stde` module with jet propagation and operator estimation. Uses `Taylor<F, 3>` (const-generic, stack-allocated) for second-order operators and `TaylorDyn` for runtime-determined order. Feature-gated behind `stde = ["bytecode", "taylor"]`.
 
-Implement a `JetBuilder` that, given a differential operator specification, produces the right input jets:
+API: `taylor_jet_2nd` / `taylor_jet_2nd_with_buf` (single-direction), `directional_derivatives` (batch), `laplacian` (Hutchinson trace estimator), `hessian_diagonal` (exact via coordinate basis), `taylor_jet_dyn` / `laplacian_dyn` (TaylorDyn variants). No `rand` dependency — users provide direction vectors. 20 tests covering known Hessians, Rademacher convergence, cross-validation with `hessian()` and `grad()`, TaylorDyn/const-generic parity, edge cases, and transcendental functions.
 
-| Operator | Jet structure | Reference |
-|----------|--------------|-----------|
-| Laplacian `sum d^2f/dx_i^2` | Standard basis vectors `e_j` sampled uniformly, scaled by `d` | STDE Sec 4.3 |
-| Full Hessian trace | Same as Laplacian | |
-| Mixed partials `d^2f/dx_i dx_j` | Specific 2-jet tangent pairs from partition analysis | STDE Appendix F |
-| Dense Hutchinson-style | Gaussian random vectors | STDE Sec 4.4 |
+Key file: `src/stde.rs`.
 
 **R2b. Variance reduction**
 
@@ -91,22 +87,9 @@ Implement a `JetBuilder` that, given a differential operator specification, prod
 - Stratified sampling over coordinate directions
 - Batch estimation with confidence intervals
 
-**R2c. PDE operator estimation**
+**R2c. PDE operator estimation** — **COMPLETE** (delivered via R2a)
 
-High-level API for common PDE operators:
-```rust
-// Estimate the Laplacian at a point
-let laplacian = stde::laplacian(&tape, &x, num_samples)?;
-
-// Estimate a general differential operator
-let op = DiffOperator::new()
-    .add_term(1.0, &[2, 0, 0])  // d^2f/dx^2
-    .add_term(1.0, &[0, 2, 0])  // d^2f/dy^2
-    .add_term(1.0, &[0, 0, 2]); // d^2f/dz^2
-let result = stde::estimate(&tape, &x, &op, num_samples)?;
-```
-
-This is the >1000x speedup path for PINNs and physics-informed applications.
+Convenience API for common operators delivered as part of R2a: `laplacian`, `hessian_diagonal`, `directional_derivatives`. A general `DiffOperator` abstraction is deferred to R2b when variance reduction motivates it.
 
 ### R3. Public Forward Tangent API — **COMPLETE**
 **Deferred from Phase 8 (implicit diff)**
@@ -242,18 +225,18 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
   │      │
   │      └──▶ R1d (ODE Taylor)
   │
-  └──▶ R2a (jet construction)       ─── NEXT: can start now
+  └──▶ R2a (jet construction)       ─── ✓ DONE
          │
-         ├──▶ R2c (PDE operators)
+         ├──▶ R2c (PDE operators)   ─── ✓ DONE (delivered via R2a)
          │
-         └──▶ R2b (variance reduction)
+         └──▶ R2b (variance reduction) ─── NEXT
 
 R4a-d (implicit extensions)          ─── Independent of R1, can parallelize
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
-The critical path remaining is **R2a → R2c**. R1c (Taylor reverse) and R1d (ODE Taylor) are also unblocked.
+The critical path remaining is **R2b** (variance reduction). R1c (Taylor reverse) and R1d (ODE Taylor) are also unblocked.
 
 R4 (remaining implicit features), R7 (serde), and R8 (benchmarks) are independent and can be interleaved as needed.
 

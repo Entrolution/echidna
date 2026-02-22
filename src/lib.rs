@@ -25,6 +25,9 @@ pub mod taylor_dyn;
 #[cfg(feature = "taylor")]
 pub mod taylor_ops;
 
+#[cfg(feature = "stde")]
+pub mod stde;
+
 #[cfg(feature = "faer")]
 pub mod faer_support;
 #[cfg(feature = "ndarray")]
