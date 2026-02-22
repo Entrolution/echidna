@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "echidna-optim"]
+
 [package]
 name = "echidna"
 version = "0.1.0"

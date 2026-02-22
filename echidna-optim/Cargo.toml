@@ -1,0 +1,16 @@
+[package]
+name = "echidna-optim"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+
+[dependencies]
+echidna = { path = "..", features = ["bytecode"] }
+num-traits = "0.2"
+
+[dev-dependencies]
+approx = "0.5"
+
+[features]
+default = []
+parallel = ["echidna/parallel"]
