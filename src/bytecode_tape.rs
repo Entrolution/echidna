@@ -286,59 +286,16 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
-    /// Reverse sweep seeded at a specific index with a given weight.
+    /// Indices of all output entries in the tape buffer.
     ///
-    /// Like [`reverse`](Self::reverse) but with an arbitrary seed value instead of 1.
-    fn reverse_weighted(&self, seed_index: u32, seed_value: F) -> Vec<F> {
-        let n = self.num_variables as usize;
-        let mut adjoints = vec![F::zero(); n];
-        adjoints[seed_index as usize] = seed_value;
-
-        for i in (0..self.opcodes.len()).rev() {
-            let adj = adjoints[i];
-            if adj == F::zero() {
-                continue;
-            }
-
-            match self.opcodes[i] {
-                OpCode::Input | OpCode::Const => continue,
-                OpCode::Custom => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let r = self.values[i];
-                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if let Some(bi) = b_idx_opt {
-                        adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
-                    }
-                }
-                op => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        self.values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
-                    } else {
-                        F::zero()
-                    };
-                    let r = self.values[i];
-                    let (da, db) = opcode::reverse_partials(op, a, b, r);
-
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
-                        adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
-                    }
-                }
-            }
+    /// For multi-output tapes, returns all registered output indices.
+    /// For single-output tapes, returns a single-element slice.
+    pub fn all_output_indices(&self) -> &[u32] {
+        if self.output_indices.is_empty() {
+            std::slice::from_ref(&self.output_index)
+        } else {
+            &self.output_indices
         }
-        adjoints
     }
 
     /// Reverse sweep with weighted seeds for multiple outputs.
@@ -359,22 +316,9 @@ impl<F: Float> BytecodeTape<F> {
             "seeds length must match number of outputs"
         );
 
-        let n = self.num_variables as usize;
         let ni = self.num_inputs as usize;
-        let mut total_adjoints = vec![F::zero(); n];
-
-        for (k, (&out_idx, &weight)) in out_indices.iter().zip(seeds.iter()).enumerate() {
-            if weight == F::zero() {
-                continue;
-            }
-            let adjoints = self.reverse_weighted(out_idx, weight);
-            for j in 0..n {
-                total_adjoints[j] = total_adjoints[j] + adjoints[j];
-            }
-            let _ = k;
-        }
-
-        total_adjoints[..ni].to_vec()
+        let adjoints = self.reverse_seeded_full(seeds, &out_indices);
+        adjoints[..ni].to_vec()
     }
 
     /// Compute the full Jacobian of a multi-output tape via reverse mode.

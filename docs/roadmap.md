@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 378 tests passing.
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 414 tests passing (378 core + 36 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -26,6 +26,7 @@ This roadmap synthesizes:
 | R1d | `ode_taylor_step` / `ode_taylor_step_with_buf` — ODE Taylor series integration via coefficient bootstrapping, `eval_at` Horner evaluation, 8 tests | Complete |
 | R2a+R2c | STDE module: jet propagation, Laplacian estimator, Hessian diagonal, directional derivatives, TaylorDyn variants, 20 tests | Complete |
 | R2b | STDE variance reduction: `EstimatorResult` with sample statistics, `laplacian_with_stats` (Welford's online variance), `laplacian_with_control` (diagonal control variate), 13 tests | Complete |
+| R4a | Piggyback differentiation: tangent step/solve via dual-number forward pass, adjoint solve via iterative VJP, `reverse_seeded` optimization (fused single-pass), `all_output_indices()` accessor, 8 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -101,14 +102,11 @@ Convenience API for common operators delivered as part of R2a: `laplacian`, `hes
 ### R4. Remaining Implicit/Iterative Features
 **Book Phase 8 (Ch 15), remainder**
 
-**R4a. Piggyback differentiation**
+**R4a. Piggyback differentiation** — **COMPLETE**
 
-Propagate derivatives alongside solver iterations rather than post-hoc via IFT. For iterative solvers (Newton, fixed-point), record only the last iteration's local derivatives and "piggyback" the adjoint/tangent accumulation onto the convergence loop.
+Tangent piggyback propagates `ż_{k+1} = G_z · ż_k + G_x · ẋ` alongside the primal fixed-point iteration via a single dual-number forward pass per step. Adjoint piggyback iterates `λ_{k+1} = G_z^T · λ_k + z̄` at converged z* via reverse sweeps. Optimized `reverse_seeded` to use fused single-pass (`reverse_seeded_full`) — O(tape_length) instead of O(m × tape_length). Added `all_output_indices()` zero-allocation accessor. 8 tests including cross-validation with IFT.
 
-Advantages over current IFT approach:
-- No need for the solver to have fully converged
-- Works naturally with early termination
-- Memory-efficient (no need to store the full Jacobian of the residual)
+Key file: `echidna-optim/src/piggyback.rs`.
 
 **R4b. Fixed-point iteration adjoint**
 
@@ -229,7 +227,8 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
          │
          └──▶ R2b (variance reduction) ─── ✓ DONE
 
-R4a-d (implicit extensions)          ─── Independent of R1, can parallelize
+R4a (piggyback differentiation)      ─── ✓ DONE
+R4b-d (implicit extensions)          ─── Independent of R1, can parallelize
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
