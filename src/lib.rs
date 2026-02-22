@@ -26,7 +26,9 @@ pub use reverse::Reverse;
 pub use scalar::Scalar;
 
 #[cfg(feature = "bytecode")]
-pub use api::{hessian, hessian_vec, hvp, record, record_multi, sparse_hessian, sparse_hessian_vec};
+pub use api::{
+    hessian, hessian_vec, hvp, record, record_multi, sparse_hessian, sparse_hessian_vec,
+};
 #[cfg(feature = "bytecode")]
 pub use breverse::BReverse;
 #[cfg(feature = "bytecode")]

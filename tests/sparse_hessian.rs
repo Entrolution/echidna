@@ -205,7 +205,9 @@ fn sparse_hessian_vec_matches_sparse_tridiag() {
         assert!(
             (vals1[k] - vals2[k]).abs() < 1e-8,
             "tridiag mismatch at k={}: scalar={}, vec={}",
-            k, vals1[k], vals2[k]
+            k,
+            vals1[k],
+            vals2[k]
         );
     }
 }
@@ -223,7 +225,9 @@ fn sparse_hessian_vec_matches_sparse_rosenbrock() {
         assert!(
             (vals1[k] - vals2[k]).abs() < 1e-8,
             "rosenbrock mismatch at k={}: scalar={}, vec={}",
-            k, vals1[k], vals2[k]
+            k,
+            vals1[k],
+            vals2[k]
         );
     }
 }
@@ -339,7 +343,10 @@ fn csr_symmetric() {
                 assert!(
                     csr.col_ind[col_start..col_end].contains(&(row as u32)),
                     "missing mirror ({}, {}) for ({}, {})",
-                    col, row, row, col
+                    col,
+                    row,
+                    row,
+                    col
                 );
             }
         }

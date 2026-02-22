@@ -244,7 +244,10 @@ fn revolve_vs_equal_spacing_identical_gradient() {
             assert!(
                 (g_ref[i] - g[i]).abs() < 1e-10,
                 "gradient mismatch with {} ckpts at {}: ref={}, got={}",
-                ckpts, i, g_ref[i], g[i]
+                ckpts,
+                i,
+                g_ref[i],
+                g[i]
             );
         }
     }
@@ -258,7 +261,10 @@ fn large_step_count() {
 
     let step = |x: &[BReverse<f64>]| {
         let half = BReverse::constant(0.5_f64);
-        vec![x[0].sin() * half + x[1] * half, x[0] * half + x[1].cos() * half]
+        vec![
+            x[0].sin() * half + x[1] * half,
+            x[0] * half + x[1].cos() * half,
+        ]
     };
     let loss = |x: &[BReverse<f64>]| x[0] + x[1];
 
@@ -269,7 +275,9 @@ fn large_step_count() {
         assert!(
             (g_all[i] - g_few[i]).abs() < 1e-8,
             "large step mismatch at {}: all={}, few={}",
-            i, g_all[i], g_few[i]
+            i,
+            g_all[i],
+            g_few[i]
         );
     }
 }

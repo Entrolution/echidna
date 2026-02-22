@@ -543,11 +543,7 @@ impl<F: Float> BytecodeTape<F> {
 
         // Reuse the input buffer instead of allocating
         dual_input_buf.clear();
-        dual_input_buf.extend(
-            x.iter()
-                .zip(v.iter())
-                .map(|(&xi, &vi)| Dual::new(xi, vi)),
-        );
+        dual_input_buf.extend(x.iter().zip(v.iter()).map(|(&xi, &vi)| Dual::new(xi, vi)));
 
         self.forward_tangent(dual_input_buf, dual_vals_buf);
         self.reverse_tangent(dual_vals_buf, adjoint_buf);
@@ -572,9 +568,8 @@ impl<F: Float> BytecodeTape<F> {
         for j in 0..n {
             // Reuse input buffer
             dual_input_buf.clear();
-            dual_input_buf.extend((0..n).map(|i| {
-                Dual::new(x[i], if i == j { F::one() } else { F::zero() })
-            }));
+            dual_input_buf
+                .extend((0..n).map(|i| Dual::new(x[i], if i == j { F::one() } else { F::zero() })));
 
             self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
             self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
@@ -698,7 +693,13 @@ impl<F: Float> BytecodeTape<F> {
                 };
             }
 
-            self.hvp_with_all_bufs(x, &v, &mut dual_input_buf, &mut dual_vals_buf, &mut adjoint_buf);
+            self.hvp_with_all_bufs(
+                x,
+                &v,
+                &mut dual_input_buf,
+                &mut dual_vals_buf,
+                &mut adjoint_buf,
+            );
 
             if color == 0 {
                 value = dual_vals_buf[self.output_index as usize].re;

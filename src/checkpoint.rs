@@ -135,12 +135,7 @@ fn revolve_schedule(num_steps: usize, num_checkpoints: usize) -> Vec<usize> {
 ///
 /// Places one checkpoint optimally (using the binomial formula), then
 /// recurses on the two resulting sub-intervals.
-fn schedule_recursive(
-    start: usize,
-    end: usize,
-    checkpoints: usize,
-    positions: &mut Vec<usize>,
-) {
+fn schedule_recursive(start: usize, end: usize, checkpoints: usize, positions: &mut Vec<usize>) {
     let steps = end - start;
     if steps <= 1 || checkpoints == 0 {
         return;

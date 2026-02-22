@@ -333,7 +333,11 @@ pub fn greedy_coloring(pattern: &SparsityPattern) -> (Vec<u32>, u32) {
                 .iter()
                 .filter_map(|&neighbor| {
                     let c = colors[neighbor as usize];
-                    if c != u32::MAX { Some(c) } else { None }
+                    if c != u32::MAX {
+                        Some(c)
+                    } else {
+                        None
+                    }
                 })
                 .collect();
             used_vec.sort_unstable();

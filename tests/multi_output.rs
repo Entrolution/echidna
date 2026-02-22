@@ -59,7 +59,10 @@ fn jacobian_vs_forward_mode() {
             assert!(
                 (jac_forward[i][j] - jac_tape[i][j]).abs() < 1e-10,
                 "Jacobian mismatch at ({}, {}): fwd={}, tape={}",
-                i, j, jac_forward[i][j], jac_tape[i][j]
+                i,
+                j,
+                jac_forward[i][j],
+                jac_tape[i][j]
             );
         }
     }
@@ -68,10 +71,7 @@ fn jacobian_vs_forward_mode() {
 #[test]
 fn reverse_seeded_unit_vectors() {
     // reverse_seeded with unit vector e_i should match reverse(output_i)
-    let (mut tape, _) = record_multi(
-        |v| vec![v[0] * v[0] + v[1], v[0] * v[1]],
-        &[2.0_f64, 3.0],
-    );
+    let (mut tape, _) = record_multi(|v| vec![v[0] * v[0] + v[1], v[0] * v[1]], &[2.0_f64, 3.0]);
     tape.forward(&[2.0, 3.0]);
 
     let grad0 = tape.reverse_seeded(&[1.0, 0.0]);
@@ -83,12 +83,16 @@ fn reverse_seeded_unit_vectors() {
         assert!(
             (grad0[j] - jac[0][j]).abs() < 1e-10,
             "seeded[0] mismatch at {}: {} vs {}",
-            j, grad0[j], jac[0][j]
+            j,
+            grad0[j],
+            jac[0][j]
         );
         assert!(
             (grad1[j] - jac[1][j]).abs() < 1e-10,
             "seeded[1] mismatch at {}: {} vs {}",
-            j, grad1[j], jac[1][j]
+            j,
+            grad1[j],
+            jac[1][j]
         );
     }
 }
@@ -99,10 +103,7 @@ fn vjp_multi_vs_vjp() {
     let x = [0.7_f64, 0.3];
     let weights = [0.5, -0.3];
 
-    let (mut tape, _) = record_multi(
-        |v| vec![v[0].sin() + v[1].cos(), v[0] * v[1].exp()],
-        &x,
-    );
+    let (mut tape, _) = record_multi(|v| vec![v[0].sin() + v[1].cos(), v[0] * v[1].exp()], &x);
     let vjp_result = tape.vjp_multi(&x, &weights);
 
     // Compute manually: J^T * w
@@ -112,7 +113,9 @@ fn vjp_multi_vs_vjp() {
         assert!(
             (vjp_result[j] - expected).abs() < 1e-10,
             "vjp_multi mismatch at {}: {} vs {}",
-            j, vjp_result[j], expected
+            j,
+            vjp_result[j],
+            expected
         );
     }
 }
