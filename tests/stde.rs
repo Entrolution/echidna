@@ -418,3 +418,245 @@ fn laplacian_transcendental_cross_validate() {
 
     assert_relative_eq!(trace, lap, epsilon = 1e-10);
 }
+
+// ══════════════════════════════════════════════
+//  11. laplacian_with_stats
+// ══════════════════════════════════════════════
+
+#[test]
+fn stats_matches_laplacian() {
+    // laplacian_with_stats should return the same estimate as laplacian
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let v0: Vec<f64> = vec![1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0];
+    let v3: Vec<f64> = vec![-1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
+
+    let (value, lap) = echidna::stde::laplacian(&tape, &[1.0, 2.0], &dirs);
+    let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0], &dirs);
+
+    assert_relative_eq!(result.value, value, epsilon = 1e-10);
+    assert_relative_eq!(result.estimate, lap, epsilon = 1e-10);
+    assert_eq!(result.num_samples, 4);
+}
+
+#[test]
+fn stats_positive_variance() {
+    // For a function with off-diagonal Hessian entries, Rademacher samples
+    // have nonzero variance: v^T H v differs across directions.
+    // H = [[4, 2, 0], [2, 12, 0], [0, 0, 0]]
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let v0: Vec<f64> = vec![1.0, 1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0, 1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0, -1.0];
+    let v3: Vec<f64> = vec![1.0, 1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
+    assert!(result.sample_variance > 0.0, "expected positive variance for off-diagonal Hessian");
+    assert!(result.standard_error > 0.0);
+}
+
+#[test]
+fn stats_single_sample() {
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let v: Vec<f64> = vec![1.0, 1.0];
+    let dirs: Vec<&[f64]> = vec![&v];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0], &dirs);
+    assert_eq!(result.num_samples, 1);
+    assert_relative_eq!(result.sample_variance, 0.0, epsilon = 1e-14);
+    assert_relative_eq!(result.standard_error, 0.0, epsilon = 1e-14);
+}
+
+#[test]
+fn stats_consistency() {
+    // Verify standard_error = sqrt(sample_variance / num_samples)
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let v0: Vec<f64> = vec![1.0, 1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0, 1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
+    let expected_se = (result.sample_variance / result.num_samples as f64).sqrt();
+    assert_relative_eq!(result.standard_error, expected_se, epsilon = 1e-14);
+}
+
+#[test]
+fn stats_zero_variance_diagonal_only() {
+    // f(x,y) = x^2 + y^2: H = [[2,0],[0,2]], diagonal-only.
+    // All Rademacher samples yield v^T H v = 2+2 = 4, so variance = 0.
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let v0: Vec<f64> = vec![1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0];
+    let v3: Vec<f64> = vec![-1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0], &dirs);
+    assert_relative_eq!(result.estimate, 4.0, epsilon = 1e-10);
+    assert_relative_eq!(result.sample_variance, 0.0, epsilon = 1e-10);
+}
+
+// ══════════════════════════════════════════════
+//  12. laplacian_with_control
+// ══════════════════════════════════════════════
+
+#[test]
+fn control_unbiased() {
+    // Control variate should still give correct (unbiased) estimate.
+    // Use all 8 Rademacher vectors for n=3 (exact result).
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let (_, diag) = echidna::stde::hessian_diagonal(&tape, &[1.0, 2.0, 3.0]);
+
+    let signs: [f64; 2] = [1.0, -1.0];
+    let mut vecs = Vec::new();
+    for &s0 in &signs {
+        for &s1 in &signs {
+            for &s2 in &signs {
+                vecs.push(vec![s0, s1, s2]);
+            }
+        }
+    }
+    let dirs: Vec<&[f64]> = vecs.iter().map(|v| v.as_slice()).collect();
+
+    let result = echidna::stde::laplacian_with_control(
+        &tape, &[1.0, 2.0, 3.0], &dirs, &diag,
+    );
+    assert_relative_eq!(result.estimate, 16.0, epsilon = 1e-10);
+}
+
+#[test]
+fn control_rademacher_no_effect() {
+    // For Rademacher, control variate adjustment is zero (v_j^2 = 1 always).
+    // So controlled and uncontrolled estimates should be identical.
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let (_, diag) = echidna::stde::hessian_diagonal(&tape, &[1.0, 2.0, 3.0]);
+
+    let v0: Vec<f64> = vec![1.0, 1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0, 1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0, -1.0];
+    let v3: Vec<f64> = vec![1.0, 1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
+
+    let uncontrolled = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
+    let controlled = echidna::stde::laplacian_with_control(
+        &tape, &[1.0, 2.0, 3.0], &dirs, &diag,
+    );
+
+    assert_relative_eq!(controlled.estimate, uncontrolled.estimate, epsilon = 1e-10);
+    assert_relative_eq!(controlled.sample_variance, uncontrolled.sample_variance, epsilon = 1e-10);
+}
+
+#[test]
+fn control_gaussian_reduces_variance() {
+    // For non-unit-norm entries (simulating Gaussian), control variate
+    // should reduce variance. Use directions where v_j^2 != 1.
+    // H = [[4, 2, 0], [2, 12, 0], [0, 0, 0]], diag = [4, 12, 0]
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let (_, diag) = echidna::stde::hessian_diagonal(&tape, &[1.0, 2.0, 3.0]);
+
+    // Directions with non-unit entries (Gaussian-like)
+    let v0: Vec<f64> = vec![0.5, 1.5, 0.8];
+    let v1: Vec<f64> = vec![1.2, -0.3, 1.1];
+    let v2: Vec<f64> = vec![-0.7, 0.9, -1.4];
+    let v3: Vec<f64> = vec![1.8, 0.2, -0.6];
+    let v4: Vec<f64> = vec![-0.4, -1.1, 0.3];
+    let v5: Vec<f64> = vec![0.9, 1.3, -0.2];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3, &v4, &v5];
+
+    let uncontrolled = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
+    let controlled = echidna::stde::laplacian_with_control(
+        &tape, &[1.0, 2.0, 3.0], &dirs, &diag,
+    );
+
+    // Control variate should reduce sample variance
+    assert!(
+        controlled.sample_variance < uncontrolled.sample_variance,
+        "expected control variate to reduce variance: controlled={} vs uncontrolled={}",
+        controlled.sample_variance, uncontrolled.sample_variance,
+    );
+}
+
+#[test]
+fn control_zero_diagonal() {
+    // With a zero control_diagonal, results match laplacian_with_stats exactly.
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let zero_diag = vec![0.0; 3];
+
+    let v0: Vec<f64> = vec![1.0, 1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0, 1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2];
+
+    let stats = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
+    let controlled = echidna::stde::laplacian_with_control(
+        &tape, &[1.0, 2.0, 3.0], &dirs, &zero_diag,
+    );
+
+    assert_relative_eq!(controlled.estimate, stats.estimate, epsilon = 1e-14);
+    assert_relative_eq!(controlled.sample_variance, stats.sample_variance, epsilon = 1e-14);
+    assert_relative_eq!(controlled.standard_error, stats.standard_error, epsilon = 1e-14);
+}
+
+#[test]
+fn cross_validate_stats_with_hessian_trace() {
+    // laplacian_with_stats estimate matches hessian() trace for all Rademacher
+    let x = [1.0, 2.0];
+    let (_, _, hess) = echidna::hessian(sum_of_squares, &x);
+    let trace: f64 = hess[0][0] + hess[1][1];
+
+    let tape = record_fn(sum_of_squares, &x);
+    let v0: Vec<f64> = vec![1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0];
+    let v2: Vec<f64> = vec![-1.0, 1.0];
+    let v3: Vec<f64> = vec![-1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &x, &dirs);
+    assert_relative_eq!(result.estimate, trace, epsilon = 1e-10);
+}
+
+#[test]
+fn stats_linear_function() {
+    // Linear function: all second derivatives zero, estimate should be 0
+    let tape = record_fn(linear_fn, &[1.0, 2.0]);
+    let v0: Vec<f64> = vec![1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0], &dirs);
+    assert_relative_eq!(result.value, 3.0, epsilon = 1e-10);
+    assert_relative_eq!(result.estimate, 0.0, epsilon = 1e-10);
+    assert_relative_eq!(result.sample_variance, 0.0, epsilon = 1e-10);
+}
+
+#[test]
+fn estimator_result_fields() {
+    // Verify all fields are populated correctly
+    let tape = record_fn(sum_of_squares, &[3.0, 4.0]);
+    let v0: Vec<f64> = vec![1.0, 1.0];
+    let v1: Vec<f64> = vec![1.0, -1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1];
+
+    let result = echidna::stde::laplacian_with_stats(&tape, &[3.0, 4.0], &dirs);
+    assert_relative_eq!(result.value, 25.0, epsilon = 1e-10); // 9 + 16
+    assert_relative_eq!(result.estimate, 4.0, epsilon = 1e-10); // tr([[2,0],[0,2]]) = 4
+    assert_eq!(result.num_samples, 2);
+    // Diagonal Hessian + Rademacher => zero variance
+    assert_relative_eq!(result.sample_variance, 0.0, epsilon = 1e-10);
+    assert_relative_eq!(result.standard_error, 0.0, epsilon = 1e-10);
+}
+
+#[test]
+#[should_panic(expected = "control_diagonal.len() must match tape.num_inputs()")]
+fn control_dimension_mismatch_panics() {
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let wrong_diag = vec![1.0, 2.0, 3.0]; // n=2 but diag has 3 elements
+    let v: Vec<f64> = vec![1.0, 1.0];
+    let dirs: Vec<&[f64]> = vec![&v];
+
+    let _ = echidna::stde::laplacian_with_control(&tape, &[1.0, 2.0], &dirs, &wrong_diag);
+}

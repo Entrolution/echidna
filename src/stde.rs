@@ -16,6 +16,26 @@
 //! we can estimate operators like the Laplacian in O(S*K*L) time instead
 //! of O(n^2*L) for the full Hessian.
 //!
+//! # Variance properties
+//!
+//! The Hutchinson estimator `(1/S) sum_s v_s^T H v_s` is unbiased when
+//! E\[vv^T\] = I. Its variance depends on the distribution of v:
+//!
+//! - **Rademacher** (entries ±1): Var = `2 sum_{i≠j} H_ij^2`. The diagonal
+//!   contributes zero variance since `v_i^2 = 1` always.
+//! - **Gaussian** (v ~ N(0,I)): Var = `2 ||H||_F^2`. Higher variance than
+//!   Rademacher because `v_i^2 ~ chi-squared(1)` introduces diagonal noise.
+//!
+//! The [`laplacian_with_control`] function reduces Gaussian variance to match
+//! Rademacher by subtracting the exact diagonal contribution (a control
+//! variate). This requires the diagonal from [`hessian_diagonal`] (n extra
+//! evaluations). For Rademacher directions, the control variate has no effect
+//! since the diagonal variance is already zero.
+//!
+//! **Antithetic sampling** (pairing +v with -v) does **not** reduce variance
+//! for trace estimation. The Hutchinson sample `v^T H v` is quadratic (even)
+//! in v, so `(-v)^T H (-v) = v^T H v` — antithetic pairs are identical.
+//!
 //! # Design
 //!
 //! - **No `rand` dependency**: all functions accept user-provided direction
@@ -30,6 +50,30 @@ use crate::bytecode_tape::BytecodeTape;
 use crate::taylor::Taylor;
 use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
 use crate::Float;
+
+// ══════════════════════════════════════════════
+//  Result types
+// ══════════════════════════════════════════════
+
+/// Result of a stochastic estimation with sample statistics.
+///
+/// Contains the function value, the estimated operator value, and
+/// sample statistics (variance, standard error) that quantify
+/// estimator quality.
+#[derive(Clone, Debug)]
+pub struct EstimatorResult<F> {
+    /// Function value f(x).
+    pub value: F,
+    /// Estimated operator value (e.g. Laplacian).
+    pub estimate: F,
+    /// Sample variance of the per-direction estimates.
+    /// Zero when `num_samples == 1` (undefined, clamped to zero).
+    pub sample_variance: F,
+    /// Standard error of the mean: `sqrt(sample_variance / num_samples)`.
+    pub standard_error: F,
+    /// Number of direction samples used.
+    pub num_samples: usize,
+}
 
 // ══════════════════════════════════════════════
 //  Low-level: single-direction jet propagation
@@ -154,6 +198,152 @@ pub fn laplacian<F: Float>(
     let laplacian = sum / s;
 
     (value, laplacian)
+}
+
+/// Estimate the Laplacian with sample statistics via Hutchinson's trace estimator.
+///
+/// Same estimator as [`laplacian`], but additionally computes sample variance
+/// and standard error using Welford's online algorithm (numerically stable,
+/// single pass).
+///
+/// Each direction produces a sample `2 * c2_s`. The returned statistics
+/// describe the distribution of these samples.
+///
+/// # Panics
+///
+/// Panics if `directions` is empty or any direction's length does not match
+/// `tape.num_inputs()`.
+pub fn laplacian_with_stats<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    directions: &[&[F]],
+) -> EstimatorResult<F> {
+    assert!(!directions.is_empty(), "directions must not be empty");
+
+    let two = F::from(2.0).unwrap();
+    let mut buf = Vec::new();
+    let mut value = F::zero();
+
+    // Welford's online algorithm
+    let mut mean = F::zero();
+    let mut m2 = F::zero();
+
+    for (k, v) in directions.iter().enumerate() {
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
+        value = c0;
+        let sample = two * c2;
+
+        let k1 = F::from(k + 1).unwrap();
+        let delta = sample - mean;
+        mean = mean + delta / k1;
+        let delta2 = sample - mean;
+        m2 = m2 + delta * delta2;
+    }
+
+    let s = directions.len();
+    let sf = F::from(s).unwrap();
+    let (sample_variance, standard_error) = if s > 1 {
+        let var = m2 / (sf - F::one());
+        (var, (var / sf).sqrt())
+    } else {
+        (F::zero(), F::zero())
+    };
+
+    EstimatorResult {
+        value,
+        estimate: mean,
+        sample_variance,
+        standard_error,
+        num_samples: s,
+    }
+}
+
+/// Estimate the Laplacian with a diagonal control variate.
+///
+/// Uses the exact Hessian diagonal (from [`hessian_diagonal`]) as a control
+/// variate to reduce estimator variance. Each raw Hutchinson sample
+/// `raw_s = v^T H v = 2 * c2_s` is adjusted:
+///
+/// ```text
+/// adjusted_s = raw_s - sum_j(D_jj * v_j^2) + tr(D)
+/// ```
+///
+/// where D is the diagonal of H. The adjustment subtracts the noisy diagonal
+/// contribution and adds back its exact expectation `tr(D)`.
+///
+/// **Effect by distribution**:
+/// - **Gaussian**: reduces variance from `2||H||_F^2` to `2 sum_{i≠j} H_ij^2`
+///   (matching Rademacher performance).
+/// - **Rademacher**: no effect, since `v_j^2 = 1` always, so the adjustment
+///   is `sum_j D_jj * 1 - tr(D) = 0`.
+///
+/// Returns an [`EstimatorResult`] with statistics computed over the adjusted
+/// samples.
+///
+/// # Panics
+///
+/// Panics if `directions` is empty, if any direction's length does not match
+/// `tape.num_inputs()`, or if `control_diagonal.len() != tape.num_inputs()`.
+pub fn laplacian_with_control<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    directions: &[&[F]],
+    control_diagonal: &[F],
+) -> EstimatorResult<F> {
+    assert!(!directions.is_empty(), "directions must not be empty");
+    let n = tape.num_inputs();
+    assert_eq!(
+        control_diagonal.len(),
+        n,
+        "control_diagonal.len() must match tape.num_inputs()"
+    );
+
+    let two = F::from(2.0).unwrap();
+    let trace_control: F = control_diagonal.iter().copied().fold(F::zero(), |a, b| a + b);
+
+    let mut buf = Vec::new();
+    let mut value = F::zero();
+
+    // Welford's online algorithm
+    let mut mean = F::zero();
+    let mut m2 = F::zero();
+
+    for (k, v) in directions.iter().enumerate() {
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
+        value = c0;
+
+        let raw = two * c2;
+
+        // Control variate: subtract v^T D v, add back E[v^T D v] = tr(D)
+        let cv: F = control_diagonal
+            .iter()
+            .zip(v.iter())
+            .fold(F::zero(), |acc, (&d, &vi)| acc + d * vi * vi);
+        let adjusted = raw - cv + trace_control;
+
+        let k1 = F::from(k + 1).unwrap();
+        let delta = adjusted - mean;
+        mean = mean + delta / k1;
+        let delta2 = adjusted - mean;
+        m2 = m2 + delta * delta2;
+    }
+
+    let s = directions.len();
+    let sf = F::from(s).unwrap();
+    let (sample_variance, standard_error) = if s > 1 {
+        let var = m2 / (sf - F::one());
+        (var, (var / sf).sqrt())
+    } else {
+        (F::zero(), F::zero())
+    };
+
+    EstimatorResult {
+        value,
+        estimate: mean,
+        sample_variance,
+        standard_error,
+        num_samples: s,
+    }
 }
 
 /// Exact Hessian diagonal via n coordinate-direction evaluations.

@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R3 (Taylor mode AD), and R2a+R2c (STDE) are complete. 346 tests passing.
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R1a+R3 (Taylor mode AD), R2a+R2c (STDE), and R2b (variance reduction) are complete. 359 tests passing.
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -23,6 +23,7 @@ This roadmap synthesizes:
 | R3 | Public `forward_tangent` on BytecodeTape, `output_index()` accessor | Complete |
 | R1a | `Taylor<F, K>` (const-generic) + `TaylorDyn<F>` (arena-based) + shared `taylor_ops` propagation rules, 35+ elementals, `Float`/`Scalar`/`num_traits::Float` impls, 33 tests | Complete |
 | R2a+R2c | STDE module: jet propagation, Laplacian estimator, Hessian diagonal, directional derivatives, TaylorDyn variants, 20 tests | Complete |
+| R2b | STDE variance reduction: `EstimatorResult` with sample statistics, `laplacian_with_stats` (Welford's online variance), `laplacian_with_control` (diagonal control variate), 13 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -80,12 +81,11 @@ API: `taylor_jet_2nd` / `taylor_jet_2nd_with_buf` (single-direction), `direction
 
 Key file: `src/stde.rs`.
 
-**R2b. Variance reduction**
+**R2b. Variance reduction** — **COMPLETE**
 
-- Antithetic sampling (pair +v with -v)
-- Control variates using lower-order derivative information
-- Stratified sampling over coordinate directions
-- Batch estimation with confidence intervals
+Implemented `EstimatorResult<F>` struct (value, estimate, sample_variance, standard_error, num_samples), `laplacian_with_stats` (Hutchinson with Welford's online variance), and `laplacian_with_control` (diagonal control variate that reduces Gaussian variance to match Rademacher). Antithetic sampling was analyzed and skipped — `v^T H v` is even in v, so pairing +v/-v provides zero variance reduction. Stratified sampling is subsumed by the control variate approach. 13 tests covering correctness, variance properties, edge cases, and cross-validation.
+
+Key file: `src/stde.rs`.
 
 **R2c. PDE operator estimation** — **COMPLETE** (delivered via R2a)
 
@@ -229,14 +229,14 @@ R1a (Taylor type + UTP rules)       ─── ✓ DONE
          │
          ├──▶ R2c (PDE operators)   ─── ✓ DONE (delivered via R2a)
          │
-         └──▶ R2b (variance reduction) ─── NEXT
+         └──▶ R2b (variance reduction) ─── ✓ DONE
 
 R4a-d (implicit extensions)          ─── Independent of R1, can parallelize
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
-The critical path remaining is **R2b** (variance reduction). R1c (Taylor reverse) and R1d (ODE Taylor) are also unblocked.
+R2b is complete. The next unblocked items are **R1c** (Taylor reverse) and **R1d** (ODE Taylor integration).
 
 R4 (remaining implicit features), R7 (serde), and R8 (benchmarks) are independent and can be interleaved as needed.
 
