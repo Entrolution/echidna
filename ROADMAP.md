@@ -28,7 +28,7 @@ All Phase 1 items are done. Items 1.4, 1.5, 1.7-1.11 were already addressed in p
 |---|------|--------|
 | 1.1 | `cargo check --features gpu-wgpu` in CI lint job | Done |
 | 1.2 | echidna-optim `--features sparse-implicit` in CI test matrix | Done |
-| 1.3 | `cargo-semver-checks` in CI | Done |
+| 1.3 | `cargo-semver-checks` | Done (run locally — too slow for CI) |
 | 1.4 | Harden CI `cargo-audit` install | Already done |
 | 1.5 | Review lint suppressions | Already done (ndarray/nalgebra suppressions removed; bytecode_tape one justified) |
 | 1.6 | Bump `num-dual` 0.10 → 0.11 | Done |
