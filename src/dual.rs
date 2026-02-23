@@ -1,3 +1,9 @@
+//! Forward-mode dual numbers for automatic differentiation.
+//!
+//! [`Dual<F>`] pairs a value with its tangent (derivative), using the algebra of
+//! dual numbers where epsilon^2 = 0. Best suited for functions with few inputs and many
+//! outputs, or when computing a single directional derivative (JVP).
+
 use std::fmt::{self, Display};
 
 use crate::Float;

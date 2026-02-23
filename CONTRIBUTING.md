@@ -4,7 +4,7 @@ Thank you for your interest in contributing to echidna! This document provides g
 
 ## Code of Conduct
 
-This project follows the [Rust Code of Conduct](https://www.rust-lang.org/policies/code-of-conduct). Please be respectful and constructive in all interactions.
+This project is governed by the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). Please be respectful and constructive in all interactions.
 
 ## Getting Started
 
@@ -126,17 +126,54 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 
 ```
 src/
-├── lib.rs                 # Re-exports, top-level docs
+├── lib.rs                 # Re-exports, crate-level docs
 ├── float.rs               # Float trait (f32/f64 marker)
 ├── scalar.rs              # Scalar trait (AD-generic bound)
 ├── dual.rs                # Dual<F> forward-mode type + elementals
+├── dual_vec.rs            # DualVec<F, N> batched forward-mode
 ├── tape.rs                # Adept-style two-stack tape
 ├── reverse.rs             # Reverse<F> reverse-mode type
-├── api.rs                 # Public closure API: grad, jvp, vjp, jacobian
+├── api.rs                 # Public API: grad, jvp, vjp, jacobian, hessian, ...
+├── breverse.rs            # BReverse<F> bytecode-tape reverse variable [bytecode]
+├── bytecode_tape.rs       # BytecodeTape SoA representation [bytecode]
+├── opcode.rs              # Opcode definitions and dispatch [bytecode]
+├── sparse.rs              # Sparsity detection and graph coloring [bytecode]
+├── cross_country.rs       # Markowitz vertex elimination [bytecode]
+├── nonsmooth.rs           # Branch tracking, Clarke Jacobian [bytecode]
+├── checkpoint.rs          # Revolve + online + disk checkpointing [bytecode]
+├── taylor.rs              # Taylor<F, K> const-generic type [taylor]
+├── taylor_dyn.rs          # TaylorDyn<F> arena-based type [taylor]
+├── taylor_ops.rs          # Shared Taylor propagation rules [taylor]
+├── laurent.rs             # Laurent<F, K> singularity analysis [laurent]
+├── stde.rs                # Stochastic derivative estimators [stde]
+├── gpu/                   # GPU acceleration [gpu-wgpu, gpu-cuda]
+├── faer_support.rs        # faer integration [faer]
+├── nalgebra_support.rs    # nalgebra integration [nalgebra]
+├── ndarray_support.rs     # ndarray integration [ndarray]
 └── traits/
     ├── mod.rs
-    ├── std_ops.rs         # Add/Sub/Mul/Div/Neg for Dual and Reverse
-    └── num_traits_impls.rs # Zero, One, Num, Float, etc.
+    ├── std_ops.rs         # Add/Sub/Mul/Div/Neg for all AD types
+    ├── num_traits_impls.rs # Zero, One, Num, Float, etc.
+    ├── taylor_std_ops.rs  # Taylor arithmetic
+    ├── taylor_num_traits.rs # Taylor num_traits
+    ├── laurent_std_ops.rs # Laurent arithmetic
+    └── laurent_num_traits.rs # Laurent num_traits
+
+echidna-optim/src/
+├── lib.rs                 # Re-exports
+├── convergence.rs         # Convergence parameters
+├── line_search.rs         # Armijo line search
+├── objective.rs           # Objective/TapeObjective traits
+├── result.rs              # OptimResult, TerminationReason
+├── implicit.rs            # Implicit differentiation (IFT)
+├── piggyback.rs           # Piggyback differentiation
+├── sparse_implicit.rs     # Sparse implicit diff [sparse-implicit]
+├── linalg.rs              # Linear algebra utilities
+└── solvers/
+    ├── mod.rs
+    ├── lbfgs.rs           # L-BFGS
+    ├── newton.rs          # Newton
+    └── trust_region.rs    # Trust-region
 ```
 
 ## Adding New Features

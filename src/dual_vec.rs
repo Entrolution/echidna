@@ -1,3 +1,9 @@
+//! Batched forward-mode dual numbers with `N` tangent lanes.
+//!
+//! [`DualVec<F, N>`] carries `N` independent tangent directions simultaneously,
+//! enabling vectorized Jacobian columns or batched Hessian computation via
+//! forward-over-reverse mode.
+
 use std::fmt::{self, Display};
 
 use crate::Float;

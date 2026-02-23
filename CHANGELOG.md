@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Bytecode Tape (Graph-Mode AD)
+- `BytecodeTape` SoA graph-mode AD with opcode dispatch and tape optimization (CSE, DCE, constant folding)
+- `BReverse<F>` tape-recording reverse-mode variable
+- `record()` / `record_multi()` to build tapes from closures
+- Hessian computation via forward-over-reverse (`hessian`, `hvp`)
+- `DualVec<F, N>` batched forward-mode with N tangent lanes for vectorized Hessians (`hessian_vec`)
+
+#### Sparse Derivatives
+- Sparsity pattern detection via bitset propagation
+- Graph coloring: greedy distance-2 for Jacobians, star bicoloring for Hessians
+- `sparse_jacobian`, `sparse_hessian`, `sparse_hessian_vec`
+- CSR storage (`CsrPattern`, `JacobianSparsityPattern`, `SparsityPattern`)
+
+#### Taylor Mode AD
+- `Taylor<F, K>` const-generic Taylor coefficients with Cauchy product propagation
+- `TaylorDyn<F>` arena-based dynamic Taylor (runtime degree)
+- `taylor_grad` / `taylor_grad_with_buf` — reverse-over-Taylor for gradient + HVP + higher-order adjoints
+- `ode_taylor_step` / `ode_taylor_step_with_buf` — ODE Taylor series integration via coefficient bootstrapping
+
+#### Stochastic Taylor Derivative Estimators (STDE)
+- `laplacian` — Hutchinson trace estimator for Laplacian approximation
+- `hessian_diagonal` — exact Hessian diagonal via coordinate basis
+- `directional_derivatives` — batched second-order directional derivatives
+- `laplacian_with_stats` — Welford's online variance tracking
+- `laplacian_with_control` — diagonal control variate variance reduction
+
+#### Cross-Country Elimination
+- `jacobian_cross_country` — Markowitz vertex elimination on linearized computational graph
+
+#### Nonsmooth AD
+- `forward_nonsmooth` — branch tracking and kink detection for abs/min/max
+- `clarke_jacobian` — Clarke generalized Jacobian via limiting Jacobian enumeration
+- `KinkEntry`, `NonsmoothInfo`, `ClarkeError` types
+
+#### Laurent Series
+- `Laurent<F, K>` — singularity analysis with pole tracking, flows through `BytecodeTape::forward_tangent`
+
+#### Checkpointing
+- `grad_checkpointed` — binomial Revolve checkpointing
+- `grad_checkpointed_online` — periodic thinning for unknown step count
+- `grad_checkpointed_disk` — disk-backed for large state vectors
+- `grad_checkpointed_with_hints` — user-controlled checkpoint placement
+
+#### GPU Acceleration
+- wgpu backend: batched forward, gradient, sparse Jacobian, HVP, sparse Hessian (f32, Metal/Vulkan/DX12)
+- CUDA backend: same operations with f32 + f64 support (NVRTC runtime compilation)
+
+#### Composable Mode Nesting
+- Type-level AD composition: `Dual<BReverse<f64>>`, `Taylor<BReverse<f64>, K>`, `DualVec<BReverse<f64>, N>`
+- `composed_hvp` convenience function for forward-over-reverse HVP
+
+#### Serialization
+- `serde` support for `BytecodeTape`, `Laurent<F, K>`, `KinkEntry`, `NonsmoothInfo`, `ClarkeError`
+- JSON and bincode roundtrip support
+
+#### Linear Algebra Integrations
+- `faer_support`: HVP, sparse Hessian, dense/sparse solvers (LU, Cholesky)
+- `nalgebra_support`: gradient, Hessian, Jacobian with nalgebra types
+- `ndarray_support`: HVP, sparse Hessian, sparse Jacobian with ndarray types
+
+#### Optimization Solvers (`echidna-optim`)
+- L-BFGS solver with two-loop recursion
+- Newton solver with Cholesky factorization
+- Trust-region solver with Steihaug-Toint CG
+- Armijo line search
+- Implicit differentiation: `implicit_tangent`, `implicit_adjoint`, `implicit_jacobian`, `implicit_hvp`, `implicit_hessian`
+- Piggyback differentiation: tangent, adjoint, and interleaved forward-adjoint modes
+- Sparse implicit differentiation via faer sparse LU (`sparse-implicit` feature)
+
+#### Benchmarking
+- Criterion benchmarks for Taylor mode, STDE, cross-country, sparse derivatives, nonsmooth
+- Comparison benchmarks against num-dual
+- CI regression detection via criterion-compare-action
+
+### Changed
+
+- Tape optimization: algebraic simplification at recording time (identity, absorbing, powi patterns)
+- Tape optimization: targeted multi-output DCE (`dead_code_elimination_for_outputs`)
+
 ## [0.1.0] - 2026-02-21
 
 ### Added

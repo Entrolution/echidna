@@ -1,3 +1,9 @@
+//! Adept-style two-stack tape for reverse-mode AD.
+//!
+//! Stores precomputed partial derivatives (multipliers) and operand indices during the
+//! forward pass. The reverse sweep is a single multiply-accumulate loop with zero-adjoint
+//! skipping — no opcode dispatch overhead. Used internally by [`crate::Reverse`].
+
 use std::cell::Cell;
 
 use crate::Float;

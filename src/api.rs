@@ -1,3 +1,9 @@
+//! Closure-based API for automatic differentiation.
+//!
+//! Provides top-level functions ([`grad`], [`jvp`], [`vjp`], [`jacobian`]) that handle
+//! tape setup, variable creation, and derivative extraction. With the `bytecode` feature,
+//! adds [`record`], [`hessian`], [`hvp`], [`sparse_jacobian`], [`sparse_hessian`], and more.
+
 use crate::dual::Dual;
 use crate::float::Float;
 use crate::reverse::Reverse;

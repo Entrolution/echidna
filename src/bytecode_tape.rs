@@ -35,7 +35,7 @@ pub const CONSTANT: u32 = u32::MAX;
 /// handles forward-mode tangent propagation and reverse-mode adjoint accumulation
 /// via chain rule using the partials you provide.
 ///
-/// For second-order derivatives (Hessian, HVP), implement [`CustomOpSecondOrder`]
+/// For second-order derivatives (Hessian, HVP), implement `CustomOpSecondOrder`
 /// additionally.
 ///
 /// # Example
@@ -286,7 +286,7 @@ impl<F: Float> BytecodeTape<F> {
     }
 
     /// Register a custom operation. Returns a handle for use with
-    /// [`BReverse::custom_unary`] and [`BReverse::custom_binary`].
+    /// [`crate::BReverse::custom_unary`] and [`crate::BReverse::custom_binary`].
     pub fn register_custom(&mut self, op: Arc<dyn CustomOp<F>>) -> CustomOpHandle {
         let idx = self.custom_ops.len();
         assert!(idx <= u16::MAX as usize, "too many custom ops");
@@ -533,7 +533,7 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`ClarkeError::TooManyKinks`] if the number of active kinks exceeds
+    /// Returns [`crate::ClarkeError::TooManyKinks`] if the number of active kinks exceeds
     /// the limit (default 20, overridden by `max_active_kinks`).
     pub fn clarke_jacobian(
         &mut self,
@@ -641,7 +641,7 @@ impl<F: Float> BytecodeTape<F> {
     /// nonsmooth operations (`abs`, `min`, `max`) and records which branch was
     /// taken at each one.
     ///
-    /// Returns [`NonsmoothInfo`] containing all kink entries in tape order.
+    /// Returns [`crate::NonsmoothInfo`] containing all kink entries in tape order.
     pub fn forward_nonsmooth(&mut self, inputs: &[F]) -> crate::nonsmooth::NonsmoothInfo<F> {
         self.forward(inputs);
 
