@@ -39,6 +39,7 @@ serde = ["dep:serde"]
 ndarray = ["dep:ndarray", "bytecode"]
 faer = ["dep:faer", "bytecode"]
 taylor = []
+laurent = ["taylor"]
 stde = ["bytecode", "taylor"]
 
 [[bench]]

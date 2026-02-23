@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), and R5 (cross-country elimination) are complete. 443 tests passing (388 core + 55 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), and R6 (nonsmooth extensions) are complete. 474 tests passing (419 core + 55 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -31,6 +31,7 @@ This roadmap synthesizes:
 | R4c | Second-order implicit derivatives: `implicit_hvp` via nested `Dual<Dual<F>>` forward passes, `implicit_hessian` for full m×n×n tensor with LU factor reuse, 6 tests | Complete |
 | R4d | Sparse F_z exploitation: `SparseImplicitContext` precomputes sparsity + coloring, `implicit_tangent_sparse`/`implicit_adjoint_sparse`/`implicit_jacobian_sparse` via faer sparse LU, feature-gated behind `sparse-implicit`, 9 tests | Complete |
 | R5 | Cross-country elimination: `LinearizedGraph` + Markowitz vertex elimination for Jacobian computation, `jacobian_cross_country` on BytecodeTape, 10 tests | Complete |
+| R6 | Nonsmooth extensions: branch tracking + kink detection (`forward_nonsmooth`), Clarke generalized Jacobian via limiting Jacobian enumeration (`clarke_jacobian`), `Laurent<F, K>` singularity analysis type with full `num_traits::Float`/`Scalar` integration, 31 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
@@ -139,23 +140,26 @@ Public API: `BytecodeTape::jacobian_cross_country(&mut self, inputs: &[F]) -> Ve
 
 Key files: `src/cross_country.rs`, `src/bytecode_tape.rs`.
 
-### R6. Nonsmooth Extensions
+### R6. Nonsmooth Extensions — **COMPLETE**
 **Book Phase 7 (Ch 14)**
 
-**R6a. Correct abs/min/max handling**
+**R6a. Branch tracking and kink detection** — **COMPLETE**
 
-Currently `abs`, `min`, `max` use standard derivatives which are undefined at kinks. Implement:
-- Branch tracking during forward evaluation
-- Active set identification at kink points
-- Subgradient selection rules (lexicographic, steepest descent)
+`BytecodeTape::forward_nonsmooth` detects abs/min/max kinks during forward evaluation, records `KinkEntry` with tape index, opcode, switching value, and branch taken. `NonsmoothInfo` provides `active_kinks(tol)`, `is_smooth(tol)`, and `signature()`. Feature-gated behind `bytecode`. 8 tests.
 
-**R6b. Generalized gradients (Clarke subdifferential)**
+Key files: `src/nonsmooth.rs`, `src/bytecode_tape.rs`.
 
-For piecewise smooth functions, compute elements of the Clarke generalized gradient. Important for ReLU networks, `max(0, x)` constraints, and L1 regularization.
+**R6b. Clarke generalized Jacobian** — **COMPLETE**
 
-**R6c. Laurent numbers (optional)**
+`BytecodeTape::clarke_jacobian` enumerates all 2^k sign combinations for k active kinks, computing limiting Jacobians via `reverse_with_forced_signs`. `jacobian_limiting` allows explicit forced branch choices. `forced_reverse_partials` in `opcode.rs` overrides nonsmooth op partials. Configurable kink limit (default 20) returns `ClarkeError::TooManyKinks`. 8 tests.
 
-Singularity analysis via Laurent series arithmetic. Detects and characterizes singularities in the computation. Specialized — defer unless there's a concrete use case.
+Key files: `src/opcode.rs`, `src/bytecode_tape.rs`.
+
+**R6c. Laurent numbers** — **COMPLETE**
+
+`Laurent<F, K>` — const-generic, stack-allocated, `Copy`. Arithmetic reuses `taylor_ops` (Cauchy product, division, reciprocal) with separate pole_order tracking. Always normalized (leading coefficient nonzero). Essential singularities (exp/sin/cos of pole) → NaN. Division by zero → NaN. `value()` returns ±infinity for poles. Full `num_traits::Float`, `Float`, `Scalar` integration — flows through `BytecodeTape::forward_tangent` for singularity detection. Feature-gated behind `laurent = ["taylor"]`. 15 tests.
+
+Key files: `src/laurent.rs`, `src/traits/laurent_std_ops.rs`, `src/traits/laurent_num_traits.rs`.
 
 ---
 
@@ -195,6 +199,10 @@ Expand beyond the existing Criterion benchmarks:
 ---
 
 ## Tier 4: Aspirational / Research
+
+### R6. Nonsmooth Extensions — **COMPLETE** (moved from Tier 4)
+
+See Tier 2 section above for full details.
 
 ### R11. GPU Acceleration
 **Design principles mention this; significant engineering effort**
@@ -242,6 +250,9 @@ R4b (interleaved forward-adjoint)    ─── ✓ DONE
 R4c (second-order implicit)          ─── ✓ DONE
 R4d (sparse F_z exploitation)        ─── ✓ DONE
 R5 (cross-country elimination)       ─── ✓ DONE
+R6a (branch tracking)                ─── ✓ DONE
+R6b (Clarke subdifferential)         ─── ✓ DONE
+R6c (Laurent numbers)                ─── ✓ DONE
 R7 (serde)                           ─── Independent, any time
 R8 (benchmarks)                      ─── Independent, any time
 ```
@@ -252,9 +263,11 @@ All R4 items (implicit/iterative features) are now complete.
 
 R5 (cross-country elimination) is now complete.
 
+R6 (nonsmooth extensions) is now complete.
+
 R7 (serde) and R8 (benchmarks) are independent and can be started in any order.
 
-R6 (nonsmooth) and R9+ are lower priority and can be scheduled opportunistically.
+R9+ are lower priority and can be scheduled opportunistically.
 
 ---
 
@@ -274,7 +287,8 @@ R6 (nonsmooth) and R9+ are lower priority and can be scheduled opportunistically
 | R4b | Fixed-point adjoint | ~200-300 lines |
 | R4c | Second-order implicit | ~200-300 lines |
 | R5 | Cross-country | ~600-1000 lines | ~450 lines (234 impl + 212 tests) |
-| R6a-b | Nonsmooth | ~500-800 lines |
+| R6a-b | Nonsmooth | ~500-800 lines | ~320 lines (impl) + ~250 lines (tests) |
+| R6c | Laurent numbers | ~350-500 lines | ~880 lines (impl) + ~200 lines (tests) |
 
 ---
 

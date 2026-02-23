@@ -15,3 +15,8 @@ pub mod breverse_ops;
 pub mod taylor_num_traits;
 #[cfg(feature = "taylor")]
 pub mod taylor_std_ops;
+
+#[cfg(feature = "laurent")]
+pub mod laurent_num_traits;
+#[cfg(feature = "laurent")]
+pub mod laurent_std_ops;

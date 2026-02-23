@@ -88,6 +88,48 @@ pub enum OpCode {
     Custom,
 }
 
+/// Returns true if this opcode is a nonsmooth operation (abs, min, max).
+///
+/// These operations have kinks where the derivative is undefined. Signum is
+/// excluded — it has zero derivative on both sides, so there's no useful
+/// subdifferential information.
+#[inline]
+pub fn is_nonsmooth(op: OpCode) -> bool {
+    matches!(op, OpCode::Abs | OpCode::Min | OpCode::Max)
+}
+
+/// Compute reverse-mode partials with a forced branch choice for nonsmooth ops.
+///
+/// For nonsmooth ops (`Abs`, `Min`, `Max`), uses the given `sign` to select
+/// which branch's derivative to return, regardless of the actual operand values.
+/// For all other ops, delegates to [`reverse_partials`].
+///
+/// - `Abs`: `sign >= 0` → `(+1, 0)`, `sign < 0` → `(-1, 0)`
+/// - `Max`: `sign >= 0` → `(1, 0)` (first arg wins), `sign < 0` → `(0, 1)`
+/// - `Min`: `sign >= 0` → `(1, 0)` (first arg wins), `sign < 0` → `(0, 1)`
+#[inline]
+pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8) -> (T, T) {
+    let zero = T::zero();
+    let one = T::one();
+    match op {
+        OpCode::Abs => {
+            if sign >= 0 {
+                (one, zero)
+            } else {
+                (-one, zero)
+            }
+        }
+        OpCode::Max | OpCode::Min => {
+            if sign >= 0 {
+                (one, zero)
+            } else {
+                (zero, one)
+            }
+        }
+        _ => reverse_partials(op, a, b, r),
+    }
+}
+
 /// Evaluate a single opcode in the forward direction.
 ///
 /// Generic over `T: Float` so Phase 3 can call it with `Dual<F>`.

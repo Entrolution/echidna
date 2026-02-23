@@ -133,6 +133,21 @@ impl<F: Float + crate::taylor_dyn::TaylorArenaLocal> Scalar for crate::taylor_dy
     }
 }
 
+#[cfg(feature = "laurent")]
+impl<F: Float, const K: usize> Scalar for crate::laurent::Laurent<F, K> {
+    type Float = F;
+
+    #[inline]
+    fn from_f(val: F) -> Self {
+        crate::laurent::Laurent::constant(val)
+    }
+
+    #[inline]
+    fn value(&self) -> F {
+        crate::laurent::Laurent::value(self)
+    }
+}
+
 #[cfg(feature = "bytecode")]
 impl<F: Float + crate::bytecode_tape::BtapeThreadLocal> Scalar for crate::breverse::BReverse<F> {
     type Float = F;

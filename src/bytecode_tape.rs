@@ -353,6 +353,104 @@ impl<F: Float> BytecodeTape<F> {
         self.reverse_seeded(weights)
     }
 
+    /// Compute a Jacobian with forced branch choices at specified tape indices.
+    ///
+    /// For each `(tape_index, sign)` in `forced_signs`, the reverse sweep uses
+    /// [`forced_reverse_partials`](opcode::forced_reverse_partials) instead of the
+    /// standard partials at that index.
+    ///
+    /// This is the building block for Clarke subdifferential enumeration.
+    pub fn jacobian_limiting(&mut self, inputs: &[F], forced_signs: &[(u32, i8)]) -> Vec<Vec<F>> {
+        self.forward(inputs);
+
+        let sign_map: HashMap<u32, i8> = forced_signs.iter().copied().collect();
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let ni = self.num_inputs as usize;
+        let mut jac = Vec::with_capacity(out_indices.len());
+
+        for &out_idx in &out_indices {
+            let adjoints = self.reverse_with_forced_signs(out_idx, &sign_map);
+            jac.push(adjoints[..ni].to_vec());
+        }
+
+        jac
+    }
+
+    /// Compute the Clarke generalized Jacobian via limiting Jacobian enumeration.
+    ///
+    /// 1. Runs `forward_nonsmooth` to detect all kink operations and their branches.
+    /// 2. Identifies "active" kinks (|switching_value| < `tol`).
+    /// 3. Enumerates all 2^k sign combinations for the k active kinks.
+    /// 4. For each combination, computes a limiting Jacobian via forced reverse sweeps.
+    ///
+    /// Returns the nonsmooth info and a vector of limiting Jacobians.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClarkeError::TooManyKinks`] if the number of active kinks exceeds
+    /// the limit (default 20, overridden by `max_active_kinks`).
+    pub fn clarke_jacobian(
+        &mut self,
+        inputs: &[F],
+        tol: F,
+        max_active_kinks: Option<usize>,
+    ) -> Result<(crate::nonsmooth::NonsmoothInfo<F>, Vec<Vec<Vec<F>>>), crate::nonsmooth::ClarkeError> {
+        #![allow(clippy::type_complexity)]
+        let info = self.forward_nonsmooth(inputs);
+        let active: Vec<&crate::nonsmooth::KinkEntry<F>> = info.active_kinks(tol);
+        let k = active.len();
+        let limit = max_active_kinks.unwrap_or(20);
+
+        if k > limit {
+            return Err(crate::nonsmooth::ClarkeError::TooManyKinks {
+                count: k,
+                limit,
+            });
+        }
+
+        let active_indices: Vec<u32> = active.iter().map(|e| e.tape_index).collect();
+
+        // Build sign_map from all (non-active) kinks using their natural branches,
+        // then override active kinks per combination.
+        let base_signs: HashMap<u32, i8> = info
+            .kinks
+            .iter()
+            .map(|e| (e.tape_index, e.branch))
+            .collect();
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+        let ni = self.num_inputs as usize;
+
+        let num_combos = 1usize << k;
+        let mut jacobians = Vec::with_capacity(num_combos);
+
+        for combo in 0..num_combos {
+            let mut sign_map = base_signs.clone();
+            for (bit, &idx) in active_indices.iter().enumerate() {
+                let sign: i8 = if (combo >> bit) & 1 == 0 { 1 } else { -1 };
+                sign_map.insert(idx, sign);
+            }
+
+            let mut jac = Vec::with_capacity(out_indices.len());
+            for &out_idx in &out_indices {
+                let adjoints = self.reverse_with_forced_signs(out_idx, &sign_map);
+                jac.push(adjoints[..ni].to_vec());
+            }
+            jacobians.push(jac);
+        }
+
+        Ok((info, jacobians))
+    }
+
     /// Re-evaluate the tape at new inputs (forward sweep).
     ///
     /// Overwrites `values` in-place — no allocation.
@@ -396,6 +494,63 @@ impl<F: Float> BytecodeTape<F> {
                 }
             }
         }
+    }
+
+    /// Forward sweep with nonsmooth branch tracking.
+    ///
+    /// Calls [`forward`](Self::forward) to evaluate the tape, then scans for
+    /// nonsmooth operations (`abs`, `min`, `max`) and records which branch was
+    /// taken at each one.
+    ///
+    /// Returns [`NonsmoothInfo`] containing all kink entries in tape order.
+    pub fn forward_nonsmooth(
+        &mut self,
+        inputs: &[F],
+    ) -> crate::nonsmooth::NonsmoothInfo<F> {
+        self.forward(inputs);
+
+        let mut kinks = Vec::new();
+        for i in 0..self.opcodes.len() {
+            let op = self.opcodes[i];
+            if !opcode::is_nonsmooth(op) {
+                continue;
+            }
+
+            let [a_idx, b_idx] = self.arg_indices[i];
+            let a = self.values[a_idx as usize];
+
+            match op {
+                OpCode::Abs => {
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a,
+                        branch: if a >= F::zero() { 1 } else { -1 },
+                    });
+                }
+                OpCode::Max => {
+                    let b = self.values[b_idx as usize];
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a - b,
+                        branch: if a >= b { 1 } else { -1 },
+                    });
+                }
+                OpCode::Min => {
+                    let b = self.values[b_idx as usize];
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a - b,
+                        branch: if a <= b { 1 } else { -1 },
+                    });
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        crate::nonsmooth::NonsmoothInfo { kinks }
     }
 
     /// Reverse sweep: compute adjoints seeded at the output.
@@ -442,6 +597,72 @@ impl<F: Float> BytecodeTape<F> {
                     };
                     let r = self.values[i];
                     let (da, db) = opcode::reverse_partials(op, a, b, r);
+
+                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                    if b_idx != UNUSED && op != OpCode::Powi {
+                        adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
+                    }
+                }
+            }
+        }
+        adjoints
+    }
+
+    /// Reverse sweep with forced branch choices at specified tape indices.
+    ///
+    /// Mirrors the structure of [`reverse`](Self::reverse) exactly, including the
+    /// three-way dispatch for Custom / forced / standard ops.
+    fn reverse_with_forced_signs(
+        &self,
+        seed_index: u32,
+        forced_signs: &HashMap<u32, i8>,
+    ) -> Vec<F> {
+        let n = self.num_variables as usize;
+        let mut adjoints = vec![F::zero(); n];
+        adjoints[seed_index as usize] = F::one();
+
+        for i in (0..self.opcodes.len()).rev() {
+            let adj = adjoints[i];
+            if adj == F::zero() {
+                continue;
+            }
+
+            match self.opcodes[i] {
+                OpCode::Input | OpCode::Const => continue,
+                OpCode::Custom => {
+                    // Custom ops always use their callback — never forced.
+                    adjoints[i] = F::zero();
+                    let [a_idx, cb_idx] = self.arg_indices[i];
+                    let a = self.values[a_idx as usize];
+                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
+                    let b = b_idx_opt
+                        .map(|bi| self.values[bi as usize])
+                        .unwrap_or(F::zero());
+                    let r = self.values[i];
+                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
+                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                    if let Some(bi) = b_idx_opt {
+                        adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
+                    }
+                }
+                op => {
+                    adjoints[i] = F::zero();
+                    let [a_idx, b_idx] = self.arg_indices[i];
+                    let a = self.values[a_idx as usize];
+                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                        self.values[b_idx as usize]
+                    } else if op == OpCode::Powi {
+                        F::from(b_idx).unwrap_or_else(|| F::zero())
+                    } else {
+                        F::zero()
+                    };
+                    let r = self.values[i];
+
+                    let (da, db) = if let Some(&sign) = forced_signs.get(&(i as u32)) {
+                        opcode::forced_reverse_partials(op, a, b, r, sign)
+                    } else {
+                        opcode::reverse_partials(op, a, b, r)
+                    };
 
                     adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                     if b_idx != UNUSED && op != OpCode::Powi {

@@ -18,6 +18,8 @@ pub mod cross_country;
 #[cfg(feature = "bytecode")]
 pub mod opcode;
 #[cfg(feature = "bytecode")]
+pub mod nonsmooth;
+#[cfg(feature = "bytecode")]
 pub mod sparse;
 
 #[cfg(feature = "taylor")]
@@ -26,6 +28,9 @@ pub mod taylor;
 pub mod taylor_dyn;
 #[cfg(feature = "taylor")]
 pub mod taylor_ops;
+
+#[cfg(feature = "laurent")]
+pub mod laurent;
 
 #[cfg(feature = "stde")]
 pub mod stde;
@@ -54,7 +59,12 @@ pub use bytecode_tape::{BytecodeTape, CustomOp, CustomOpHandle};
 #[cfg(feature = "bytecode")]
 pub use checkpoint::grad_checkpointed;
 #[cfg(feature = "bytecode")]
+pub use nonsmooth::{ClarkeError, KinkEntry, NonsmoothInfo};
+#[cfg(feature = "bytecode")]
 pub use sparse::{CsrPattern, JacobianSparsityPattern, SparsityPattern};
+
+#[cfg(feature = "laurent")]
+pub use laurent::Laurent;
 
 #[cfg(feature = "taylor")]
 pub use taylor::Taylor;
