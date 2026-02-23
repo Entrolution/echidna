@@ -3,7 +3,7 @@
 [![CI](https://github.com/Entrolution/echidna/actions/workflows/ci.yml/badge.svg)](https://github.com/Entrolution/echidna/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/echidna.svg)](https://crates.io/crates/echidna)
 [![Docs.rs](https://docs.rs/echidna/badge.svg)](https://docs.rs/echidna)
-[![License](https://img.shields.io/crates/l/echidna.svg)](LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.80-blue.svg)](https://www.rust-lang.org)
 
 A high-performance automatic differentiation library for Rust.
