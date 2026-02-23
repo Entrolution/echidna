@@ -83,3 +83,61 @@ pub fn tape_hessian_ndarray<F: Float>(
         Array2::from_shape_vec((n, n), hess_flat).unwrap(),
     )
 }
+
+/// Compute the Hessian-vector product, returning `(gradient, hvp)` as `Array1`.
+pub fn hvp_ndarray<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &Array1<F>,
+    v: &Array1<F>,
+) -> (Array1<F>, Array1<F>) {
+    let xs = x.as_slice().unwrap();
+    let vs = v.as_slice().unwrap();
+    let (grad, hvp) = crate::api::hvp(f, xs, vs);
+    (Array1::from_vec(grad), Array1::from_vec(hvp))
+}
+
+/// Compute the Hessian-vector product on a pre-recorded tape, returning `(gradient, hvp)`.
+pub fn tape_hvp_ndarray<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &Array1<F>,
+    v: &Array1<F>,
+) -> (Array1<F>, Array1<F>) {
+    let xs = x.as_slice().unwrap();
+    let vs = v.as_slice().unwrap();
+    let (grad, hvp) = tape.hvp(xs, vs);
+    (Array1::from_vec(grad), Array1::from_vec(hvp))
+}
+
+/// Compute the sparse Hessian, returning `(value, gradient, pattern, values)`.
+///
+/// The `values` array contains non-zero Hessian entries in the order defined by `pattern`.
+pub fn sparse_hessian_ndarray<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    x: &Array1<F>,
+) -> (F, Array1<F>, crate::sparse::SparsityPattern, Array1<F>) {
+    let xs = x.as_slice().unwrap();
+    let (val, grad, pattern, values) = crate::api::sparse_hessian(f, xs);
+    (val, Array1::from_vec(grad), pattern, Array1::from_vec(values))
+}
+
+/// Compute the sparse Hessian on a pre-recorded tape.
+pub fn tape_sparse_hessian_ndarray<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &Array1<F>,
+) -> (F, Array1<F>, crate::sparse::SparsityPattern, Array1<F>) {
+    let xs = x.as_slice().unwrap();
+    let (val, grad, pattern, values) = tape.sparse_hessian(xs);
+    (val, Array1::from_vec(grad), pattern, Array1::from_vec(values))
+}
+
+/// Compute the sparse Jacobian, returning `(pattern, column_vectors)`.
+///
+/// Each `Array1` in the returned `Vec` contains one column of sparse Jacobian values.
+pub fn sparse_jacobian_ndarray<F: Float + BtapeThreadLocal>(
+    f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
+    x: &Array1<F>,
+) -> (crate::sparse::JacobianSparsityPattern, Vec<F>) {
+    let xs = x.as_slice().unwrap();
+    let (_outputs, pattern, values) = crate::api::sparse_jacobian(f, xs);
+    (pattern, values)
+}

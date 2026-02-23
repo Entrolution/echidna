@@ -1,6 +1,9 @@
 #![cfg(feature = "ndarray")]
 
-use echidna::ndarray_support::{grad_ndarray, hessian_ndarray, jacobian_ndarray};
+use echidna::ndarray_support::{
+    grad_ndarray, hessian_ndarray, hvp_ndarray, jacobian_ndarray, sparse_hessian_ndarray,
+    tape_hvp_ndarray,
+};
 use echidna::BReverse;
 use ndarray::array;
 
@@ -61,4 +64,62 @@ fn jacobian_ndarray_multi() {
     assert!((jac[[0, 1]] - 2.0).abs() < 1e-10, "df0/dy={}", jac[[0, 1]]);
     assert!((jac[[1, 0]] - 0.0).abs() < 1e-10, "df1/dx={}", jac[[1, 0]]);
     assert!((jac[[1, 1]] - 6.0).abs() < 1e-10, "df1/dy={}", jac[[1, 1]]);
+}
+
+#[test]
+fn hvp_ndarray_rosenbrock() {
+    let x = array![1.0_f64, 2.0];
+    let v = array![1.0_f64, 0.0];
+    let (grad, hvp) = hvp_ndarray(rosenbrock_br, &x, &v);
+
+    // Gradient at (1,2)
+    assert!((grad[0] - (-400.0)).abs() < 1e-10, "grad[0]={}", grad[0]);
+    assert!((grad[1] - 200.0).abs() < 1e-10, "grad[1]={}", grad[1]);
+
+    // HVP = H * [1, 0] = first column of Hessian
+    assert_eq!(hvp.len(), 2);
+    // H[0,0] = 2 + 1200*x^2 - 400*y = 2 + 1200 - 800 = 402
+    assert!((hvp[0] - 402.0).abs() < 1e-8, "hvp[0]={}", hvp[0]);
+    // H[1,0] = -400*x = -400
+    assert!((hvp[1] - (-400.0)).abs() < 1e-8, "hvp[1]={}", hvp[1]);
+}
+
+#[test]
+fn sparse_hessian_ndarray_rosenbrock() {
+    let x = array![1.0_f64, 2.0];
+    let (val, grad, pattern, values) = sparse_hessian_ndarray(rosenbrock_br, &x);
+
+    assert!(val.is_finite());
+    assert_eq!(grad.len(), 2);
+    // Rosenbrock 2D has a full 2x2 Hessian, so nnz should be 3 (lower triangle: diag + one off-diag)
+    assert!(pattern.nnz() > 0, "pattern should have entries");
+    assert_eq!(pattern.nnz(), values.len());
+}
+
+#[test]
+fn tape_hvp_ndarray_reuse() {
+    let x = array![1.0_f64, 2.0];
+    let v = array![1.0_f64, 0.0];
+
+    // Record once
+    let (tape, _) = echidna::record(rosenbrock_br, x.as_slice().unwrap());
+
+    // Compute via tape
+    let (grad_t, hvp_t) = tape_hvp_ndarray(&tape, &x, &v);
+
+    // Compute directly
+    let (grad_d, hvp_d) = hvp_ndarray(rosenbrock_br, &x, &v);
+
+    for i in 0..2 {
+        assert!(
+            (grad_t[i] - grad_d[i]).abs() < 1e-12,
+            "grad mismatch at {}",
+            i
+        );
+        assert!(
+            (hvp_t[i] - hvp_d[i]).abs() < 1e-12,
+            "hvp mismatch at {}",
+            i
+        );
+    }
 }

@@ -37,6 +37,8 @@ pub mod stde;
 
 #[cfg(feature = "faer")]
 pub mod faer_support;
+#[cfg(feature = "nalgebra")]
+pub mod nalgebra_support;
 #[cfg(feature = "ndarray")]
 pub mod ndarray_support;
 

@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), and R9 (checkpointing improvements) are complete. 496 tests passing (441 core + 55 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), and R10 (integration improvements) are complete. 510 tests passing (455 core + 55 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -38,7 +38,6 @@ This roadmap synthesizes:
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
-- `faer` / `ndarray` integration modules exist but are thin wrappers; no deep integration with tape operations
 
 ---
 
@@ -194,11 +193,17 @@ Shared backward pass extracted into `backward_from_checkpoints` helper, reused b
 
 Key file: `src/checkpoint.rs`.
 
-### R10. Integration Improvements
+### R10. Integration Improvements — **COMPLETE**
 
-- Deepen `faer` support: sparse LU/Cholesky via faer (faster than hand-rolled LU for large systems)
-- `nalgebra` integration: direct construction of `DMatrix`/`DVector` from tape outputs
-- `ndarray` integration: array views over tape buffers
+Three sub-features deepening echidna's integration with Rust linear algebra crates:
+
+**R10a. Deepen faer support** — `faer_support` extended with: `hvp_faer`/`tape_hvp_faer` (HVP wrappers), `sparse_hessian_faer`/`tape_sparse_hessian_faer` (sparse Hessian wrappers), `sparsity_to_faer_symmetric` (COO→SparseColMat conversion with symmetrization), `solve_dense_lu_faer`/`solve_dense_cholesky_faer` (dense solver convenience wrappers), `solve_sparse_cholesky_faer`/`solve_sparse_lu_faer` (sparse solvers with `catch_unwind` for faer's panicking API). 8 new tests.
+
+**R10b. nalgebra integration** — New `nalgebra_support` module with `grad_nalgebra`, `grad_nalgebra_val`, `hessian_nalgebra`, `jacobian_nalgebra`, `tape_gradient_nalgebra`, `tape_hessian_nalgebra`. Uses `DVector::as_slice()` (no unwrap needed) and `DMatrix::from_row_slice` for correct row-major→column-major layout. Feature-gated behind `nalgebra = ["dep:nalgebra", "bytecode"]`. 6 new tests.
+
+**R10c. ndarray extensions** — `ndarray_support` extended with: `hvp_ndarray`/`tape_hvp_ndarray`, `sparse_hessian_ndarray`/`tape_sparse_hessian_ndarray`, `sparse_jacobian_ndarray`. 3 new tests.
+
+Key files: `src/faer_support.rs`, `src/nalgebra_support.rs`, `src/ndarray_support.rs`, `tests/faer_tests.rs`, `tests/nalgebra_support_tests.rs`, `tests/ndarray_tests.rs`.
 
 ---
 
@@ -262,6 +267,9 @@ R8 (benchmarks)                      ─── ✓ DONE
 R9a (online checkpointing)           ─── ✓ DONE
 R9b (disk-backed checkpointing)      ─── ✓ DONE
 R9c (checkpoint hints)               ─── ✓ DONE
+R10a (deepen faer)                   ─── ✓ DONE
+R10b (nalgebra integration)          ─── ✓ DONE
+R10c (ndarray extensions)            ─── ✓ DONE
 ```
 
 All R1 items (Taylor mode AD) are now complete.
@@ -278,7 +286,9 @@ R8 (benchmarking infrastructure) is now complete.
 
 R9 (checkpointing improvements) is now complete.
 
-R10+ are lower priority and can be scheduled opportunistically.
+R10 (integration improvements) is now complete.
+
+R11+ are lower priority and can be scheduled opportunistically.
 
 ---
 
