@@ -54,8 +54,8 @@ pub use scalar::Scalar;
 
 #[cfg(feature = "bytecode")]
 pub use api::{
-    hessian, hessian_vec, hvp, record, record_multi, sparse_hessian, sparse_hessian_vec,
-    sparse_jacobian,
+    composed_hvp, hessian, hessian_vec, hvp, record, record_multi, sparse_hessian,
+    sparse_hessian_vec, sparse_jacobian,
 };
 #[cfg(feature = "bytecode")]
 pub use breverse::BReverse;

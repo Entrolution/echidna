@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), R10 (integration improvements), and R11 (GPU acceleration) are complete. 524 tests passing (455 core + 55 optim + 14 GPU).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), R10 (integration improvements), R11 (GPU acceleration), and R12 (composable mode nesting) are complete. 536 tests passing (467 core + 55 optim + 14 GPU).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -226,9 +226,13 @@ CPU-side sparsity detection and graph coloring drive the GPU tangent sweeps. Cus
 
 Key files: `src/gpu/mod.rs`, `src/gpu/wgpu_backend.rs`, `src/gpu/cuda_backend.rs`, `src/gpu/shaders/forward.wgsl`, `src/gpu/shaders/reverse.wgsl`, `src/gpu/shaders/tangent_forward.wgsl`, `src/gpu/shaders/tangent_reverse.wgsl`, `src/gpu/kernels/tape_eval.cu`, `tests/gpu_wgpu_tests.rs`, `tests/gpu_cuda_tests.rs`.
 
-### R12. Composable Mode Nesting
+### R12. Composable Mode Nesting — **COMPLETE**
 
-True type-level composition: `Dual<BReverse<f64>>` for forward-over-reverse, `Taylor<Dual<f64>>` for Taylor-over-forward. Currently forward-over-reverse works via the tape-based HVP path but isn't composable at the type level.
+Type-level composition: `Dual<BReverse<f64>>` for forward-over-reverse, `Taylor<BReverse<f64>, K>` for Taylor-over-reverse, `DualVec<BReverse<f64>, N>` for batched tangent-over-reverse, and `Dual<Dual<BReverse<f64>>>` for triple nesting. Also `Dual<Reverse<f64>>` for forward-over-Adept-reverse.
+
+Added `Float` and `IsAllZero` impls for `Reverse<F>` and `BReverse<F>`, enabling these types to be used as the inner type in forward-mode wrappers. Added `composed_hvp` convenience function for one-shot forward-over-reverse HVP via type-level composition. Reverse-wrapping-forward (e.g. `BReverse<Dual<f64>>`) remains unsupported — would require new thread-local tapes per composed type.
+
+Key files: `src/float.rs`, `src/api.rs`, `tests/composed_nesting.rs`. 12 new tests.
 
 ### R13. Source-Level Optimizations
 
@@ -276,6 +280,7 @@ R10a (deepen faer)                   ─── ✓ DONE
 R10b (nalgebra integration)          ─── ✓ DONE
 R10c (ndarray extensions)            ─── ✓ DONE
 R11 (GPU acceleration)               ─── ✓ DONE
+R12 (composable mode nesting)        ─── ✓ DONE
 ```
 
 All R1 items (Taylor mode AD) are now complete.
@@ -296,7 +301,9 @@ R10 (integration improvements) is now complete.
 
 R11 (GPU acceleration) is now complete.
 
-R12+ are lower priority and can be scheduled opportunistically.
+R12 (composable mode nesting) is now complete.
+
+R13+ are lower priority and can be scheduled opportunistically.
 
 ---
 

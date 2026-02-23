@@ -4,6 +4,13 @@ use num_traits::{Float as NumFloat, FloatConst, FromPrimitive};
 
 use crate::dual::Dual;
 use crate::dual_vec::DualVec;
+use crate::reverse::Reverse;
+use crate::tape::TapeThreadLocal;
+
+#[cfg(feature = "bytecode")]
+use crate::breverse::BReverse;
+#[cfg(feature = "bytecode")]
+use crate::bytecode_tape::BtapeThreadLocal;
 
 /// Marker trait for floating-point types that can serve as the base of AD computations.
 ///
@@ -24,6 +31,11 @@ impl<F: Float, const N: usize> Float for DualVec<F, N> {}
 impl<F: Float, const K: usize> Float for crate::taylor::Taylor<F, K> {}
 #[cfg(feature = "taylor")]
 impl<F: Float + crate::taylor_dyn::TaylorArenaLocal> Float for crate::taylor_dyn::TaylorDyn<F> {}
+
+impl<F: Float + TapeThreadLocal> Float for Reverse<F> {}
+
+#[cfg(feature = "bytecode")]
+impl<F: Float + BtapeThreadLocal> Float for BReverse<F> {}
 
 #[cfg(feature = "laurent")]
 impl<F: Float, const K: usize> Float for crate::laurent::Laurent<F, K> {}
@@ -88,6 +100,21 @@ impl<F: Float + crate::taylor_dyn::TaylorArenaLocal> IsAllZero for crate::taylor
         crate::taylor_dyn::with_active_arena(|arena: &mut crate::taylor_dyn::TaylorArena<F>| {
             arena.coeffs(self.index).iter().all(|&c| c == F::zero())
         })
+    }
+}
+
+impl<F: Float + TapeThreadLocal> IsAllZero for Reverse<F> {
+    #[inline(always)]
+    fn is_all_zero(&self) -> bool {
+        self.value == F::zero()
+    }
+}
+
+#[cfg(feature = "bytecode")]
+impl<F: Float + BtapeThreadLocal> IsAllZero for BReverse<F> {
+    #[inline(always)]
+    fn is_all_zero(&self) -> bool {
+        self.value == F::zero()
     }
 }
 
