@@ -57,7 +57,10 @@ pub use breverse::BReverse;
 #[cfg(feature = "bytecode")]
 pub use bytecode_tape::{BytecodeTape, CustomOp, CustomOpHandle};
 #[cfg(feature = "bytecode")]
-pub use checkpoint::grad_checkpointed;
+pub use checkpoint::{
+    grad_checkpointed, grad_checkpointed_disk, grad_checkpointed_online,
+    grad_checkpointed_with_hints,
+};
 #[cfg(feature = "bytecode")]
 pub use nonsmooth::{ClarkeError, KinkEntry, NonsmoothInfo};
 #[cfg(feature = "bytecode")]

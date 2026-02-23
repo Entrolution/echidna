@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), and R7 (tape serialization) are complete. 478 tests passing (423 core + 55 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), and R9 (checkpointing improvements) are complete. 496 tests passing (441 core + 55 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -33,11 +33,12 @@ This roadmap synthesizes:
 | R5 | Cross-country elimination: `LinearizedGraph` + Markowitz vertex elimination for Jacobian computation, `jacobian_cross_country` on BytecodeTape, 10 tests | Complete |
 | R6 | Nonsmooth extensions: branch tracking + kink detection (`forward_nonsmooth`), Clarke generalized Jacobian via limiting Jacobian enumeration (`clarke_jacobian`), `Laurent<F, K>` singularity analysis type with full `num_traits::Float`/`Scalar` integration, 31 tests | Complete |
 | R7 | Tape serialization: `BytecodeTape` serde support (manual Serialize/Deserialize impls), `OpCode`/`SparsityPattern` serde derives, R6 types (`KinkEntry`, `NonsmoothInfo`, `ClarkeError`) serde derives, `Laurent<F, K>` manual serde impls (const-generic array handling), JSON + bincode roundtrip, f32/f64/multi-output coverage, 9 tests | Complete |
+| R8 | Benchmarking infrastructure: shared test functions (Rosenbrock, Rastrigin, nn_layer, PDE Poisson), refactored existing benches to common module, new benches for Taylor mode, STDE estimators, cross-country/sparse Jacobian/nonsmooth, comparison against num-dual, CI regression detection via criterion-compare-action | Complete |
+| R9 | Checkpointing improvements: online checkpointing (periodic thinning for unknown step count), disk-backed checkpointing (raw byte I/O with panic-safe cleanup), user-controlled checkpoint placement hints (Revolve sub-interval distribution), shared backward pass extraction, 18 new tests, online benchmarks | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
 - `faer` / `ndarray` integration modules exist but are thin wrappers; no deep integration with tape operations
-- Checkpointing is binomial only; no online checkpointing for unknown-length computations
 
 ---
 
@@ -172,20 +173,26 @@ Key files: `src/laurent.rs`, `src/traits/laurent_std_ops.rs`, `src/traits/lauren
 
 Key files: `src/bytecode_tape.rs`, `src/nonsmooth.rs`, `src/laurent.rs`, `tests/serde.rs`.
 
-### R8. Benchmarking Infrastructure
+### R8. Benchmarking Infrastructure — **COMPLETE**
 
-Expand beyond the existing Criterion benchmarks:
-- Benchmark suite covering all AD modes (forward, reverse, Hessian, sparse, Taylor when available)
-- Standard test functions (Rosenbrock, Rastrigin, neural network layers, PDE residuals)
-- Comparison framework against `num-dual`, `ad-trait` for the modes they support
-- CI-integrated regression detection (catch performance regressions in PRs)
+Expanded from 3 Criterion bench files (forward, reverse, bytecode — Rosenbrock only) to 7 bench files covering all AD modes. Shared test functions in `benches/common/mod.rs` (Rosenbrock, Rastrigin, nn_layer, PDE Poisson residual). New bench files: `taylor.rs` (Taylor reverse, buffer reuse, higher-order), `stde.rs` (Laplacian estimator, Hessian diagonal, jet buffer reuse), `advanced.rs` (cross-country Jacobian, sparse Jacobian, nonsmooth overhead, Clarke subdifferential), `comparison.rs` (echidna vs num-dual for gradient, Jacobian, Hessian). CI regression detection via `boa-dev/criterion-compare-action` posts comparison as PR comment. ad-trait deferred (num-dual only).
 
-### R9. Checkpointing Improvements
+Key files: `benches/common/mod.rs`, `benches/taylor.rs`, `benches/stde.rs`, `benches/advanced.rs`, `benches/comparison.rs`, `.github/workflows/bench.yml`.
+
+### R9. Checkpointing Improvements — **COMPLETE**
 **Deferred from Phase 2**
 
-- Online checkpointing for computations with unknown iteration count (Griewank's online Revolve)
-- Disk-backed checkpointing for very long computations
-- User-controlled checkpoint placement hints
+Three extensions to the binomial Revolve checkpointing:
+
+**R9a. Online checkpointing** — `grad_checkpointed_online` uses periodic thinning for unknown iteration count. Maintains a fixed-size checkpoint buffer; when full, discards every other entry and doubles spacing. O(log N) recomputation overhead for N steps. Stop predicate determines termination.
+
+**R9b. Disk-backed checkpointing** — `grad_checkpointed_disk` stores checkpoint states as raw binary files on disk for large state vectors (state_dim × num_checkpoints × 8 bytes > available memory). Uses unsafe byte transmutation (safe for all `Float` types: `Copy + Sized`, no pointers). `DiskCheckpointGuard` Drop guard ensures cleanup on both normal completion and panic.
+
+**R9c. Checkpoint placement hints** — `grad_checkpointed_with_hints` accepts required checkpoint positions. Distributes remaining slots proportionally across sub-intervals using the largest-remainder method, then runs Revolve on each sub-interval. With empty required list, behaves identically to `grad_checkpointed`.
+
+Shared backward pass extracted into `backward_from_checkpoints` helper, reused by the original `grad_checkpointed` and all three new variants. 18 new tests, 1 new benchmark group (online vs offline comparison). Feature-gated behind `bytecode`.
+
+Key file: `src/checkpoint.rs`.
 
 ### R10. Integration Improvements
 
@@ -251,7 +258,10 @@ R6a (branch tracking)                ─── ✓ DONE
 R6b (Clarke subdifferential)         ─── ✓ DONE
 R6c (Laurent numbers)                ─── ✓ DONE
 R7 (serde)                           ─── ✓ DONE
-R8 (benchmarks)                      ─── Independent, any time
+R8 (benchmarks)                      ─── ✓ DONE
+R9a (online checkpointing)           ─── ✓ DONE
+R9b (disk-backed checkpointing)      ─── ✓ DONE
+R9c (checkpoint hints)               ─── ✓ DONE
 ```
 
 All R1 items (Taylor mode AD) are now complete.
@@ -264,9 +274,11 @@ R6 (nonsmooth extensions) is now complete.
 
 R7 (serde) is now complete.
 
-R8 (benchmarks) is independent and can be started at any time.
+R8 (benchmarking infrastructure) is now complete.
 
-R9+ are lower priority and can be scheduled opportunistically.
+R9 (checkpointing improvements) is now complete.
+
+R10+ are lower priority and can be scheduled opportunistically.
 
 ---
 

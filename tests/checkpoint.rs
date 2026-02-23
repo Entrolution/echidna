@@ -2,6 +2,7 @@
 
 use echidna::{record, BReverse};
 use num_traits::Float;
+use std::path::Path;
 
 /// Helper: compute gradient without checkpointing (record all steps into one tape).
 fn grad_naive(
@@ -280,4 +281,489 @@ fn large_step_count() {
             g_few[i]
         );
     }
+}
+
+// ══════════════════════════════════════════════
+//  Online checkpointing tests (R9a)
+// ══════════════════════════════════════════════
+
+#[test]
+fn online_matches_offline() {
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 10;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let g_offline = echidna::grad_checkpointed(step, loss, &x0, num_steps, 4);
+    let g_online = echidna::grad_checkpointed_online(
+        step,
+        |_, step_idx| step_idx >= num_steps,
+        loss,
+        &x0,
+        4,
+    );
+
+    for i in 0..2 {
+        assert!(
+            (g_offline[i] - g_online[i]).abs() < 1e-10,
+            "online vs offline mismatch at {}: offline={}, online={}",
+            i,
+            g_offline[i],
+            g_online[i]
+        );
+    }
+}
+
+#[test]
+fn online_convergence() {
+    // Run until ||state|| < tolerance, then verify gradient vs finite diff.
+    let x0 = [1.0_f64, 2.0];
+    let h = 0.1;
+    let tol = 0.5;
+
+    let step = move |x: &[BReverse<f64>]| {
+        let dt = BReverse::constant(h);
+        x.iter().map(|&xi| xi - dt * xi).collect()
+    };
+    let stop = move |state: &[f64], _: usize| {
+        let norm: f64 = state.iter().map(|&s| s * s).sum::<f64>().sqrt();
+        norm < tol
+    };
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1] * x[1];
+
+    let g = echidna::grad_checkpointed_online(step, stop, loss, &x0, 4);
+
+    // Compute how many steps until convergence.
+    let mut state = x0.to_vec();
+    let mut steps = 0;
+    loop {
+        state = state.iter().map(|&s| s * (1.0 - h)).collect();
+        steps += 1;
+        let norm: f64 = state.iter().map(|&s| s * s).sum::<f64>().sqrt();
+        if norm < tol {
+            break;
+        }
+    }
+
+    // Finite diff verification.
+    let eps = 1e-6;
+    for i in 0..2 {
+        let mut xp = x0.to_vec();
+        let mut xm = x0.to_vec();
+        xp[i] += eps;
+        xm[i] -= eps;
+
+        let factor = (1.0 - h).powi(steps as i32);
+        let sp: Vec<f64> = xp.iter().map(|&v| v * factor).collect();
+        let sm: Vec<f64> = xm.iter().map(|&v| v * factor).collect();
+        let lp: f64 = sp.iter().map(|&v| v * v).sum();
+        let lm: f64 = sm.iter().map(|&v| v * v).sum();
+        let fd = (lp - lm) / (2.0 * eps);
+
+        assert!(
+            (g[i] - fd).abs() < 1e-4,
+            "online convergence gradient[{}]: ad={}, fd={}",
+            i,
+            g[i],
+            fd
+        );
+    }
+}
+
+#[test]
+fn online_single_step() {
+    let x0 = [2.0_f64, 3.0];
+    let step = |x: &[BReverse<f64>]| vec![x[0] * x[1], x[0] + x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] + x[1];
+
+    let g = echidna::grad_checkpointed_online(step, |_, step_idx| step_idx >= 1, loss, &x0, 2);
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, 1, 1);
+
+    for i in 0..2 {
+        assert!(
+            (g[i] - g_ref[i]).abs() < 1e-10,
+            "online single step mismatch at {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn online_stop_at_zero() {
+    // Stop predicate returns true at step 0 => gradient of loss(x0).
+    let x0 = [2.0_f64, 3.0];
+    let step = |x: &[BReverse<f64>]| x.to_vec();
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1] * x[1];
+
+    let g = echidna::grad_checkpointed_online(step, |_, _| true, loss, &x0, 2);
+    // gradient of x^2 + y^2 = [2x, 2y] = [4, 6]
+    assert!((g[0] - 4.0).abs() < 1e-10);
+    assert!((g[1] - 6.0).abs() < 1e-10);
+}
+
+#[test]
+fn online_exact_fill() {
+    // Step count exactly fills the buffer without triggering thinning.
+    // With num_checkpoints=5 and spacing=1, buffer holds [0,1,2,3,4].
+    // Stop at step 4 means 4 entries in buffer[1..] + buffer[0] = 5 total.
+    // Buffer fills at exactly capacity, no thinning needed.
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 4;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let g_online = echidna::grad_checkpointed_online(
+        step,
+        |_, step_idx| step_idx >= num_steps,
+        loss,
+        &x0,
+        5,
+    );
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+    for i in 0..2 {
+        assert!(
+            (g_online[i] - g_ref[i]).abs() < 1e-10,
+            "exact fill mismatch at {}: online={}, ref={}",
+            i,
+            g_online[i],
+            g_ref[i]
+        );
+    }
+}
+
+#[test]
+fn online_thinning_stress() {
+    // Many steps with few checkpoints to exercise multiple thinning rounds.
+    let x0 = [1.0_f64, 0.5];
+    let num_steps = 200;
+
+    let step = |x: &[BReverse<f64>]| {
+        let half = BReverse::constant(0.5_f64);
+        vec![
+            x[0].sin() * half + x[1] * half,
+            x[0] * half + x[1].cos() * half,
+        ]
+    };
+    let loss = |x: &[BReverse<f64>]| x[0] + x[1];
+
+    let g_online = echidna::grad_checkpointed_online(
+        step,
+        |_, step_idx| step_idx >= num_steps,
+        loss,
+        &x0,
+        3,
+    );
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+    for i in 0..2 {
+        assert!(
+            (g_online[i] - g_ref[i]).abs() < 1e-8,
+            "thinning stress mismatch at {}: online={}, ref={}",
+            i,
+            g_online[i],
+            g_ref[i]
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "online checkpointing requires at least 2")]
+fn online_panics_on_insufficient_checkpoints() {
+    let x0 = [1.0_f64];
+    echidna::grad_checkpointed_online(
+        |x: &[BReverse<f64>]| x.to_vec(),
+        |_, _| true,
+        |x: &[BReverse<f64>]| x[0],
+        &x0,
+        1,
+    );
+}
+
+// ══════════════════════════════════════════════
+//  Checkpoint placement hints tests (R9c)
+// ══════════════════════════════════════════════
+
+#[test]
+fn hints_matches_unhinted() {
+    // Required positions that happen to match what Revolve would choose.
+    // Result should be identical to the base grad_checkpointed.
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 10;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let g_base = echidna::grad_checkpointed(step, loss, &x0, num_steps, 4);
+    // The gradient must be correct regardless of which positions we require.
+    let g_hints =
+        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 4, &[3, 6]);
+
+    for i in 0..2 {
+        assert!(
+            (g_base[i] - g_hints[i]).abs() < 1e-10,
+            "hints vs base mismatch at {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn hints_single_required() {
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 8;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let g_hints =
+        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 4, &[4]);
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+    for i in 0..2 {
+        assert!(
+            (g_ref[i] - g_hints[i]).abs() < 1e-10,
+            "single required mismatch at {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn hints_all_required() {
+    // All positions required = store all = maximum accuracy.
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 5;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let required: Vec<usize> = (1..num_steps).collect();
+    let g_hints = echidna::grad_checkpointed_with_hints(
+        step,
+        loss,
+        &x0,
+        num_steps,
+        num_steps,
+        &required,
+    );
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+    for i in 0..2 {
+        assert!(
+            (g_ref[i] - g_hints[i]).abs() < 1e-10,
+            "all required mismatch at {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn hints_empty() {
+    // Empty required list = equivalent to grad_checkpointed.
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 8;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let g_hints =
+        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 3, &[]);
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, 3);
+
+    for i in 0..2 {
+        assert!(
+            (g_ref[i] - g_hints[i]).abs() < 1e-10,
+            "empty hints mismatch at {}",
+            i
+        );
+    }
+}
+
+#[test]
+fn hints_out_of_range() {
+    // Positions at 0 and >= num_steps are silently ignored.
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 6;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let g_hints = echidna::grad_checkpointed_with_hints(
+        step,
+        loss,
+        &x0,
+        num_steps,
+        3,
+        &[0, 3, 6, 100],
+    );
+    // Only position 3 is valid; 0, 6, 100 are out of range.
+    let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+    for i in 0..2 {
+        assert!(
+            (g_ref[i] - g_hints[i]).abs() < 1e-10,
+            "out of range hints mismatch at {}",
+            i
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "required positions")]
+fn hints_panics_on_too_many_required() {
+    let x0 = [1.0_f64];
+    echidna::grad_checkpointed_with_hints(
+        |x: &[BReverse<f64>]| x.to_vec(),
+        |x: &[BReverse<f64>]| x[0],
+        &x0,
+        10,
+        2,
+        &[1, 2, 3], // 3 required > 2 checkpoints
+    );
+}
+
+// ══════════════════════════════════════════════
+//  Disk-backed checkpointing tests (R9b)
+// ══════════════════════════════════════════════
+
+#[test]
+fn disk_matches_memory() {
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 10;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let g_disk =
+        echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
+    let g_mem = echidna::grad_checkpointed(step, loss, &x0, num_steps, 3);
+
+    for i in 0..2 {
+        assert!(
+            (g_disk[i] - g_mem[i]).abs() < 1e-10,
+            "disk vs memory mismatch at {}: disk={}, mem={}",
+            i,
+            g_disk[i],
+            g_mem[i]
+        );
+    }
+}
+
+#[test]
+fn disk_cleanup() {
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 5;
+
+    let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+    let loss = |x: &[BReverse<f64>]| x[0] + x[1];
+
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let _ = echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
+
+    // Verify no checkpoint files remain.
+    let remaining: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.starts_with("ckpt_"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        remaining.is_empty(),
+        "checkpoint files not cleaned up: {:?}",
+        remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn disk_cleanup_on_panic() {
+    let x0 = [0.5_f64, 0.3];
+    let num_steps = 5;
+
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let dir_path = dir.path().to_path_buf();
+
+    // Use catch_unwind to test panic cleanup.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+        let loss = |_x: &[BReverse<f64>]| {
+            panic!("intentional panic in loss");
+        };
+        echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, &dir_path);
+    }));
+
+    assert!(result.is_err(), "should have panicked");
+
+    // Verify checkpoint files are cleaned up despite panic.
+    let remaining: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.starts_with("ckpt_"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(
+        remaining.is_empty(),
+        "checkpoint files not cleaned up after panic: {:?}",
+        remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn disk_large_state() {
+    // 1000-dim state to verify correctness with large vectors.
+    let dim = 1000;
+    let x0: Vec<f64> = (0..dim).map(|i| 0.001 * i as f64).collect();
+    let num_steps = 5;
+
+    let step = |x: &[BReverse<f64>]| {
+        let scale = BReverse::constant(0.99_f64);
+        x.iter().map(|&xi| xi * scale).collect()
+    };
+    let loss = |x: &[BReverse<f64>]| {
+        let mut s = BReverse::constant(0.0_f64);
+        for &xi in x {
+            s = s + xi * xi;
+        }
+        s
+    };
+
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let g_disk =
+        echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
+    let g_mem = echidna::grad_checkpointed(step, loss, &x0, num_steps, 3);
+
+    for i in 0..dim {
+        assert!(
+            (g_disk[i] - g_mem[i]).abs() < 1e-10,
+            "disk large state mismatch at {}: disk={}, mem={}",
+            i,
+            g_disk[i],
+            g_mem[i]
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "checkpoint directory does not exist")]
+fn disk_panics_on_missing_dir() {
+    let x0 = [1.0_f64];
+    echidna::grad_checkpointed_disk(
+        |x: &[BReverse<f64>]| x.to_vec(),
+        |x: &[BReverse<f64>]| x[0],
+        &x0,
+        1,
+        1,
+        Path::new("/nonexistent/dir/that/does/not/exist"),
+    );
 }

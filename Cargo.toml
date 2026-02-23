@@ -30,6 +30,8 @@ approx = "0.5"
 serde_json = "1"
 bincode = "1"
 nalgebra = "0.33"
+num-dual = "0.10"
+tempfile = "3"
 
 [features]
 default = ["simba"]
@@ -53,6 +55,26 @@ harness = false
 
 [[bench]]
 name = "bytecode"
+harness = false
+required-features = ["bytecode"]
+
+[[bench]]
+name = "taylor"
+harness = false
+required-features = ["stde"]
+
+[[bench]]
+name = "stde"
+harness = false
+required-features = ["stde"]
+
+[[bench]]
+name = "advanced"
+harness = false
+required-features = ["bytecode"]
+
+[[bench]]
+name = "comparison"
 harness = false
 required-features = ["bytecode"]
 

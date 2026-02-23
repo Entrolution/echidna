@@ -2046,15 +2046,12 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// In debug builds, validates internal consistency after optimization.
     pub fn optimize(&mut self) {
-        // In debug builds, clone the tape before optimization for validation.
-        #[cfg(debug_assertions)]
-        let pre_opt_len = self.opcodes.len();
-
         self.cse();
         self.dead_code_elimination();
 
         // Validate internal consistency in debug builds.
-        debug_assert!({
+        #[cfg(debug_assertions)]
+        {
             let n = self.opcodes.len();
             // All arg_indices must point to valid entries.
             for i in 0..n {
@@ -2117,9 +2114,7 @@ impl<F: Float> BytecodeTape<F> {
                 input_count, self.num_inputs as usize,
                 "num_inputs mismatch after optimization"
             );
-            let _ = pre_opt_len;
-            true
-        });
+        }
     }
 }
 
