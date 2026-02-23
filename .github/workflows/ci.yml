@@ -32,6 +32,9 @@ jobs:
       - name: Run tests (echidna-optim)
         run: cargo test -p echidna-optim
 
+      - name: Run tests (echidna-optim with sparse-implicit)
+        run: cargo test -p echidna-optim --features sparse-implicit
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -51,6 +54,18 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel" -- -D warnings
+
+      - name: Check gpu-wgpu compilation
+        run: cargo check --features gpu-wgpu
+
+      - name: Install cargo-semver-checks
+        run: cargo install cargo-semver-checks --locked
+
+      - name: Check semver (echidna)
+        run: cargo semver-checks -p echidna
+
+      - name: Check semver (echidna-optim)
+        run: cargo semver-checks -p echidna-optim
 
   docs:
     name: Documentation
