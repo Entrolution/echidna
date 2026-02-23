@@ -23,6 +23,9 @@ use crate::opcode::{self, OpCode, UNUSED};
 use crate::float::IsAllZero;
 use num_traits::Float as NumFloat;
 
+#[cfg(feature = "taylor")]
+use crate::taylor::Taylor;
+
 /// Sentinel index for constant entries (not tracked).
 pub const CONSTANT: u32 = u32::MAX;
 
@@ -139,6 +142,11 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// **Constant folding**: if all operands point to `Const` entries (not `Input`),
     /// the operation is replaced by a single `Const` with the already-computed value.
+    ///
+    /// **Algebraic simplification**: identity patterns (`x + 0 → x`, `x * 1 → x`,
+    /// etc.) and absorbing patterns (`x * 0 → 0`, `x - x → 0`, `x / x → 1`) are
+    /// detected and short-circuited. Absorbing patterns are guarded by a value check
+    /// to handle NaN/Inf edge cases correctly.
     #[inline]
     pub fn push_op(&mut self, op: OpCode, arg0: u32, arg1: u32, value: F) -> u32 {
         // Constant folding: if both args (when present) are Const, emit Const instead.
@@ -146,6 +154,22 @@ impl<F: Float> BytecodeTape<F> {
         let arg1_const = arg1 == UNUSED || self.opcodes[arg1 as usize] == OpCode::Const;
         if arg0_const && arg1_const {
             return self.push_const(value);
+        }
+
+        // Algebraic simplification: single-arg-const patterns (binary ops only).
+        if (arg0_const || arg1_const) && arg1 != UNUSED {
+            if let Some(idx) =
+                self.try_algebraic_simplify(op, arg0, arg1, arg0_const, arg1_const, value)
+            {
+                return idx;
+            }
+        }
+
+        // Same-index simplification: x - x → 0, x / x → 1.
+        if arg0 == arg1 && arg1 != UNUSED {
+            if let Some(idx) = self.try_same_index_simplify(op, value) {
+                return idx;
+            }
         }
 
         let idx = self.num_variables;
@@ -156,13 +180,101 @@ impl<F: Float> BytecodeTape<F> {
         idx
     }
 
+    /// Try to simplify a binary op where exactly one argument is a known constant.
+    ///
+    /// Identity patterns (`x + 0`, `x * 1`, etc.) are always safe — they return
+    /// the original index whose value is correct. Absorbing patterns (`x * 0`)
+    /// use `push_const(value)` (not `push_const(F::zero())`) to preserve IEEE 754
+    /// signed zero semantics, and are guarded by `value == expected` to handle
+    /// NaN/Inf correctly (e.g., `NaN * 0 = NaN`, not `0`).
+    #[inline(never)]
+    fn try_algebraic_simplify(
+        &mut self,
+        op: OpCode,
+        arg0: u32,
+        arg1: u32,
+        arg0_const: bool,
+        arg1_const: bool,
+        value: F,
+    ) -> Option<u32> {
+        let zero = F::zero();
+        let one = F::one();
+        match op {
+            OpCode::Add => {
+                if arg1_const && self.values[arg1 as usize] == zero {
+                    return Some(arg0);
+                }
+                if arg0_const && self.values[arg0 as usize] == zero {
+                    return Some(arg1);
+                }
+            }
+            OpCode::Sub => {
+                if arg1_const && self.values[arg1 as usize] == zero {
+                    return Some(arg0);
+                }
+            }
+            OpCode::Mul => {
+                // Identity: x * 1 → x, 1 * x → x
+                if arg1_const && self.values[arg1 as usize] == one {
+                    return Some(arg0);
+                }
+                if arg0_const && self.values[arg0 as usize] == one {
+                    return Some(arg1);
+                }
+                // Absorbing: x * 0 → const (guarded: NaN * 0 = NaN, not 0)
+                if arg1_const && self.values[arg1 as usize] == zero && value == zero {
+                    return Some(self.push_const(value));
+                }
+                if arg0_const && self.values[arg0 as usize] == zero && value == zero {
+                    return Some(self.push_const(value));
+                }
+            }
+            OpCode::Div => {
+                if arg1_const && self.values[arg1 as usize] == one {
+                    return Some(arg0);
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Try to simplify a binary op where both arguments are the same index.
+    ///
+    /// `x - x → 0` is guarded (Inf - Inf = NaN, not 0).
+    /// `x / x → 1` is guarded (0/0 = NaN, not 1).
+    #[inline(never)]
+    fn try_same_index_simplify(&mut self, op: OpCode, value: F) -> Option<u32> {
+        match op {
+            OpCode::Sub if value == F::zero() => Some(self.push_const(value)),
+            OpCode::Div if value == F::one() => Some(self.push_const(value)),
+            _ => None,
+        }
+    }
+
     /// Record a powi operation. The `i32` exponent is stored in `arg_indices[1]`.
     ///
     /// **Constant folding**: if the operand is a `Const`, emit `Const` instead.
+    ///
+    /// **Algebraic simplification**: `x^0 → 1` (guarded), `x^1 → x`,
+    /// `x^(-1) → Recip(x)` (cheaper unary dispatch).
     #[inline]
     pub fn push_powi(&mut self, arg0: u32, exp: i32, value: F) -> u32 {
         if self.opcodes[arg0 as usize] == OpCode::Const {
             return self.push_const(value);
+        }
+
+        // x^0 → 1 (guarded: 0^0 edge case — only fold when value is actually 1)
+        if exp == 0 && value == F::one() {
+            return self.push_const(F::one());
+        }
+        // x^1 → x
+        if exp == 1 {
+            return arg0;
+        }
+        // x^(-1) → Recip(x) (cheaper unary opcode dispatch)
+        if exp == -1 {
+            return self.push_op(OpCode::Recip, arg0, UNUSED, value);
         }
 
         let idx = self.num_variables;
@@ -224,6 +336,15 @@ impl<F: Float> BytecodeTape<F> {
         self.values[self.output_index as usize]
     }
 
+    /// Index of the (single) output variable.
+    ///
+    /// Use this with the buffer produced by [`forward_tangent`](Self::forward_tangent)
+    /// to read the output: `buf[tape.output_index()]`.
+    #[inline]
+    pub fn output_index(&self) -> usize {
+        self.output_index as usize
+    }
+
     /// Number of input variables.
     #[inline]
     pub fn num_inputs(&self) -> usize {
@@ -274,13 +395,307 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
-    /// Reverse sweep seeded at a specific index with a given weight.
+    /// Indices of all output entries in the tape buffer.
     ///
-    /// Like [`reverse`](Self::reverse) but with an arbitrary seed value instead of 1.
-    fn reverse_weighted(&self, seed_index: u32, seed_value: F) -> Vec<F> {
+    /// For multi-output tapes, returns all registered output indices.
+    /// For single-output tapes, returns a single-element slice.
+    pub fn all_output_indices(&self) -> &[u32] {
+        if self.output_indices.is_empty() {
+            std::slice::from_ref(&self.output_index)
+        } else {
+            &self.output_indices
+        }
+    }
+
+    // ── GPU accessor methods ──
+
+    /// Slice view of all opcodes in the tape.
+    #[inline]
+    pub fn opcodes_slice(&self) -> &[OpCode] {
+        &self.opcodes
+    }
+
+    /// Slice view of all argument index pairs `[arg0, arg1]`.
+    #[inline]
+    pub fn arg_indices_slice(&self) -> &[[u32; 2]] {
+        &self.arg_indices
+    }
+
+    /// Slice view of all primal values in the tape.
+    #[inline]
+    pub fn values_slice(&self) -> &[F] {
+        &self.values
+    }
+
+    /// Total number of tape entries (inputs + constants + operations).
+    #[inline]
+    pub fn num_variables_count(&self) -> usize {
+        self.num_variables as usize
+    }
+
+    /// Returns `true` if the tape contains any custom operations.
+    #[inline]
+    pub fn has_custom_ops(&self) -> bool {
+        !self.custom_ops.is_empty()
+    }
+
+    /// Reverse sweep with weighted seeds for multiple outputs.
+    ///
+    /// Computes `∑_i weights[i] * ∂output_i/∂x` — a vector-Jacobian product.
+    ///
+    /// Returns the gradient with respect to all inputs (length [`num_inputs`](Self::num_inputs)).
+    pub fn reverse_seeded(&self, seeds: &[F]) -> Vec<F> {
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        assert_eq!(
+            seeds.len(),
+            out_indices.len(),
+            "seeds length must match number of outputs"
+        );
+
+        let ni = self.num_inputs as usize;
+        let adjoints = self.reverse_seeded_full(seeds, &out_indices);
+        adjoints[..ni].to_vec()
+    }
+
+    /// Compute the full Jacobian of a multi-output tape via reverse mode.
+    ///
+    /// Performs `m` reverse sweeps (one per output). Returns `J[i][j] = ∂f_i/∂x_j`.
+    pub fn jacobian(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
+        self.forward(inputs);
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let ni = self.num_inputs as usize;
+        let mut jac = Vec::with_capacity(out_indices.len());
+
+        for &out_idx in &out_indices {
+            let adjoints = self.reverse(out_idx);
+            jac.push(adjoints[..ni].to_vec());
+        }
+
+        jac
+    }
+
+    /// Vector-Jacobian product for a multi-output tape.
+    ///
+    /// Computes `wᵀ · J` where `J` is the Jacobian. More efficient than
+    /// computing the full Jacobian when only the weighted combination is needed.
+    pub fn vjp_multi(&mut self, inputs: &[F], weights: &[F]) -> Vec<F> {
+        self.forward(inputs);
+        self.reverse_seeded(weights)
+    }
+
+    /// Compute a Jacobian with forced branch choices at specified tape indices.
+    ///
+    /// For each `(tape_index, sign)` in `forced_signs`, the reverse sweep uses
+    /// [`forced_reverse_partials`](opcode::forced_reverse_partials) instead of the
+    /// standard partials at that index.
+    ///
+    /// This is the building block for Clarke subdifferential enumeration.
+    pub fn jacobian_limiting(&mut self, inputs: &[F], forced_signs: &[(u32, i8)]) -> Vec<Vec<F>> {
+        self.forward(inputs);
+
+        let sign_map: HashMap<u32, i8> = forced_signs.iter().copied().collect();
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let ni = self.num_inputs as usize;
+        let mut jac = Vec::with_capacity(out_indices.len());
+
+        for &out_idx in &out_indices {
+            let adjoints = self.reverse_with_forced_signs(out_idx, &sign_map);
+            jac.push(adjoints[..ni].to_vec());
+        }
+
+        jac
+    }
+
+    /// Compute the Clarke generalized Jacobian via limiting Jacobian enumeration.
+    ///
+    /// 1. Runs `forward_nonsmooth` to detect all kink operations and their branches.
+    /// 2. Identifies "active" kinks (|switching_value| < `tol`).
+    /// 3. Enumerates all 2^k sign combinations for the k active kinks.
+    /// 4. For each combination, computes a limiting Jacobian via forced reverse sweeps.
+    ///
+    /// Returns the nonsmooth info and a vector of limiting Jacobians.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClarkeError::TooManyKinks`] if the number of active kinks exceeds
+    /// the limit (default 20, overridden by `max_active_kinks`).
+    pub fn clarke_jacobian(
+        &mut self,
+        inputs: &[F],
+        tol: F,
+        max_active_kinks: Option<usize>,
+    ) -> Result<(crate::nonsmooth::NonsmoothInfo<F>, Vec<Vec<Vec<F>>>), crate::nonsmooth::ClarkeError>
+    {
+        #![allow(clippy::type_complexity)]
+        let info = self.forward_nonsmooth(inputs);
+        let active: Vec<&crate::nonsmooth::KinkEntry<F>> = info.active_kinks(tol);
+        let k = active.len();
+        let limit = max_active_kinks.unwrap_or(20);
+
+        if k > limit {
+            return Err(crate::nonsmooth::ClarkeError::TooManyKinks { count: k, limit });
+        }
+
+        let active_indices: Vec<u32> = active.iter().map(|e| e.tape_index).collect();
+
+        // Build sign_map from all (non-active) kinks using their natural branches,
+        // then override active kinks per combination.
+        let base_signs: HashMap<u32, i8> = info
+            .kinks
+            .iter()
+            .map(|e| (e.tape_index, e.branch))
+            .collect();
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+        let ni = self.num_inputs as usize;
+
+        let num_combos = 1usize << k;
+        let mut jacobians = Vec::with_capacity(num_combos);
+
+        for combo in 0..num_combos {
+            let mut sign_map = base_signs.clone();
+            for (bit, &idx) in active_indices.iter().enumerate() {
+                let sign: i8 = if (combo >> bit) & 1 == 0 { 1 } else { -1 };
+                sign_map.insert(idx, sign);
+            }
+
+            let mut jac = Vec::with_capacity(out_indices.len());
+            for &out_idx in &out_indices {
+                let adjoints = self.reverse_with_forced_signs(out_idx, &sign_map);
+                jac.push(adjoints[..ni].to_vec());
+            }
+            jacobians.push(jac);
+        }
+
+        Ok((info, jacobians))
+    }
+
+    /// Re-evaluate the tape at new inputs (forward sweep).
+    ///
+    /// Overwrites `values` in-place — no allocation.
+    pub fn forward(&mut self, inputs: &[F]) {
+        assert_eq!(
+            inputs.len(),
+            self.num_inputs as usize,
+            "wrong number of inputs"
+        );
+
+        // Overwrite input values.
+        for (i, &v) in inputs.iter().enumerate() {
+            self.values[i] = v;
+        }
+
+        // Re-evaluate all non-Input, non-Const ops.
+        for i in 0..self.opcodes.len() {
+            match self.opcodes[i] {
+                OpCode::Input | OpCode::Const => continue,
+                OpCode::Custom => {
+                    let [a_idx, cb_idx] = self.arg_indices[i];
+                    let a = self.values[a_idx as usize];
+                    let b = self
+                        .custom_second_args
+                        .get(&(i as u32))
+                        .map(|&bi| self.values[bi as usize])
+                        .unwrap_or(F::zero());
+                    self.values[i] = self.custom_ops[cb_idx as usize].eval(a, b);
+                }
+                op => {
+                    let [a_idx, b_idx] = self.arg_indices[i];
+                    let a = self.values[a_idx as usize];
+                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                        self.values[b_idx as usize]
+                    } else if op == OpCode::Powi {
+                        F::from(b_idx).unwrap_or_else(|| F::zero())
+                    } else {
+                        F::zero()
+                    };
+                    self.values[i] = opcode::eval_forward(op, a, b);
+                }
+            }
+        }
+    }
+
+    /// Forward sweep with nonsmooth branch tracking.
+    ///
+    /// Calls [`forward`](Self::forward) to evaluate the tape, then scans for
+    /// nonsmooth operations (`abs`, `min`, `max`) and records which branch was
+    /// taken at each one.
+    ///
+    /// Returns [`NonsmoothInfo`] containing all kink entries in tape order.
+    pub fn forward_nonsmooth(&mut self, inputs: &[F]) -> crate::nonsmooth::NonsmoothInfo<F> {
+        self.forward(inputs);
+
+        let mut kinks = Vec::new();
+        for i in 0..self.opcodes.len() {
+            let op = self.opcodes[i];
+            if !opcode::is_nonsmooth(op) {
+                continue;
+            }
+
+            let [a_idx, b_idx] = self.arg_indices[i];
+            let a = self.values[a_idx as usize];
+
+            match op {
+                OpCode::Abs => {
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a,
+                        branch: if a >= F::zero() { 1 } else { -1 },
+                    });
+                }
+                OpCode::Max => {
+                    let b = self.values[b_idx as usize];
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a - b,
+                        branch: if a >= b { 1 } else { -1 },
+                    });
+                }
+                OpCode::Min => {
+                    let b = self.values[b_idx as usize];
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a - b,
+                        branch: if a <= b { 1 } else { -1 },
+                    });
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        crate::nonsmooth::NonsmoothInfo { kinks }
+    }
+
+    /// Reverse sweep: compute adjoints seeded at the output.
+    ///
+    /// Returns the full adjoint vector (length = `num_variables`).
+    pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let n = self.num_variables as usize;
         let mut adjoints = vec![F::zero(); n];
-        adjoints[seed_index as usize] = seed_value;
+        adjoints[seed_index as usize] = F::one();
 
         for i in (0..self.opcodes.len()).rev() {
             let adj = adjoints[i];
@@ -329,123 +744,15 @@ impl<F: Float> BytecodeTape<F> {
         adjoints
     }
 
-    /// Reverse sweep with weighted seeds for multiple outputs.
+    /// Reverse sweep with forced branch choices at specified tape indices.
     ///
-    /// Computes `∑_i weights[i] * ∂output_i/∂x` — a vector-Jacobian product.
-    ///
-    /// Returns the gradient with respect to all inputs (length [`num_inputs`](Self::num_inputs)).
-    pub fn reverse_seeded(&self, seeds: &[F]) -> Vec<F> {
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
-
-        assert_eq!(
-            seeds.len(),
-            out_indices.len(),
-            "seeds length must match number of outputs"
-        );
-
-        let n = self.num_variables as usize;
-        let ni = self.num_inputs as usize;
-        let mut total_adjoints = vec![F::zero(); n];
-
-        for (k, (&out_idx, &weight)) in out_indices.iter().zip(seeds.iter()).enumerate() {
-            if weight == F::zero() {
-                continue;
-            }
-            let adjoints = self.reverse_weighted(out_idx, weight);
-            for j in 0..n {
-                total_adjoints[j] = total_adjoints[j] + adjoints[j];
-            }
-            let _ = k;
-        }
-
-        total_adjoints[..ni].to_vec()
-    }
-
-    /// Compute the full Jacobian of a multi-output tape via reverse mode.
-    ///
-    /// Performs `m` reverse sweeps (one per output). Returns `J[i][j] = ∂f_i/∂x_j`.
-    pub fn jacobian(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
-        self.forward(inputs);
-
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
-
-        let ni = self.num_inputs as usize;
-        let mut jac = Vec::with_capacity(out_indices.len());
-
-        for &out_idx in &out_indices {
-            let adjoints = self.reverse(out_idx);
-            jac.push(adjoints[..ni].to_vec());
-        }
-
-        jac
-    }
-
-    /// Vector-Jacobian product for a multi-output tape.
-    ///
-    /// Computes `wᵀ · J` where `J` is the Jacobian. More efficient than
-    /// computing the full Jacobian when only the weighted combination is needed.
-    pub fn vjp_multi(&mut self, inputs: &[F], weights: &[F]) -> Vec<F> {
-        self.forward(inputs);
-        self.reverse_seeded(weights)
-    }
-
-    /// Re-evaluate the tape at new inputs (forward sweep).
-    ///
-    /// Overwrites `values` in-place — no allocation.
-    pub fn forward(&mut self, inputs: &[F]) {
-        assert_eq!(
-            inputs.len(),
-            self.num_inputs as usize,
-            "wrong number of inputs"
-        );
-
-        // Overwrite input values.
-        for (i, &v) in inputs.iter().enumerate() {
-            self.values[i] = v;
-        }
-
-        // Re-evaluate all non-Input, non-Const ops.
-        for i in 0..self.opcodes.len() {
-            match self.opcodes[i] {
-                OpCode::Input | OpCode::Const => continue,
-                OpCode::Custom => {
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b = self
-                        .custom_second_args
-                        .get(&(i as u32))
-                        .map(|&bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    self.values[i] = self.custom_ops[cb_idx as usize].eval(a, b);
-                }
-                op => {
-                    let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        self.values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
-                    } else {
-                        F::zero()
-                    };
-                    self.values[i] = opcode::eval_forward(op, a, b);
-                }
-            }
-        }
-    }
-
-    /// Reverse sweep: compute adjoints seeded at the output.
-    ///
-    /// Returns the full adjoint vector (length = `num_variables`).
-    pub fn reverse(&self, seed_index: u32) -> Vec<F> {
+    /// Mirrors the structure of [`reverse`](Self::reverse) exactly, including the
+    /// three-way dispatch for Custom / forced / standard ops.
+    fn reverse_with_forced_signs(
+        &self,
+        seed_index: u32,
+        forced_signs: &HashMap<u32, i8>,
+    ) -> Vec<F> {
         let n = self.num_variables as usize;
         let mut adjoints = vec![F::zero(); n];
         adjoints[seed_index as usize] = F::one();
@@ -459,6 +766,7 @@ impl<F: Float> BytecodeTape<F> {
             match self.opcodes[i] {
                 OpCode::Input | OpCode::Const => continue,
                 OpCode::Custom => {
+                    // Custom ops always use their callback — never forced.
                     adjoints[i] = F::zero();
                     let [a_idx, cb_idx] = self.arg_indices[i];
                     let a = self.values[a_idx as usize];
@@ -485,7 +793,12 @@ impl<F: Float> BytecodeTape<F> {
                         F::zero()
                     };
                     let r = self.values[i];
-                    let (da, db) = opcode::reverse_partials(op, a, b, r);
+
+                    let (da, db) = if let Some(&sign) = forced_signs.get(&(i as u32)) {
+                        opcode::forced_reverse_partials(op, a, b, r, sign)
+                    } else {
+                        opcode::reverse_partials(op, a, b, r)
+                    };
 
                     adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                     if b_idx != UNUSED && op != OpCode::Powi {
@@ -678,7 +991,7 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// Generic over `T: NumFloat` so it works with both `Dual<F>` and
     /// `DualVec<F, N>`.
-    fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
+    pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         assert_eq!(
             inputs.len(),
             self.num_inputs as usize,
@@ -1171,6 +1484,128 @@ impl<F: Float> BytecodeTape<F> {
         (gradient, hvp, third)
     }
 
+    /// Forward-reverse Taylor pass for gradient + higher-order directional adjoints.
+    ///
+    /// Builds Taylor inputs `x_i(t) = x_i + v_i * t` (with zero higher coefficients),
+    /// runs `forward_tangent`, then `reverse_tangent` to get Taylor-valued adjoints.
+    ///
+    /// Returns `(output, adjoints)` where:
+    /// - `output` is the Taylor expansion of `f` along direction `v`
+    /// - `adjoints[i].coeff(0)` = `∂f/∂x_i` (gradient)
+    /// - `adjoints[i].coeff(1)` = `Σ_j (∂²f/∂x_i∂x_j) v_j` (HVP)
+    /// - `adjoints[i].derivative(k)` = k-th order directional adjoint
+    ///
+    /// For K=2, the HVP component is equivalent to [`hvp`](Self::hvp).
+    /// For K≥3, yields additional higher-order information in the same pass.
+    ///
+    /// Like [`hvp`](Self::hvp), takes `&self` and does not call `forward(x)`
+    /// before the Taylor pass. Custom ops will use primal values from recording time.
+    #[cfg(feature = "taylor")]
+    pub fn taylor_grad<const K: usize>(
+        &self,
+        x: &[F],
+        v: &[F],
+    ) -> (Taylor<F, K>, Vec<Taylor<F, K>>) {
+        let mut fwd_buf = Vec::new();
+        let mut adj_buf = Vec::new();
+        self.taylor_grad_with_buf(x, v, &mut fwd_buf, &mut adj_buf)
+    }
+
+    /// Like [`taylor_grad`](Self::taylor_grad) but reuses caller-provided buffers
+    /// to avoid allocation on repeated calls.
+    #[cfg(feature = "taylor")]
+    pub fn taylor_grad_with_buf<const K: usize>(
+        &self,
+        x: &[F],
+        v: &[F],
+        fwd_buf: &mut Vec<Taylor<F, K>>,
+        adj_buf: &mut Vec<Taylor<F, K>>,
+    ) -> (Taylor<F, K>, Vec<Taylor<F, K>>) {
+        let n = self.num_inputs as usize;
+        assert_eq!(x.len(), n, "wrong number of inputs");
+        assert_eq!(v.len(), n, "wrong number of directions");
+
+        // Build Taylor inputs: x_i(t) = x_i + v_i * t
+        let taylor_inputs: Vec<Taylor<F, K>> = x
+            .iter()
+            .zip(v.iter())
+            .map(|(&xi, &vi)| {
+                let mut coeffs = [F::zero(); K];
+                coeffs[0] = xi;
+                if K > 1 {
+                    coeffs[1] = vi;
+                }
+                Taylor::new(coeffs)
+            })
+            .collect();
+
+        self.forward_tangent(&taylor_inputs, fwd_buf);
+        let output = fwd_buf[self.output_index as usize];
+        self.reverse_tangent(fwd_buf, adj_buf);
+
+        (output, adj_buf[..n].to_vec())
+    }
+
+    // ── ODE Taylor integration ──
+
+    /// Compute the Taylor expansion of the ODE solution `y(t)` to order K.
+    ///
+    /// Given a tape representing the right-hand side `f: R^n → R^n` of the ODE
+    /// `y' = f(y)`, and an initial condition `y(0) = y0`, computes the Taylor
+    /// coefficients `y_0, y_1, ..., y_{K-1}` such that
+    /// `y(t) ≈ y_0 + y_1·t + y_2·t² + ... + y_{K-1}·t^{K-1}`.
+    ///
+    /// The tape must have `num_outputs == num_inputs` (autonomous ODE: f maps R^n → R^n).
+    ///
+    /// Returns one `Taylor<F, K>` per state variable. Use [`Taylor::eval_at`] to
+    /// evaluate at a step size `h`, or inspect coefficients for error estimation.
+    #[cfg(feature = "taylor")]
+    pub fn ode_taylor_step<const K: usize>(&self, y0: &[F]) -> Vec<Taylor<F, K>> {
+        let mut buf = Vec::new();
+        self.ode_taylor_step_with_buf(y0, &mut buf)
+    }
+
+    /// Like [`ode_taylor_step`](Self::ode_taylor_step) but reuses a caller-provided
+    /// buffer to avoid allocation on repeated calls.
+    #[cfg(feature = "taylor")]
+    pub fn ode_taylor_step_with_buf<const K: usize>(
+        &self,
+        y0: &[F],
+        buf: &mut Vec<Taylor<F, K>>,
+    ) -> Vec<Taylor<F, K>> {
+        let n = self.num_inputs as usize;
+        assert_eq!(y0.len(), n, "y0 length must match num_inputs");
+        assert_eq!(
+            self.num_outputs(),
+            n,
+            "ODE tape must have num_outputs == num_inputs (f: R^n -> R^n)"
+        );
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let mut y_coeffs = vec![[F::zero(); K]; n];
+        for i in 0..n {
+            y_coeffs[i][0] = y0[i];
+        }
+
+        for k in 0..K - 1 {
+            let inputs: Vec<Taylor<F, K>> = (0..n).map(|i| Taylor::new(y_coeffs[i])).collect();
+
+            self.forward_tangent(&inputs, buf);
+
+            let divisor = F::from(k + 1).unwrap();
+            for i in 0..n {
+                y_coeffs[i][k + 1] = buf[out_indices[i] as usize].coeff(k) / divisor;
+            }
+        }
+
+        (0..n).map(|i| Taylor::new(y_coeffs[i])).collect()
+    }
+
     // ── Tape optimizations ──
 
     /// Eliminate dead (unreachable) entries from the tape.
@@ -1249,6 +1684,96 @@ impl<F: Float> BytecodeTape<F> {
         for oi in &mut self.output_indices {
             *oi = remap[*oi as usize];
         }
+    }
+
+    /// Eliminate dead code, keeping only the specified outputs alive.
+    ///
+    /// Like [`dead_code_elimination`](Self::dead_code_elimination) but seeds
+    /// reachability only from `active_outputs`. After compaction,
+    /// `output_indices` contains only the active outputs (remapped), and
+    /// `output_index` is set to the first active output.
+    ///
+    /// **Note**: Like `dead_code_elimination`, this does not remap
+    /// `custom_second_args` (pre-existing limitation).
+    ///
+    /// # Panics
+    /// Panics if `active_outputs` is empty.
+    pub fn dead_code_elimination_for_outputs(&mut self, active_outputs: &[u32]) {
+        assert!(
+            !active_outputs.is_empty(),
+            "active_outputs must not be empty"
+        );
+
+        let n = self.opcodes.len();
+        let mut reachable = vec![false; n];
+
+        // Mark all inputs as reachable.
+        for flag in reachable.iter_mut().take(self.num_inputs as usize) {
+            *flag = true;
+        }
+
+        // Seed from active outputs only.
+        let mut stack: Vec<u32> = active_outputs.to_vec();
+
+        while let Some(idx) = stack.pop() {
+            let i = idx as usize;
+            if reachable[i] {
+                continue;
+            }
+            reachable[i] = true;
+            let [a, b] = self.arg_indices[i];
+            if a != UNUSED {
+                stack.push(a);
+            }
+            if b != UNUSED && self.opcodes[i] != OpCode::Powi {
+                stack.push(b);
+            }
+        }
+
+        // Build remap: old index -> new index.
+        let mut remap = vec![0u32; n];
+        let mut new_idx = 0u32;
+        for i in 0..n {
+            if reachable[i] {
+                remap[i] = new_idx;
+                new_idx += 1;
+            }
+        }
+        let new_len = new_idx as usize;
+
+        // Compact in-place.
+        let mut write = 0;
+        for (read, &is_reachable) in reachable.iter().enumerate().take(n) {
+            if is_reachable {
+                self.opcodes[write] = self.opcodes[read];
+                self.values[write] = self.values[read];
+                let [a, b] = self.arg_indices[read];
+                let ra = if a != UNUSED {
+                    remap[a as usize]
+                } else {
+                    UNUSED
+                };
+                let rb = if b != UNUSED && self.opcodes[read] != OpCode::Powi {
+                    remap[b as usize]
+                } else {
+                    b
+                };
+                self.arg_indices[write] = [ra, rb];
+                write += 1;
+            }
+        }
+
+        self.opcodes.truncate(new_len);
+        self.arg_indices.truncate(new_len);
+        self.values.truncate(new_len);
+        self.num_variables = new_len as u32;
+
+        // Update output tracking to only include active outputs.
+        self.output_indices = active_outputs
+            .iter()
+            .map(|&oi| remap[oi as usize])
+            .collect();
+        self.output_index = self.output_indices[0];
     }
 
     /// Common subexpression elimination.
@@ -1657,6 +2182,35 @@ impl<F: Float> BytecodeTape<F> {
         jac
     }
 
+    /// Dense Jacobian via cross-country (vertex) elimination.
+    ///
+    /// Builds a linearized DAG from the tape, then eliminates intermediate
+    /// vertices in Markowitz order. For functions where `m ≈ n` and the
+    /// graph has moderate connectivity, this can require fewer operations
+    /// than either pure forward mode (`n` passes) or reverse mode (`m` passes).
+    pub fn jacobian_cross_country(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
+        self.forward(inputs);
+
+        let out_indices = if self.output_indices.is_empty() {
+            vec![self.output_index]
+        } else {
+            self.output_indices.clone()
+        };
+
+        let mut graph = crate::cross_country::LinearizedGraph::from_tape(
+            &self.opcodes,
+            &self.arg_indices,
+            &self.values,
+            self.num_inputs as usize,
+            &out_indices,
+            &self.custom_ops,
+            &self.custom_second_args,
+        );
+
+        graph.eliminate_all();
+        graph.extract_jacobian()
+    }
+
     /// Sparse Hessian with a precomputed sparsity pattern and coloring.
     ///
     /// Skips re-detection on repeated calls (e.g. in solver loops).
@@ -1717,15 +2271,12 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// In debug builds, validates internal consistency after optimization.
     pub fn optimize(&mut self) {
-        // In debug builds, clone the tape before optimization for validation.
-        #[cfg(debug_assertions)]
-        let pre_opt_len = self.opcodes.len();
-
         self.cse();
         self.dead_code_elimination();
 
         // Validate internal consistency in debug builds.
-        debug_assert!({
+        #[cfg(debug_assertions)]
+        {
             let n = self.opcodes.len();
             // All arg_indices must point to valid entries.
             for i in 0..n {
@@ -1788,9 +2339,7 @@ impl<F: Float> BytecodeTape<F> {
                 input_count, self.num_inputs as usize,
                 "num_inputs mismatch after optimization"
             );
-            let _ = pre_opt_len;
-            true
-        });
+        }
     }
 }
 
@@ -2145,7 +2694,7 @@ mod serde_support {
                      custom ops must be re-registered after deserialization",
                 ));
             }
-            let mut s = serializer.serialize_struct("BytecodeTape", 7)?;
+            let mut s = serializer.serialize_struct("BytecodeTape", 8)?;
             s.serialize_field("opcodes", &self.opcodes)?;
             s.serialize_field("arg_indices", &self.arg_indices)?;
             s.serialize_field("values", &self.values)?;

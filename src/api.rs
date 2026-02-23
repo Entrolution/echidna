@@ -311,3 +311,63 @@ pub fn sparse_jacobian<F: Float + BtapeThreadLocal>(
     let (mut tape, _) = record_multi(f, x);
     tape.sparse_jacobian(x)
 }
+
+/// Forward-over-reverse HVP via type-level composition.
+///
+/// Records `f` with `Dual<BReverse<F>>` inputs (tangent direction `v` baked in
+/// as constants), then runs two reverse sweeps — one from the primal output
+/// (gradient) and one from the tangent output (HVP).
+///
+/// Returns `(f(x), gradient, H·v)`.
+///
+/// For repeated HVP with different `v`, prefer [`record`] + [`BytecodeTape::hvp`].
+/// This function re-records each call.
+#[cfg(feature = "bytecode")]
+pub fn composed_hvp<F, Func>(f: Func, x: &[F], v: &[F]) -> (F, Vec<F>, Vec<F>)
+where
+    F: Float + BtapeThreadLocal,
+    Func: FnOnce(&[Dual<BReverse<F>>]) -> Dual<BReverse<F>>,
+{
+    let n = x.len();
+    assert_eq!(x.len(), v.len(), "x and v must have the same length");
+
+    let mut tape = BytecodeTape::with_capacity(n * 30);
+
+    // Register n input slots for primal x values.
+    // Tangent direction v is baked in as BReverse constants (not tracked on tape).
+    let inputs: Vec<Dual<BReverse<F>>> = x
+        .iter()
+        .zip(v.iter())
+        .map(|(&xi, &vi)| {
+            let idx = tape.new_input(xi);
+            let re = BReverse::from_tape(xi, idx);
+            let eps = BReverse::constant(vi);
+            Dual::new(re, eps)
+        })
+        .collect();
+
+    let _guard = BtapeGuard::new(&mut tape);
+    let output = f(&inputs);
+
+    let value = output.re.value;
+    let primal_index = output.re.index;
+    let tangent_index = output.eps.index;
+
+    // Reverse from primal output → gradient.
+    let gradient = if primal_index != crate::bytecode_tape::CONSTANT {
+        let adjoints = tape.reverse(primal_index);
+        adjoints[..n].to_vec()
+    } else {
+        vec![F::zero(); n]
+    };
+
+    // Reverse from tangent output → HVP.
+    let hvp = if tangent_index != crate::bytecode_tape::CONSTANT {
+        let adjoints = tape.reverse(tangent_index);
+        adjoints[..n].to_vec()
+    } else {
+        vec![F::zero(); n]
+    };
+
+    (value, gradient, hvp)
+}

@@ -103,6 +103,51 @@ impl<F: Float + TapeThreadLocal> Scalar for Reverse<F> {
     }
 }
 
+#[cfg(feature = "taylor")]
+impl<F: Float, const K: usize> Scalar for crate::taylor::Taylor<F, K> {
+    type Float = F;
+
+    #[inline]
+    fn from_f(val: F) -> Self {
+        crate::taylor::Taylor::constant(val)
+    }
+
+    #[inline]
+    fn value(&self) -> F {
+        self.coeffs[0]
+    }
+}
+
+#[cfg(feature = "taylor")]
+impl<F: Float + crate::taylor_dyn::TaylorArenaLocal> Scalar for crate::taylor_dyn::TaylorDyn<F> {
+    type Float = F;
+
+    #[inline]
+    fn from_f(val: F) -> Self {
+        crate::taylor_dyn::TaylorDyn::constant(val)
+    }
+
+    #[inline]
+    fn value(&self) -> F {
+        self.value
+    }
+}
+
+#[cfg(feature = "laurent")]
+impl<F: Float, const K: usize> Scalar for crate::laurent::Laurent<F, K> {
+    type Float = F;
+
+    #[inline]
+    fn from_f(val: F) -> Self {
+        crate::laurent::Laurent::constant(val)
+    }
+
+    #[inline]
+    fn value(&self) -> F {
+        crate::laurent::Laurent::value(self)
+    }
+}
+
 #[cfg(feature = "bytecode")]
 impl<F: Float + crate::bytecode_tape::BtapeThreadLocal> Scalar for crate::breverse::BReverse<F> {
     type Float = F;
