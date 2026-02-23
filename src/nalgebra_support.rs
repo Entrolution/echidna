@@ -6,7 +6,6 @@ use nalgebra::{DMatrix, DVector};
 
 use crate::bytecode_tape::{BtapeThreadLocal, BytecodeTape};
 use crate::float::Float;
-#[allow(unused_imports)]
 use crate::BReverse;
 
 /// Record a function and compute its gradient, returning a `DVector`.

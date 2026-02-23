@@ -22,7 +22,7 @@
 use echidna::sparse::{column_coloring, row_coloring, JacobianSparsityPattern};
 use echidna::BytecodeTape;
 
-use faer::linalg::solvers::SpSolver;
+use faer::linalg::solvers::Solve;
 use faer::sparse::SparseColMat;
 use faer::Col;
 
@@ -155,15 +155,13 @@ impl SparseImplicitContext {
 fn extract_fz_triplets(
     ctx: &SparseImplicitContext,
     jac_values: &[f64],
-) -> Vec<(usize, usize, f64)> {
+) -> Vec<faer::sparse::Triplet<usize, usize, f64>> {
     ctx.fz_indices
         .iter()
-        .map(|&k| {
-            (
-                ctx.pattern.rows[k] as usize,
-                ctx.pattern.cols[k] as usize,
-                jac_values[k],
-            )
+        .map(|&k| faer::sparse::Triplet {
+            row: ctx.pattern.rows[k] as usize,
+            col: ctx.pattern.cols[k] as usize,
+            val: jac_values[k],
         })
         .collect()
 }
@@ -171,8 +169,8 @@ fn extract_fz_triplets(
 /// Build sparse F_z and compute LU factorization.
 ///
 /// Returns `None` if the matrix is singular or construction fails.
-/// Uses `catch_unwind` because faer's sparse LU panics on singular matrices
-/// rather than returning an error.
+/// Detects numeric singularity (not just symbolic) by solving a test vector
+/// and checking for non-finite results.
 fn build_fz_and_factor(
     ctx: &SparseImplicitContext,
     jac_values: &[f64],
@@ -180,9 +178,16 @@ fn build_fz_and_factor(
     let m = ctx.num_states;
     let triplets = extract_fz_triplets(ctx, jac_values);
     let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets).ok()?;
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mat.sp_lu().ok()))
-        .ok()
-        .flatten()
+    let lu = mat.sp_lu().ok()?;
+
+    // Detect numeric singularity: solve with a test RHS and check for NaN/Inf.
+    let test_rhs = Col::<f64>::from_fn(m, |_| 1.0);
+    let test_sol = lu.solve(&test_rhs);
+    if (0..m).any(|i| !test_sol[i].is_finite()) {
+        return None;
+    }
+
+    Some(lu)
 }
 
 /// Compute F_x · v by iterating COO entries.

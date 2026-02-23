@@ -6,7 +6,6 @@ use ndarray::{Array1, Array2};
 
 use crate::bytecode_tape::{BtapeThreadLocal, BytecodeTape};
 use crate::float::Float;
-#[allow(unused_imports)]
 use crate::BReverse;
 
 /// Record a function and compute its gradient, returning an `Array1`.

@@ -1,5 +1,12 @@
 # echidna — Design Principles & Architecture
 
+> **Historical document** — Written during initial project planning (pre-implementation).
+> Several details no longer match the codebase: feature names, dependency choices
+> (`wide` crate, builder API), and module layout have all evolved. The high-level
+> goals (speed, idiomatic Rust, hardware acceleration) and core architectural
+> decisions (SoA tape, closure-based API, NaN propagation) remain accurate.
+> For current details, see the [README](../README.md) and [algorithms.md](algorithms.md).
+
 ## Goals (ordered by priority)
 
 1. **Speed** — optimised for throughput; minimise overhead per elemental operation

@@ -1,3 +1,5 @@
+//! Trait implementations for AD types (`std::ops`, `num_traits`, `simba`).
+
 pub mod dual_vec_num_traits;
 pub mod dual_vec_ops;
 pub mod num_traits_impls;
