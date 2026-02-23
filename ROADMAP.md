@@ -47,14 +47,19 @@ All Phase 1 items are done. Items 1.4, 1.5, 1.7-1.11 were already addressed in p
 
 ---
 
-## Phase 2: Quality
+## ~~Phase 2: Quality~~ Complete
 
-Establish a test baseline, then fill coverage gaps. Do this before any breaking changes.
+Coverage baseline established (49.42% overall) and cross-country unit tests added.
 
-| # | Item | Effort | Notes |
-|---|------|--------|-------|
-| 2.1 | Run `cargo tarpaulin` to establish per-module coverage baseline | small | Do before any breaking changes |
-| 2.2 | Unit tests for `cross_country.rs` Markowitz ordering and fill-in | small | |
+<details>
+<summary>Completed items</summary>
+
+| # | Item | Status |
+|---|------|--------|
+| 2.1 | Coverage baseline via `cargo tarpaulin` | Done — 49.42% (3201/6477 lines). Key: api 97.7%, bytecode_tape 75.6%, stde 97.9%, sparse 84.3%. Low coverage in trait impls is expected (mechanical boilerplate). |
+| 2.2 | Unit tests for `cross_country.rs` Markowitz ordering and fill-in | Done — 11 unit tests covering edge accumulation, Markowitz ordering, vertex elimination, fill-in creation, and end-to-end Jacobian extraction. |
+
+</details>
 
 ---
 
