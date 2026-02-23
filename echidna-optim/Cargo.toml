@@ -12,7 +12,7 @@ keywords = ["optimization", "differentiation", "implicit", "gradient", "scientif
 categories = ["mathematics", "science", "algorithms"]
 
 [dependencies]
-echidna = { path = "..", features = ["bytecode"] }
+echidna = { version = "0.1.0", path = "..", features = ["bytecode"] }
 num-traits = "0.2"
 faer = { version = "0.24", optional = true }
 
