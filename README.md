@@ -6,7 +6,19 @@
 [![License](https://img.shields.io/crates/l/echidna.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.80-blue.svg)](https://www.rust-lang.org)
 
-A high-performance automatic differentiation library for Rust with forward-mode dual numbers, reverse-mode (Adept-style two-stack tape), bytecode graph-mode AD with tape optimization, Taylor-mode higher-order derivatives, sparse Jacobian/Hessian computation via graph coloring, GPU acceleration (wgpu and CUDA), nonsmooth AD with Clarke generalized Jacobians, gradient checkpointing, cross-country elimination, stochastic Taylor derivative estimators, and composable type nesting for arbitrary-order differentiation.
+A high-performance automatic differentiation library for Rust.
+
+- **Forward mode** -- dual numbers (`Dual<F>`, `DualVec<F, N>`) with tangent propagation and batched JVP
+- **Reverse mode** -- Adept-style two-stack tape with `Copy` AD variables (12 bytes for f64)
+- **Bytecode graph-mode AD** -- record-once evaluate-many SoA tape with CSE, DCE, constant folding, and algebraic simplification
+- **Taylor-mode higher-order derivatives** -- const-generic and arena-based dynamic implementations
+- **Sparse Jacobian/Hessian** -- automatic sparsity detection and graph coloring
+- **GPU acceleration** -- wgpu (Metal/Vulkan/DX12) and CUDA batch evaluation
+- **Nonsmooth AD** -- branch tracking, kink detection, Clarke generalized Jacobians
+- **Gradient checkpointing** -- binomial, online, disk-backed, and hint-guided strategies
+- **Cross-country elimination** -- Markowitz vertex elimination for optimal Jacobian accumulation
+- **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, variance reduction
+- **Composable type nesting** -- `Dual<BReverse<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for arbitrary-order differentiation
 
 ## Feature Overview
 
