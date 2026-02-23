@@ -64,19 +64,15 @@ fn bench_gradient_comparison(c: &mut Criterion) {
 
         // num-dual gradient (dynamic)
         let x_dv = DVector::from_column_slice(&x);
-        group.bench_with_input(
-            BenchmarkId::new("num_dual_grad", n),
-            &x_dv,
-            |b, x_dv| {
-                b.iter(|| {
-                    let (f, g) = num_dual::gradient(
-                        |v: DVector<num_dual::DualDVec64>| rosenbrock_nd(v.as_slice()),
-                        black_box(x_dv.clone()),
-                    );
-                    black_box((f, g))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("num_dual_grad", n), &x_dv, |b, x_dv| {
+            b.iter(|| {
+                let (f, g) = num_dual::gradient(
+                    |v: DVector<num_dual::DualDVec64>| rosenbrock_nd(v.as_slice()),
+                    black_box(x_dv.clone()),
+                );
+                black_box((f, g))
+            })
+        });
     }
     group.finish();
 }
@@ -90,12 +86,7 @@ fn bench_jacobian_comparison(c: &mut Criterion) {
 
         // echidna forward-mode Jacobian
         group.bench_with_input(BenchmarkId::new("echidna_fwd", n), &x, |b, x| {
-            b.iter(|| {
-                black_box(echidna::jacobian(
-                    |v| two_output_echidna(v),
-                    black_box(x),
-                ))
-            })
+            b.iter(|| black_box(echidna::jacobian(|v| two_output_echidna(v), black_box(x))))
         });
 
         // echidna bytecode Jacobian (reverse)
@@ -108,22 +99,18 @@ fn bench_jacobian_comparison(c: &mut Criterion) {
 
         // num-dual Jacobian (dynamic)
         let x_dv = DVector::from_column_slice(&x);
-        group.bench_with_input(
-            BenchmarkId::new("num_dual_jac", n),
-            &x_dv,
-            |b, x_dv| {
-                b.iter(|| {
-                    let (f, jac) = num_dual::jacobian(
-                        |v: DVector<num_dual::DualDVec64>| {
-                            let out = two_output_nd(v.as_slice());
-                            DVector::from_column_slice(&out)
-                        },
-                        black_box(x_dv.clone()),
-                    );
-                    black_box((f, jac))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("num_dual_jac", n), &x_dv, |b, x_dv| {
+            b.iter(|| {
+                let (f, jac) = num_dual::jacobian(
+                    |v: DVector<num_dual::DualDVec64>| {
+                        let out = two_output_nd(v.as_slice());
+                        DVector::from_column_slice(&out)
+                    },
+                    black_box(x_dv.clone()),
+                );
+                black_box((f, jac))
+            })
+        });
     }
     group.finish();
 }
@@ -143,19 +130,15 @@ fn bench_hessian_comparison(c: &mut Criterion) {
 
         // num-dual hyper-dual Hessian (dynamic)
         let x_dv = DVector::from_column_slice(&x);
-        group.bench_with_input(
-            BenchmarkId::new("num_dual_hessian", n),
-            &x_dv,
-            |b, x_dv| {
-                b.iter(|| {
-                    let (f, g, h) = num_dual::hessian(
-                        |v: DVector<num_dual::Dual2DVec64>| rosenbrock_nd(v.as_slice()),
-                        black_box(x_dv.clone()),
-                    );
-                    black_box((f, g, h))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("num_dual_hessian", n), &x_dv, |b, x_dv| {
+            b.iter(|| {
+                let (f, g, h) = num_dual::hessian(
+                    |v: DVector<num_dual::Dual2DVec64>| rosenbrock_nd(v.as_slice()),
+                    black_box(x_dv.clone()),
+                );
+                black_box((f, g, h))
+            })
+        });
     }
     group.finish();
 }

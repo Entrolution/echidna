@@ -74,14 +74,14 @@ fn bench_clarke(c: &mut Criterion) {
     let mut group = c.benchmark_group("clarke");
     // Use inputs near the origin so kinks are active
     for n in [2, 5, 10] {
-        let x: Vec<f64> = (0..n).map(|i| if i < 2 { 1e-12 } else { 0.5 + 0.01 * i as f64 }).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| if i < 2 { 1e-12 } else { 0.5 + 0.01 * i as f64 })
+            .collect();
 
         let (mut tape, _) = record(|v| abs_sum(v), &x);
 
         group.bench_with_input(BenchmarkId::new("clarke_jacobian", n), &x, |b, x| {
-            b.iter(|| {
-                black_box(tape.clarke_jacobian(black_box(x), 0.1, Some(10)))
-            })
+            b.iter(|| black_box(tape.clarke_jacobian(black_box(x), 0.1, Some(10))))
         });
 
         group.bench_with_input(BenchmarkId::new("standard_gradient", n), &x, |b, x| {

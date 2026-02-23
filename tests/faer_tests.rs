@@ -2,8 +2,8 @@
 
 use echidna::faer_support::{
     grad_faer, hessian_faer, hvp_faer, jacobian_faer, solve_dense_cholesky_faer,
-    solve_dense_lu_faer, solve_sparse_cholesky_faer, solve_sparse_lu_faer,
-    tape_hvp_faer, tape_sparse_hessian_faer,
+    solve_dense_lu_faer, solve_sparse_cholesky_faer, solve_sparse_lu_faer, tape_hvp_faer,
+    tape_sparse_hessian_faer,
 };
 use echidna::BReverse;
 use faer::{Col, Mat};
@@ -82,7 +82,14 @@ fn solve_dense_cholesky_faer_spd() {
     // Verify A*x = b
     for i in 0..2 {
         let ax_i: f64 = (0..2).map(|j| a[(i, j)] * x[j]).sum();
-        assert!((ax_i - b[i]).abs() < 1e-10, "A*x[{}]={}, b[{}]={}", i, ax_i, i, b[i]);
+        assert!(
+            (ax_i - b[i]).abs() < 1e-10,
+            "A*x[{}]={}, b[{}]={}",
+            i,
+            ax_i,
+            i,
+            b[i]
+        );
     }
 }
 
@@ -175,11 +182,7 @@ fn tape_hvp_faer_rosenbrock() {
             "grad mismatch at {}",
             i
         );
-        assert!(
-            (hvp_t[i] - hvp_d[i]).abs() < 1e-12,
-            "hvp mismatch at {}",
-            i
-        );
+        assert!((hvp_t[i] - hvp_d[i]).abs() < 1e-12, "hvp mismatch at {}", i);
     }
 }
 

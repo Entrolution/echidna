@@ -155,11 +155,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
         // Thin when buffer is full.
         if buffer.len() == num_checkpoints {
             // Keep buffer[0] (pinned). Among buffer[1..], keep even-indexed entries.
-            let tail: Vec<(usize, Vec<F>)> = buffer[1..]
-                .iter()
-                .step_by(2)
-                .cloned()
-                .collect();
+            let tail: Vec<(usize, Vec<F>)> = buffer[1..].iter().step_by(2).cloned().collect();
             buffer.truncate(1);
             buffer.extend(tail);
             spacing *= 2;
@@ -240,10 +236,7 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
     boundaries.dedup(); // In case required contains 0 or num_steps somehow.
 
     // Compute sub-interval lengths.
-    let intervals: Vec<(usize, usize)> = boundaries
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .collect();
+    let intervals: Vec<(usize, usize)> = boundaries.windows(2).map(|w| (w[0], w[1])).collect();
     let interval_lengths: Vec<usize> = intervals.iter().map(|(s, e)| e - s).collect();
     let total_len: usize = interval_lengths.iter().sum();
 
@@ -297,10 +290,7 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
     }
 
     // Integer quotients.
-    let mut alloc: Vec<usize> = weights
-        .iter()
-        .map(|&w| (w * total) / weight_sum)
-        .collect();
+    let mut alloc: Vec<usize> = weights.iter().map(|&w| (w * total) / weight_sum).collect();
     let allocated: usize = alloc.iter().sum();
     let mut remaining = total - allocated;
 
@@ -383,9 +373,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
     let checkpoint_positions = revolve_schedule(num_steps, num_checkpoints);
 
     // Drop guard ensures cleanup even on panic.
-    let mut guard = DiskCheckpointGuard {
-        files: Vec::new(),
-    };
+    let mut guard = DiskCheckpointGuard { files: Vec::new() };
 
     // Write initial state (step 0).
     let path_0 = dir.join("ckpt_0.bin");
@@ -417,11 +405,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
     // Build checkpoint index: sorted list of (step, path) for reading back.
     // Step 0 is always first.
     let mut ckpt_steps: Vec<usize> = vec![0];
-    ckpt_steps.extend(
-        checkpoint_positions
-            .iter()
-            .filter(|&&p| p < num_steps),
-    );
+    ckpt_steps.extend(checkpoint_positions.iter().filter(|&&p| p < num_steps));
     ckpt_steps.sort_unstable();
     ckpt_steps.dedup();
 

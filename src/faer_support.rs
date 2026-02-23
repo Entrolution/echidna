@@ -90,11 +90,7 @@ pub fn hvp_faer(
 }
 
 /// Compute the Hessian-vector product on a pre-recorded tape.
-pub fn tape_hvp_faer(
-    tape: &BytecodeTape<f64>,
-    x: &Col<f64>,
-    v: &Col<f64>,
-) -> (Col<f64>, Col<f64>) {
+pub fn tape_hvp_faer(tape: &BytecodeTape<f64>, x: &Col<f64>, v: &Col<f64>) -> (Col<f64>, Col<f64>) {
     let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
     let vs: Vec<f64> = (0..v.nrows()).map(|i| v[i]).collect();
     let (grad, hvp) = tape.hvp(&xs, &vs);

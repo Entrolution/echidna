@@ -31,10 +31,7 @@ fn matches_reverse_linear() {
 fn matches_reverse_nonlinear() {
     // f(x,y) = [sin(x)+cos(y), exp(x*y)]
     let x = [0.7_f64, 1.3];
-    let (mut tape, _) = record_multi(
-        |v| vec![v[0].sin() + v[1].cos(), (v[0] * v[1]).exp()],
-        &x,
-    );
+    let (mut tape, _) = record_multi(|v| vec![v[0].sin() + v[1].cos(), (v[0] * v[1]).exp()], &x);
 
     let jac_rev = tape.jacobian(&x);
     let jac_cc = tape.jacobian_cross_country(&x);
@@ -103,10 +100,7 @@ fn constant_scaling() {
 fn more_outputs_than_inputs() {
     // f(x) = [x², x³, sin(x)]
     let x = [1.5_f64];
-    let (mut tape, _) = record_multi(
-        |v| vec![v[0] * v[0], v[0] * v[0] * v[0], v[0].sin()],
-        &x,
-    );
+    let (mut tape, _) = record_multi(|v| vec![v[0] * v[0], v[0] * v[0] * v[0], v[0].sin()], &x);
 
     let jac_rev = tape.jacobian(&x);
     let jac_cc = tape.jacobian_cross_country(&x);
@@ -148,8 +142,7 @@ fn fan_out() {
     // Single input feeding all outputs: f(x) = [x+1, x*x, exp(x)]
     let c = BReverse::constant;
     let x = [2.0_f64];
-    let (mut tape, _) =
-        record_multi(|v| vec![v[0] + c(1.0), v[0] * v[0], v[0].exp()], &x);
+    let (mut tape, _) = record_multi(|v| vec![v[0] + c(1.0), v[0] * v[0], v[0].exp()], &x);
 
     let jac_rev = tape.jacobian(&x);
     let jac_cc = tape.jacobian_cross_country(&x);
@@ -194,10 +187,7 @@ fn matches_forward_mode() {
     // Cross-validate with jacobian_forward() on a nonlinear function
     // f(x,y) = [x²+y, x*sin(y)]
     let x = [1.5_f64, 0.8];
-    let (mut tape, _) = record_multi(
-        |v| vec![v[0] * v[0] + v[1], v[0] * v[1].sin()],
-        &x,
-    );
+    let (mut tape, _) = record_multi(|v| vec![v[0] * v[0] + v[1], v[0] * v[1].sin()], &x);
 
     tape.forward(&x);
     let jac_fwd = tape.jacobian_forward(&x);

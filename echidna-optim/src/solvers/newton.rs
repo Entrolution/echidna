@@ -250,11 +250,7 @@ mod tests {
 
             fn eval_hessian(&mut self, _x: &[f64]) -> (f64, Vec<f64>, Vec<Vec<f64>>) {
                 // Return a singular Hessian
-                (
-                    1.0,
-                    vec![1.0, 1.0],
-                    vec![vec![1.0, 1.0], vec![1.0, 1.0]],
-                )
+                (1.0, vec![1.0, 1.0], vec![vec![1.0, 1.0], vec![1.0, 1.0]])
             }
         }
 

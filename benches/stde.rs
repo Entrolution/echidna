@@ -9,13 +9,7 @@ fn make_rademacher_directions(n: usize, s: usize) -> Vec<Vec<f64>> {
     (0..s)
         .map(|si| {
             (0..n)
-                .map(|i| {
-                    if (si * n + i) % 2 == 0 {
-                        1.0
-                    } else {
-                        -1.0
-                    }
-                })
+                .map(|i| if (si * n + i) % 2 == 0 { 1.0 } else { -1.0 })
                 .collect()
         })
         .collect()
@@ -31,19 +25,15 @@ fn bench_stde_laplacian(c: &mut Criterion) {
             let dirs = make_rademacher_directions(n, s);
             let dir_refs: Vec<&[f64]> = dirs.iter().map(|d| d.as_slice()).collect();
 
-            group.bench_with_input(
-                BenchmarkId::new(format!("stde_S{}", s), n),
-                &x,
-                |b, x| {
-                    b.iter(|| {
-                        black_box(echidna::stde::laplacian(
-                            &tape,
-                            black_box(x),
-                            black_box(&dir_refs),
-                        ))
-                    })
-                },
-            );
+            group.bench_with_input(BenchmarkId::new(format!("stde_S{}", s), n), &x, |b, x| {
+                b.iter(|| {
+                    black_box(echidna::stde::laplacian(
+                        &tape,
+                        black_box(x),
+                        black_box(&dir_refs),
+                    ))
+                })
+            });
         }
 
         // Full Hessian trace as baseline

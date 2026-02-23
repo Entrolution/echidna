@@ -16,9 +16,9 @@ pub mod checkpoint;
 #[cfg(feature = "bytecode")]
 pub mod cross_country;
 #[cfg(feature = "bytecode")]
-pub mod opcode;
-#[cfg(feature = "bytecode")]
 pub mod nonsmooth;
+#[cfg(feature = "bytecode")]
+pub mod opcode;
 #[cfg(feature = "bytecode")]
 pub mod sparse;
 

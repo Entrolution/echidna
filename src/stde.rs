@@ -89,11 +89,7 @@ pub struct EstimatorResult<F> {
 /// # Panics
 ///
 /// Panics if `x.len()` or `v.len()` does not match `tape.num_inputs()`.
-pub fn taylor_jet_2nd<F: Float>(
-    tape: &BytecodeTape<F>,
-    x: &[F],
-    v: &[F],
-) -> (F, F, F) {
+pub fn taylor_jet_2nd<F: Float>(tape: &BytecodeTape<F>, x: &[F], v: &[F]) -> (F, F, F) {
     let mut buf = Vec::new();
     taylor_jet_2nd_with_buf(tape, x, v, &mut buf)
 }
@@ -183,18 +179,16 @@ pub fn directional_derivatives<F: Float>(
 ///
 /// Panics if `directions` is empty or any direction's length does not match
 /// `tape.num_inputs()`.
-pub fn laplacian<F: Float>(
-    tape: &BytecodeTape<F>,
-    x: &[F],
-    directions: &[&[F]],
-) -> (F, F) {
+pub fn laplacian<F: Float>(tape: &BytecodeTape<F>, x: &[F], directions: &[&[F]]) -> (F, F) {
     assert!(!directions.is_empty(), "directions must not be empty");
 
     let (value, _, second_order) = directional_derivatives(tape, x, directions);
 
     let two = F::from(2.0).unwrap();
     let s = F::from(directions.len()).unwrap();
-    let sum: F = second_order.iter().fold(F::zero(), |acc, &c2| acc + two * c2);
+    let sum: F = second_order
+        .iter()
+        .fold(F::zero(), |acc, &c2| acc + two * c2);
     let laplacian = sum / s;
 
     (value, laplacian)
@@ -299,7 +293,10 @@ pub fn laplacian_with_control<F: Float>(
     );
 
     let two = F::from(2.0).unwrap();
-    let trace_control: F = control_diagonal.iter().copied().fold(F::zero(), |a, b| a + b);
+    let trace_control: F = control_diagonal
+        .iter()
+        .copied()
+        .fold(F::zero(), |a, b| a + b);
 
     let mut buf = Vec::new();
     let mut value = F::zero();
@@ -352,10 +349,7 @@ pub fn laplacian_with_control<F: Float>(
 /// reads `2 * c2`, which equals `d^2 f / dx_j^2`.
 ///
 /// Returns `(value, diag)` where `diag[j] = d^2 f / dx_j^2`.
-pub fn hessian_diagonal<F: Float>(
-    tape: &BytecodeTape<F>,
-    x: &[F],
-) -> (F, Vec<F>) {
+pub fn hessian_diagonal<F: Float>(tape: &BytecodeTape<F>, x: &[F]) -> (F, Vec<F>) {
     let mut buf = Vec::new();
     hessian_diagonal_with_buf(tape, x, &mut buf)
 }

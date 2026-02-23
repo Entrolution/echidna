@@ -272,7 +272,14 @@ impl<F: Float, const K: usize> Taylor<F, K> {
         let mut s1 = [F::zero(); K];
         let mut s2 = [F::zero(); K];
         let mut s3 = [F::zero(); K];
-        taylor_ops::taylor_atan2(&self.coeffs, &other.coeffs, &mut c, &mut s1, &mut s2, &mut s3);
+        taylor_ops::taylor_atan2(
+            &self.coeffs,
+            &other.coeffs,
+            &mut c,
+            &mut s1,
+            &mut s2,
+            &mut s3,
+        );
         Taylor { coeffs: c }
     }
 

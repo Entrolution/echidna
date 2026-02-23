@@ -95,16 +95,8 @@ fn linear_system_jacobian() {
         "jac[0][0] = {}",
         jac[0][0]
     );
-    assert!(
-        (jac[0][1] - 0.2).abs() < 1e-10,
-        "jac[0][1] = {}",
-        jac[0][1]
-    );
-    assert!(
-        (jac[1][0] - 0.2).abs() < 1e-10,
-        "jac[1][0] = {}",
-        jac[1][0]
-    );
+    assert!((jac[0][1] - 0.2).abs() < 1e-10, "jac[0][1] = {}", jac[0][1]);
+    assert!((jac[1][0] - 0.2).abs() < 1e-10, "jac[1][0] = {}", jac[1][0]);
     assert!(
         (jac[1][1] - (-0.4)).abs() < 1e-10,
         "jac[1][1] = {}",

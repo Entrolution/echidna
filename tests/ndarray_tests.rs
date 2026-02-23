@@ -116,10 +116,6 @@ fn tape_hvp_ndarray_reuse() {
             "grad mismatch at {}",
             i
         );
-        assert!(
-            (hvp_t[i] - hvp_d[i]).abs() < 1e-12,
-            "hvp mismatch at {}",
-            i
-        );
+        assert!((hvp_t[i] - hvp_d[i]).abs() < 1e-12, "hvp mismatch at {}", i);
     }
 }

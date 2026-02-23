@@ -134,10 +134,7 @@ fn roundtrip_tape_f32() {
 fn roundtrip_multi_output() {
     // f: R^3 -> R^2, f(x,y,z) = (x*y + z, x - y*z)
     let x = [2.0_f64, 3.0, 0.5];
-    let (mut tape, _) = record_multi(
-        |v| vec![v[0] * v[1] + v[2], v[0] - v[1] * v[2]],
-        &x,
-    );
+    let (mut tape, _) = record_multi(|v| vec![v[0] * v[1] + v[2], v[0] - v[1] * v[2]], &x);
 
     let json = serde_json::to_string(&tape).unwrap();
     let mut tape2: echidna::BytecodeTape<f64> = serde_json::from_str(&json).unwrap();

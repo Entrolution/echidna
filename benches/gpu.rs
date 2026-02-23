@@ -24,13 +24,16 @@ fn bench_forward_batch(c: &mut Criterion) {
     // (a) Small tape × large batch
     {
         let x0 = vec![1.0_f32; 2];
-        let (tape, _) = record(|v| {
-            let one = f32::from(1.0);
-            let hundred = f32::from(100.0);
-            let dx = v[0] - one;
-            let t = v[1] - v[0] * v[0];
-            dx * dx + hundred * t * t
-        }, &x0);
+        let (tape, _) = record(
+            |v| {
+                let one = f32::from(1.0);
+                let hundred = f32::from(100.0);
+                let dx = v[0] - one;
+                let t = v[1] - v[0] * v[0];
+                dx * dx + hundred * t * t
+            },
+            &x0,
+        );
         let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
         let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -40,7 +43,10 @@ fn bench_forward_batch(c: &mut Criterion) {
                 BenchmarkId::new("small_tape", batch_size),
                 &batch_size,
                 |b, &bs| {
-                    b.iter(|| ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                    b.iter(|| {
+                        ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                            .unwrap()
+                    })
                 },
             );
         }
@@ -62,7 +68,10 @@ fn bench_forward_batch(c: &mut Criterion) {
                 BenchmarkId::new("large_tape", batch_size),
                 &batch_size,
                 |b, &bs| {
-                    b.iter(|| ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                    b.iter(|| {
+                        ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                            .unwrap()
+                    })
                 },
             );
         }
@@ -84,7 +93,10 @@ fn bench_forward_batch(c: &mut Criterion) {
                 BenchmarkId::new("medium_tape", batch_size),
                 &batch_size,
                 |b, &bs| {
-                    b.iter(|| ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                    b.iter(|| {
+                        ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                            .unwrap()
+                    })
                 },
             );
         }
@@ -115,7 +127,10 @@ fn bench_gradient_batch(c: &mut Criterion) {
                 BenchmarkId::new(format!("n{}", n), batch_size),
                 &batch_size,
                 |b, &bs| {
-                    b.iter(|| ctx.gradient_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                    b.iter(|| {
+                        ctx.gradient_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                            .unwrap()
+                    })
                 },
             );
         }
@@ -148,7 +163,10 @@ fn bench_gpu_vs_cpu(c: &mut Criterion) {
             BenchmarkId::new("gpu_forward", batch_size),
             &batch_size,
             |b, &bs| {
-                b.iter(|| ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                b.iter(|| {
+                    ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                        .unwrap()
+                })
             },
         );
 
@@ -169,7 +187,10 @@ fn bench_gpu_vs_cpu(c: &mut Criterion) {
             BenchmarkId::new("gpu_gradient", batch_size),
             &batch_size,
             |b, &bs| {
-                b.iter(|| ctx.gradient_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                b.iter(|| {
+                    ctx.gradient_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                        .unwrap()
+                })
             },
         );
 
@@ -217,7 +238,10 @@ fn bench_transfer_overhead(c: &mut Criterion) {
             BenchmarkId::new("round_trip", batch_size),
             &batch_size,
             |b, &bs| {
-                b.iter(|| ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs).unwrap())
+                b.iter(|| {
+                    ctx.forward_batch(black_box(&gpu_tape), black_box(&inputs), bs)
+                        .unwrap()
+                })
             },
         );
     }

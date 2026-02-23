@@ -280,9 +280,27 @@ pub fn implicit_tangent_sparse(
 ) -> Option<Vec<f64>> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    assert_eq!(z_star.len(), m, "z_star length ({}) must equal num_states ({})", z_star.len(), m);
-    assert_eq!(x.len(), n, "x length ({}) must equal num_params ({})", x.len(), n);
-    assert_eq!(x_dot.len(), n, "x_dot length ({}) must equal num_params ({})", x_dot.len(), n);
+    assert_eq!(
+        z_star.len(),
+        m,
+        "z_star length ({}) must equal num_states ({})",
+        z_star.len(),
+        m
+    );
+    assert_eq!(
+        x.len(),
+        n,
+        "x length ({}) must equal num_params ({})",
+        x.len(),
+        n
+    );
+    assert_eq!(
+        x_dot.len(),
+        n,
+        "x_dot length ({}) must equal num_params ({})",
+        x_dot.len(),
+        n
+    );
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -321,9 +339,27 @@ pub fn implicit_adjoint_sparse(
 ) -> Option<Vec<f64>> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    assert_eq!(z_star.len(), m, "z_star length ({}) must equal num_states ({})", z_star.len(), m);
-    assert_eq!(x.len(), n, "x length ({}) must equal num_params ({})", x.len(), n);
-    assert_eq!(z_bar.len(), m, "z_bar length ({}) must equal num_states ({})", z_bar.len(), m);
+    assert_eq!(
+        z_star.len(),
+        m,
+        "z_star length ({}) must equal num_states ({})",
+        z_star.len(),
+        m
+    );
+    assert_eq!(
+        x.len(),
+        n,
+        "x length ({}) must equal num_params ({})",
+        x.len(),
+        n
+    );
+    assert_eq!(
+        z_bar.len(),
+        m,
+        "z_bar length ({}) must equal num_states ({})",
+        z_bar.len(),
+        m
+    );
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -365,8 +401,20 @@ pub fn implicit_jacobian_sparse(
 ) -> Option<Vec<Vec<f64>>> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    assert_eq!(z_star.len(), m, "z_star length ({}) must equal num_states ({})", z_star.len(), m);
-    assert_eq!(x.len(), n, "x length ({}) must equal num_params ({})", x.len(), n);
+    assert_eq!(
+        z_star.len(),
+        m,
+        "z_star length ({}) must equal num_states ({})",
+        z_star.len(),
+        m
+    );
+    assert_eq!(
+        x.len(),
+        n,
+        "x length ({}) must equal num_params ({})",
+        x.len(),
+        n
+    );
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 

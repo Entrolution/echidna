@@ -117,7 +117,12 @@ pub fn sparse_hessian_ndarray<F: Float + BtapeThreadLocal>(
 ) -> (F, Array1<F>, crate::sparse::SparsityPattern, Array1<F>) {
     let xs = x.as_slice().unwrap();
     let (val, grad, pattern, values) = crate::api::sparse_hessian(f, xs);
-    (val, Array1::from_vec(grad), pattern, Array1::from_vec(values))
+    (
+        val,
+        Array1::from_vec(grad),
+        pattern,
+        Array1::from_vec(values),
+    )
 }
 
 /// Compute the sparse Hessian on a pre-recorded tape.
@@ -127,7 +132,12 @@ pub fn tape_sparse_hessian_ndarray<F: Float>(
 ) -> (F, Array1<F>, crate::sparse::SparsityPattern, Array1<F>) {
     let xs = x.as_slice().unwrap();
     let (val, grad, pattern, values) = tape.sparse_hessian(xs);
-    (val, Array1::from_vec(grad), pattern, Array1::from_vec(values))
+    (
+        val,
+        Array1::from_vec(grad),
+        pattern,
+        Array1::from_vec(values),
+    )
 }
 
 /// Compute the sparse Jacobian, returning `(pattern, column_vectors)`.

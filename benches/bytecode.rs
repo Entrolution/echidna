@@ -150,12 +150,7 @@ fn bench_hvp_buf_reuse(c: &mut Criterion) {
             let mut dv_buf = Vec::new();
             let mut adj_buf = Vec::new();
             b.iter(|| {
-                black_box(tape.hvp_with_buf(
-                    black_box(x),
-                    black_box(&v),
-                    &mut dv_buf,
-                    &mut adj_buf,
-                ))
+                black_box(tape.hvp_with_buf(black_box(x), black_box(&v), &mut dv_buf, &mut adj_buf))
             })
         });
     }
@@ -265,37 +260,29 @@ fn bench_online_checkpointing(c: &mut Criterion) {
             ]
         };
 
-        group.bench_with_input(
-            BenchmarkId::new("offline", num_steps),
-            &x0,
-            |b, x0| {
-                b.iter(|| {
-                    black_box(echidna::grad_checkpointed(
-                        step,
-                        |x| x[0] + x[1],
-                        black_box(x0),
-                        num_steps,
-                        5,
-                    ))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("offline", num_steps), &x0, |b, x0| {
+            b.iter(|| {
+                black_box(echidna::grad_checkpointed(
+                    step,
+                    |x| x[0] + x[1],
+                    black_box(x0),
+                    num_steps,
+                    5,
+                ))
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("online", num_steps),
-            &x0,
-            |b, x0| {
-                b.iter(|| {
-                    black_box(echidna::grad_checkpointed_online(
-                        step,
-                        |_, step_idx| step_idx >= num_steps,
-                        |x| x[0] + x[1],
-                        black_box(x0),
-                        5,
-                    ))
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("online", num_steps), &x0, |b, x0| {
+            b.iter(|| {
+                black_box(echidna::grad_checkpointed_online(
+                    step,
+                    |_, step_idx| step_idx >= num_steps,
+                    |x| x[0] + x[1],
+                    black_box(x0),
+                    5,
+                ))
+            })
+        });
     }
 
     group.finish();

@@ -29,10 +29,7 @@ fn trig_func<T: Scalar>(x: &[T]) -> T {
 }
 
 /// Evaluate tape on CPU at f64 precision for reference.
-fn cpu_forward_f64(
-    tape: &mut echidna::BytecodeTape<f64>,
-    points: &[Vec<f64>],
-) -> Vec<f64> {
+fn cpu_forward_f64(tape: &mut echidna::BytecodeTape<f64>, points: &[Vec<f64>]) -> Vec<f64> {
     points
         .iter()
         .map(|p| {
@@ -78,10 +75,11 @@ fn forward_batch_rosenbrock() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let flat_inputs: Vec<f32> = points.iter().flat_map(|p| p.iter().map(|&v| v as f32)).collect();
-    let gpu_results = ctx
-        .forward_batch(&gpu_tape, &flat_inputs, 100)
-        .unwrap();
+    let flat_inputs: Vec<f32> = points
+        .iter()
+        .flat_map(|p| p.iter().map(|&v| v as f32))
+        .collect();
+    let gpu_results = ctx.forward_batch(&gpu_tape, &flat_inputs, 100).unwrap();
 
     assert_eq!(gpu_results.len(), 100);
     for (i, (gpu, cpu)) in gpu_results.iter().zip(cpu_results.iter()).enumerate() {
@@ -118,7 +116,10 @@ fn forward_batch_trig() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let flat_inputs: Vec<f32> = points.iter().flat_map(|p| p.iter().map(|&v| v as f32)).collect();
+    let flat_inputs: Vec<f32> = points
+        .iter()
+        .flat_map(|p| p.iter().map(|&v| v as f32))
+        .collect();
     let gpu_results = ctx.forward_batch(&gpu_tape, &flat_inputs, 50).unwrap();
 
     assert_eq!(gpu_results.len(), 50);
@@ -268,18 +269,16 @@ fn gradient_batch_rosenbrock() {
         .collect();
 
     // CPU reference gradients (f64)
-    let cpu_grads: Vec<Vec<f64>> = points
-        .iter()
-        .map(|p| tape.gradient(p))
-        .collect();
+    let cpu_grads: Vec<Vec<f64>> = points.iter().map(|p| tape.gradient(p)).collect();
 
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let flat_inputs: Vec<f32> = points.iter().flat_map(|p| p.iter().map(|&v| v as f32)).collect();
-    let (_, gpu_grads) = ctx
-        .gradient_batch(&gpu_tape, &flat_inputs, 50)
-        .unwrap();
+    let flat_inputs: Vec<f32> = points
+        .iter()
+        .flat_map(|p| p.iter().map(|&v| v as f32))
+        .collect();
+    let (_, gpu_grads) = ctx.gradient_batch(&gpu_tape, &flat_inputs, 50).unwrap();
 
     let num_inputs = tape.num_inputs();
     assert_eq!(gpu_grads.len(), 50 * num_inputs);
@@ -322,7 +321,10 @@ fn gradient_batch_trig() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let flat_inputs: Vec<f32> = points.iter().flat_map(|p| p.iter().map(|&v| v as f32)).collect();
+    let flat_inputs: Vec<f32> = points
+        .iter()
+        .flat_map(|p| p.iter().map(|&v| v as f32))
+        .collect();
     let (_, gpu_grads) = ctx.gradient_batch(&gpu_tape, &flat_inputs, 20).unwrap();
 
     let num_inputs = tape.num_inputs();
@@ -356,9 +358,7 @@ fn gradient_batch_single_point() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let (_, gpu_grads) = ctx
-        .gradient_batch(&gpu_tape, &[2.0_f32, 3.0], 1)
-        .unwrap();
+    let (_, gpu_grads) = ctx.gradient_batch(&gpu_tape, &[2.0_f32, 3.0], 1).unwrap();
 
     assert_eq!(gpu_grads.len(), 2);
     for (j, &cpu_g) in cpu_grad.iter().enumerate() {
@@ -393,9 +393,7 @@ fn sparse_jacobian_multi_output() {
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
     let x = [1.5_f32, 0.5];
-    let (vals, pattern, jac_vals) = ctx
-        .sparse_jacobian(&gpu_tape, &mut tape, &x)
-        .unwrap();
+    let (vals, pattern, jac_vals) = ctx.sparse_jacobian(&gpu_tape, &mut tape, &x).unwrap();
 
     // CPU reference: full Jacobian via forward mode
     tape.forward(&x);
@@ -405,13 +403,7 @@ fn sparse_jacobian_multi_output() {
     tape.forward(&x);
     let cpu_vals = tape.output_values();
     for (i, (&g, &c)) in vals.iter().zip(cpu_vals.iter()).enumerate() {
-        assert!(
-            (g - c).abs() < 1e-5,
-            "output[{}]: gpu={}, cpu={}",
-            i,
-            g,
-            c
-        );
+        assert!((g - c).abs() < 1e-5, "output[{}]: gpu={}, cpu={}", i, g, c);
     }
 
     // Check Jacobian entries against CPU reference
@@ -530,9 +522,8 @@ fn sparse_hessian_rosenbrock() {
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
     let x = [1.5_f32, 0.5];
-    let (gpu_val, gpu_grad, gpu_pattern, gpu_hess) = ctx
-        .sparse_hessian(&gpu_tape, &mut tape, &x)
-        .unwrap();
+    let (gpu_val, gpu_grad, gpu_pattern, gpu_hess) =
+        ctx.sparse_hessian(&gpu_tape, &mut tape, &x).unwrap();
 
     // CPU reference
     let (cpu_val, cpu_grad, cpu_pattern, cpu_hess) = tape.sparse_hessian(&x);
@@ -585,9 +576,8 @@ fn sparse_hessian_trig() {
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
     let x = [0.3_f32, 0.8];
-    let (gpu_val, gpu_grad, gpu_pattern, gpu_hess) = ctx
-        .sparse_hessian(&gpu_tape, &mut tape, &x)
-        .unwrap();
+    let (gpu_val, gpu_grad, gpu_pattern, gpu_hess) =
+        ctx.sparse_hessian(&gpu_tape, &mut tape, &x).unwrap();
 
     // CPU reference
     let (cpu_val, cpu_grad, cpu_pattern, cpu_hess) = tape.sparse_hessian(&x);

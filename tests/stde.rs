@@ -3,10 +3,7 @@
 use approx::assert_relative_eq;
 use echidna::{BReverse, BytecodeTape, Scalar};
 
-fn record_fn(
-    f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
-    x: &[f64],
-) -> BytecodeTape<f64> {
+fn record_fn(f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>, x: &[f64]) -> BytecodeTape<f64> {
     let (tape, _) = echidna::record(f, x);
     tape
 }
@@ -454,7 +451,10 @@ fn stats_positive_variance() {
     let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
 
     let result = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
-    assert!(result.sample_variance > 0.0, "expected positive variance for off-diagonal Hessian");
+    assert!(
+        result.sample_variance > 0.0,
+        "expected positive variance for off-diagonal Hessian"
+    );
     assert!(result.standard_error > 0.0);
 }
 
@@ -522,9 +522,7 @@ fn control_unbiased() {
     }
     let dirs: Vec<&[f64]> = vecs.iter().map(|v| v.as_slice()).collect();
 
-    let result = echidna::stde::laplacian_with_control(
-        &tape, &[1.0, 2.0, 3.0], &dirs, &diag,
-    );
+    let result = echidna::stde::laplacian_with_control(&tape, &[1.0, 2.0, 3.0], &dirs, &diag);
     assert_relative_eq!(result.estimate, 16.0, epsilon = 1e-10);
 }
 
@@ -542,12 +540,14 @@ fn control_rademacher_no_effect() {
     let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3];
 
     let uncontrolled = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
-    let controlled = echidna::stde::laplacian_with_control(
-        &tape, &[1.0, 2.0, 3.0], &dirs, &diag,
-    );
+    let controlled = echidna::stde::laplacian_with_control(&tape, &[1.0, 2.0, 3.0], &dirs, &diag);
 
     assert_relative_eq!(controlled.estimate, uncontrolled.estimate, epsilon = 1e-10);
-    assert_relative_eq!(controlled.sample_variance, uncontrolled.sample_variance, epsilon = 1e-10);
+    assert_relative_eq!(
+        controlled.sample_variance,
+        uncontrolled.sample_variance,
+        epsilon = 1e-10
+    );
 }
 
 #[test]
@@ -568,15 +568,14 @@ fn control_gaussian_reduces_variance() {
     let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2, &v3, &v4, &v5];
 
     let uncontrolled = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
-    let controlled = echidna::stde::laplacian_with_control(
-        &tape, &[1.0, 2.0, 3.0], &dirs, &diag,
-    );
+    let controlled = echidna::stde::laplacian_with_control(&tape, &[1.0, 2.0, 3.0], &dirs, &diag);
 
     // Control variate should reduce sample variance
     assert!(
         controlled.sample_variance < uncontrolled.sample_variance,
         "expected control variate to reduce variance: controlled={} vs uncontrolled={}",
-        controlled.sample_variance, uncontrolled.sample_variance,
+        controlled.sample_variance,
+        uncontrolled.sample_variance,
     );
 }
 
@@ -592,13 +591,20 @@ fn control_zero_diagonal() {
     let dirs: Vec<&[f64]> = vec![&v0, &v1, &v2];
 
     let stats = echidna::stde::laplacian_with_stats(&tape, &[1.0, 2.0, 3.0], &dirs);
-    let controlled = echidna::stde::laplacian_with_control(
-        &tape, &[1.0, 2.0, 3.0], &dirs, &zero_diag,
-    );
+    let controlled =
+        echidna::stde::laplacian_with_control(&tape, &[1.0, 2.0, 3.0], &dirs, &zero_diag);
 
     assert_relative_eq!(controlled.estimate, stats.estimate, epsilon = 1e-14);
-    assert_relative_eq!(controlled.sample_variance, stats.sample_variance, epsilon = 1e-14);
-    assert_relative_eq!(controlled.standard_error, stats.standard_error, epsilon = 1e-14);
+    assert_relative_eq!(
+        controlled.sample_variance,
+        stats.sample_variance,
+        epsilon = 1e-14
+    );
+    assert_relative_eq!(
+        controlled.standard_error,
+        stats.standard_error,
+        epsilon = 1e-14
+    );
 }
 
 #[test]

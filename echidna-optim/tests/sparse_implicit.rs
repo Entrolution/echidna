@@ -3,8 +3,8 @@
 use echidna::record_multi;
 use echidna_optim::linalg::lu_solve;
 use echidna_optim::{
-    implicit_adjoint, implicit_jacobian, implicit_tangent, implicit_adjoint_sparse,
-    implicit_jacobian_sparse, implicit_tangent_sparse, SparseImplicitContext,
+    implicit_adjoint, implicit_adjoint_sparse, implicit_jacobian, implicit_jacobian_sparse,
+    implicit_tangent, implicit_tangent_sparse, SparseImplicitContext,
 };
 
 /// Simple Newton root-finder for testing: solve F(z, x) = 0 for z given fixed x.
@@ -78,7 +78,12 @@ fn sparse_matches_dense_linear() {
             assert!(
                 (dense[i][j] - sparse[i][j]).abs() < 1e-10,
                 "dense[{}][{}] = {}, sparse[{}][{}] = {}",
-                i, j, dense[i][j], i, j, sparse[i][j]
+                i,
+                j,
+                dense[i][j],
+                i,
+                j,
+                sparse[i][j]
             );
         }
     }
@@ -148,7 +153,11 @@ fn sparse_tangent_matches_dense() {
             assert!(
                 (dense[i] - sparse[i]).abs() < 1e-10,
                 "x_dot={:?}, dense[{}] = {}, sparse[{}] = {}",
-                x_dot, i, dense[i], i, sparse[i]
+                x_dot,
+                i,
+                dense[i],
+                i,
+                sparse[i]
             );
         }
     }
@@ -187,7 +196,11 @@ fn sparse_adjoint_matches_dense() {
             assert!(
                 (dense[j] - sparse[j]).abs() < 1e-10,
                 "z_bar={:?}, dense[{}] = {}, sparse[{}] = {}",
-                z_bar, j, dense[j], j, sparse[j]
+                z_bar,
+                j,
+                dense[j],
+                j,
+                sparse[j]
             );
         }
     }
@@ -283,7 +296,10 @@ fn tridiagonal_system() {
             assert!(
                 (dense[i][j] - sparse[i][j]).abs() < 1e-8,
                 "mismatch at [{},{}]: dense = {}, sparse = {}",
-                i, j, dense[i][j], sparse[i][j]
+                i,
+                j,
+                dense[i][j],
+                sparse[i][j]
             );
         }
     }
@@ -317,12 +333,14 @@ fn context_reuse() {
     assert!(
         (jac1[0][0] - expected1).abs() < 1e-10,
         "point 1: got {}, expected {}",
-        jac1[0][0], expected1
+        jac1[0][0],
+        expected1
     );
     assert!(
         (jac2[0][0] - expected2).abs() < 1e-10,
         "point 2: got {}, expected {}",
-        jac2[0][0], expected2
+        jac2[0][0],
+        expected2
     );
 }
 
@@ -358,7 +376,12 @@ fn block_diagonal() {
     let ctx = SparseImplicitContext::new(&tape, m);
 
     // F_z is diagonal, so nnz should be exactly 4
-    assert_eq!(ctx.fz_nnz(), m, "F_z should be diagonal, nnz = {}", ctx.fz_nnz());
+    assert_eq!(
+        ctx.fz_nnz(),
+        m,
+        "F_z should be diagonal, nnz = {}",
+        ctx.fz_nnz()
+    );
 
     let dense = implicit_jacobian(&mut tape, &z_star, &x, m).unwrap();
     let sparse = implicit_jacobian_sparse(&mut tape, &z_star, &x, &ctx).unwrap();
@@ -368,7 +391,10 @@ fn block_diagonal() {
             assert!(
                 (dense[i][j] - sparse[i][j]).abs() < 1e-10,
                 "mismatch at [{},{}]: dense = {}, sparse = {}",
-                i, j, dense[i][j], sparse[i][j]
+                i,
+                j,
+                dense[i][j],
+                sparse[i][j]
             );
         }
     }

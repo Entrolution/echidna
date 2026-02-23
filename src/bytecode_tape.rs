@@ -158,7 +158,9 @@ impl<F: Float> BytecodeTape<F> {
 
         // Algebraic simplification: single-arg-const patterns (binary ops only).
         if (arg0_const || arg1_const) && arg1 != UNUSED {
-            if let Some(idx) = self.try_algebraic_simplify(op, arg0, arg1, arg0_const, arg1_const, value) {
+            if let Some(idx) =
+                self.try_algebraic_simplify(op, arg0, arg1, arg0_const, arg1_const, value)
+            {
                 return idx;
             }
         }
@@ -199,16 +201,26 @@ impl<F: Float> BytecodeTape<F> {
         let one = F::one();
         match op {
             OpCode::Add => {
-                if arg1_const && self.values[arg1 as usize] == zero { return Some(arg0); }
-                if arg0_const && self.values[arg0 as usize] == zero { return Some(arg1); }
+                if arg1_const && self.values[arg1 as usize] == zero {
+                    return Some(arg0);
+                }
+                if arg0_const && self.values[arg0 as usize] == zero {
+                    return Some(arg1);
+                }
             }
             OpCode::Sub => {
-                if arg1_const && self.values[arg1 as usize] == zero { return Some(arg0); }
+                if arg1_const && self.values[arg1 as usize] == zero {
+                    return Some(arg0);
+                }
             }
             OpCode::Mul => {
                 // Identity: x * 1 → x, 1 * x → x
-                if arg1_const && self.values[arg1 as usize] == one { return Some(arg0); }
-                if arg0_const && self.values[arg0 as usize] == one { return Some(arg1); }
+                if arg1_const && self.values[arg1 as usize] == one {
+                    return Some(arg0);
+                }
+                if arg0_const && self.values[arg0 as usize] == one {
+                    return Some(arg1);
+                }
                 // Absorbing: x * 0 → const (guarded: NaN * 0 = NaN, not 0)
                 if arg1_const && self.values[arg1 as usize] == zero && value == zero {
                     return Some(self.push_const(value));
@@ -218,7 +230,9 @@ impl<F: Float> BytecodeTape<F> {
                 }
             }
             OpCode::Div => {
-                if arg1_const && self.values[arg1 as usize] == one { return Some(arg0); }
+                if arg1_const && self.values[arg1 as usize] == one {
+                    return Some(arg0);
+                }
             }
             _ => {}
         }
@@ -526,7 +540,8 @@ impl<F: Float> BytecodeTape<F> {
         inputs: &[F],
         tol: F,
         max_active_kinks: Option<usize>,
-    ) -> Result<(crate::nonsmooth::NonsmoothInfo<F>, Vec<Vec<Vec<F>>>), crate::nonsmooth::ClarkeError> {
+    ) -> Result<(crate::nonsmooth::NonsmoothInfo<F>, Vec<Vec<Vec<F>>>), crate::nonsmooth::ClarkeError>
+    {
         #![allow(clippy::type_complexity)]
         let info = self.forward_nonsmooth(inputs);
         let active: Vec<&crate::nonsmooth::KinkEntry<F>> = info.active_kinks(tol);
@@ -534,10 +549,7 @@ impl<F: Float> BytecodeTape<F> {
         let limit = max_active_kinks.unwrap_or(20);
 
         if k > limit {
-            return Err(crate::nonsmooth::ClarkeError::TooManyKinks {
-                count: k,
-                limit,
-            });
+            return Err(crate::nonsmooth::ClarkeError::TooManyKinks { count: k, limit });
         }
 
         let active_indices: Vec<u32> = active.iter().map(|e| e.tape_index).collect();
@@ -630,10 +642,7 @@ impl<F: Float> BytecodeTape<F> {
     /// taken at each one.
     ///
     /// Returns [`NonsmoothInfo`] containing all kink entries in tape order.
-    pub fn forward_nonsmooth(
-        &mut self,
-        inputs: &[F],
-    ) -> crate::nonsmooth::NonsmoothInfo<F> {
+    pub fn forward_nonsmooth(&mut self, inputs: &[F]) -> crate::nonsmooth::NonsmoothInfo<F> {
         self.forward(inputs);
 
         let mut kinks = Vec::new();
@@ -1584,8 +1593,7 @@ impl<F: Float> BytecodeTape<F> {
         }
 
         for k in 0..K - 1 {
-            let inputs: Vec<Taylor<F, K>> =
-                (0..n).map(|i| Taylor::new(y_coeffs[i])).collect();
+            let inputs: Vec<Taylor<F, K>> = (0..n).map(|i| Taylor::new(y_coeffs[i])).collect();
 
             self.forward_tangent(&inputs, buf);
 
@@ -1691,7 +1699,10 @@ impl<F: Float> BytecodeTape<F> {
     /// # Panics
     /// Panics if `active_outputs` is empty.
     pub fn dead_code_elimination_for_outputs(&mut self, active_outputs: &[u32]) {
-        assert!(!active_outputs.is_empty(), "active_outputs must not be empty");
+        assert!(
+            !active_outputs.is_empty(),
+            "active_outputs must not be empty"
+        );
 
         let n = self.opcodes.len();
         let mut reachable = vec![false; n];
@@ -1758,7 +1769,10 @@ impl<F: Float> BytecodeTape<F> {
         self.num_variables = new_len as u32;
 
         // Update output tracking to only include active outputs.
-        self.output_indices = active_outputs.iter().map(|&oi| remap[oi as usize]).collect();
+        self.output_indices = active_outputs
+            .iter()
+            .map(|&oi| remap[oi as usize])
+            .collect();
         self.output_index = self.output_indices[0];
     }
 

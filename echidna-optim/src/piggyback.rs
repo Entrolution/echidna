@@ -1,12 +1,7 @@
 use echidna::{BytecodeTape, Dual, Float};
 
 /// Validate that a step tape G: R^(m+n) -> R^m has the expected shape.
-fn validate_step_tape<F: Float>(
-    tape: &BytecodeTape<F>,
-    z: &[F],
-    x: &[F],
-    num_states: usize,
-) {
+fn validate_step_tape<F: Float>(tape: &BytecodeTape<F>, z: &[F], x: &[F], num_states: usize) {
     assert_eq!(z.len(), num_states);
     assert_eq!(tape.num_inputs(), num_states + x.len());
     assert_eq!(

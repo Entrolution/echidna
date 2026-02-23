@@ -352,7 +352,11 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     #[inline]
     pub fn powi(self, n: i32) -> Self {
         if self.is_all_zero() {
-            return if n > 0 { Self::zero() } else { Self::nan_laurent() };
+            return if n > 0 {
+                Self::zero()
+            } else {
+                Self::nan_laurent()
+            };
         }
         let mut c = [F::zero(); K];
         let mut s1 = [F::zero(); K];
@@ -486,8 +490,14 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         } else {
             taylor_ops::taylor_sin_cos(&self.coeffs, &mut s, &mut co);
         }
-        let mut ls = Laurent { coeffs: s, pole_order: 0 };
-        let mut lc = Laurent { coeffs: co, pole_order: 0 };
+        let mut ls = Laurent {
+            coeffs: s,
+            pole_order: 0,
+        };
+        let mut lc = Laurent {
+            coeffs: co,
+            pole_order: 0,
+        };
         ls.normalize();
         lc.normalize();
         (ls, lc)
@@ -538,7 +548,14 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         let mut s1 = [F::zero(); K];
         let mut s2 = [F::zero(); K];
         let mut s3 = [F::zero(); K];
-        taylor_ops::taylor_atan2(&self.coeffs, &other.coeffs, &mut c, &mut s1, &mut s2, &mut s3);
+        taylor_ops::taylor_atan2(
+            &self.coeffs,
+            &other.coeffs,
+            &mut c,
+            &mut s1,
+            &mut s2,
+            &mut s3,
+        );
         Laurent {
             coeffs: c,
             pole_order: 0,
@@ -705,12 +722,12 @@ mod laurent_serde {
 
             let data = LaurentData::<F>::deserialize(deserializer)?;
             let coeffs: [F; K] = data.coeffs.try_into().map_err(|v: Vec<F>| {
-                serde::de::Error::invalid_length(
-                    v.len(),
-                    &&*format!("array of length {K}"),
-                )
+                serde::de::Error::invalid_length(v.len(), &&*format!("array of length {K}"))
             })?;
-            Ok(Laurent { coeffs, pole_order: data.pole_order })
+            Ok(Laurent {
+                coeffs,
+                pole_order: data.pole_order,
+            })
         }
     }
 }

@@ -415,7 +415,13 @@ pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
 ///
 /// Uses `scratch1` for `ln(a)` and `scratch2` for `b * ln(a)`.
 #[inline]
-pub fn taylor_powf<F: Float>(a: &[F], b: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
+pub fn taylor_powf<F: Float>(
+    a: &[F],
+    b: &[F],
+    c: &mut [F],
+    scratch1: &mut [F],
+    scratch2: &mut [F],
+) {
     let n = c.len();
     // scratch1 = ln(a)
     taylor_ln(a, scratch1);

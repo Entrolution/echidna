@@ -84,7 +84,8 @@ fn tangent_solve_2d_contraction() {
             let x1 = v[3];
             let one = x0 / x0;
             let pt4 = (one + one) / (one + one + one + one + one); // 2/5 = 0.4
-            let pt3 = (one + one + one) / (one + one + one + one + one + one + one + one + one + one); // 3/10 = 0.3
+            let pt3 =
+                (one + one + one) / (one + one + one + one + one + one + one + one + one + one); // 3/10 = 0.3
             vec![pt4 * z0 + x0, pt3 * z1 + x1]
         },
         &[0.0_f64, 0.0, 1.2, 2.1],
@@ -116,11 +117,7 @@ fn tangent_solve_2d_contraction() {
         z_dot[0],
         1.0 / 0.6
     );
-    assert!(
-        z_dot[1].abs() < 1e-7,
-        "dz1*/dx0 = {}, expected 0",
-        z_dot[1]
-    );
+    assert!(z_dot[1].abs() < 1e-7, "dz1*/dx0 = {}, expected 0", z_dot[1]);
 
     // Direction dx0=0, dx1=1
     let result2 = piggyback_tangent_solve(&tape, &[0.0, 0.0], &x, &[0.0, 1.0], 2, 200, 1e-12);
@@ -187,8 +184,8 @@ fn adjoint_vs_tangent_transpose() {
                 let x1 = v[3];
                 let one = x0 / x0;
                 let pt4 = (one + one) / (one + one + one + one + one);
-                let pt3 = (one + one + one)
-                    / (one + one + one + one + one + one + one + one + one + one);
+                let pt3 =
+                    (one + one + one) / (one + one + one + one + one + one + one + one + one + one);
                 vec![pt4 * z0 + x0, pt3 * z1 + x1]
             },
             &[0.0_f64, 0.0, 1.2, 2.1],
@@ -200,21 +197,17 @@ fn adjoint_vs_tangent_transpose() {
 
     // Get tangent Jacobian columns
     let (tape, _) = make_tape();
-    let (_, col0, _) =
-        piggyback_tangent_solve(&tape, &[0.0, 0.0], &x, &[1.0, 0.0], 2, 200, 1e-12)
-            .expect("should converge");
-    let (_, col1, _) =
-        piggyback_tangent_solve(&tape, &[0.0, 0.0], &x, &[0.0, 1.0], 2, 200, 1e-12)
-            .expect("should converge");
+    let (_, col0, _) = piggyback_tangent_solve(&tape, &[0.0, 0.0], &x, &[1.0, 0.0], 2, 200, 1e-12)
+        .expect("should converge");
+    let (_, col1, _) = piggyback_tangent_solve(&tape, &[0.0, 0.0], &x, &[0.0, 1.0], 2, 200, 1e-12)
+        .expect("should converge");
 
     // Get adjoint rows
     let (mut tape_a, _) = make_tape();
-    let (row0, _) =
-        piggyback_adjoint_solve(&mut tape_a, &z_star, &x, &[1.0, 0.0], 2, 200, 1e-12)
-            .expect("should converge");
-    let (row1, _) =
-        piggyback_adjoint_solve(&mut tape_a, &z_star, &x, &[0.0, 1.0], 2, 200, 1e-12)
-            .expect("should converge");
+    let (row0, _) = piggyback_adjoint_solve(&mut tape_a, &z_star, &x, &[1.0, 0.0], 2, 200, 1e-12)
+        .expect("should converge");
+    let (row1, _) = piggyback_adjoint_solve(&mut tape_a, &z_star, &x, &[0.0, 1.0], 2, 200, 1e-12)
+        .expect("should converge");
 
     // adjoint(e_i)[j] should equal tangent(e_j)[i] (transpose relationship)
     // row0 = (dz*/dx)^T · [1,0] = [dz0*/dx0, dz0*/dx1] = [col0[0], col1[0]]
@@ -359,8 +352,7 @@ fn forward_adjoint_solve_linear() {
         &[0.0_f64, 3.0],
     );
 
-    let result =
-        piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[3.0], &[1.0], 1, 200, 1e-12);
+    let result = piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[3.0], &[1.0], 1, 200, 1e-12);
     let (z_star, x_bar, iters) = result.expect("should converge");
 
     assert!(
@@ -430,11 +422,7 @@ fn forward_adjoint_solve_2d() {
         x_bar[0],
         1.0 / 0.6
     );
-    assert!(
-        x_bar[1].abs() < 1e-7,
-        "x̄[1] = {}, expected 0",
-        x_bar[1]
-    );
+    assert!(x_bar[1].abs() < 1e-7, "x̄[1] = {}, expected 0", x_bar[1]);
 }
 
 // ============================================================
@@ -453,8 +441,8 @@ fn forward_adjoint_matches_sequential() {
                 let x1 = v[3];
                 let one = x0 / x0;
                 let pt4 = (one + one) / (one + one + one + one + one);
-                let pt3 = (one + one + one)
-                    / (one + one + one + one + one + one + one + one + one + one);
+                let pt3 =
+                    (one + one + one) / (one + one + one + one + one + one + one + one + one + one);
                 vec![pt4 * z0 + x0, pt3 * z1 + x1]
             },
             &[0.0_f64, 0.0, 1.2, 2.1],
@@ -475,16 +463,9 @@ fn forward_adjoint_matches_sequential() {
 
     // Interleaved
     let (mut tape_int, _) = make_tape();
-    let (z_star_int, x_bar_int, _) = piggyback_forward_adjoint_solve(
-        &mut tape_int,
-        &[0.0, 0.0],
-        &x,
-        &z_bar,
-        2,
-        200,
-        1e-12,
-    )
-    .expect("interleaved should converge");
+    let (z_star_int, x_bar_int, _) =
+        piggyback_forward_adjoint_solve(&mut tape_int, &[0.0, 0.0], &x, &z_bar, 2, 200, 1e-12)
+            .expect("interleaved should converge");
 
     for i in 0..2 {
         assert!(
@@ -523,10 +504,6 @@ fn forward_adjoint_non_convergent() {
         &[1.0_f64, 1.0],
     );
 
-    let result =
-        piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12);
-    assert!(
-        result.is_none(),
-        "should not converge for non-contraction"
-    );
+    let result = piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12);
+    assert!(result.is_none(), "should not converge for non-contraction");
 }

@@ -5,10 +5,7 @@ use crate::linalg::{lu_back_solve, lu_factor, lu_solve};
 /// Partition a full Jacobian `J_F` (m × (m+n)) into `F_z` (m × m) and `F_x` (m × n).
 ///
 /// `num_states` is `m`, the number of state variables (first `m` columns → `F_z`).
-fn partition_jacobian<F: Float>(
-    jac: &[Vec<F>],
-    num_states: usize,
-) -> (Vec<Vec<F>>, Vec<Vec<F>>) {
+fn partition_jacobian<F: Float>(jac: &[Vec<F>], num_states: usize) -> (Vec<Vec<F>>, Vec<Vec<F>>) {
     let m = num_states;
     let mut f_z = Vec::with_capacity(m);
     let mut f_x = Vec::with_capacity(m);
@@ -36,12 +33,7 @@ fn transpose<F: Float>(mat: &[Vec<F>]) -> Vec<Vec<F>> {
 }
 
 /// Validate inputs shared by all implicit differentiation functions.
-fn validate_inputs<F: Float>(
-    tape: &BytecodeTape<F>,
-    z_star: &[F],
-    x: &[F],
-    num_states: usize,
-) {
+fn validate_inputs<F: Float>(tape: &BytecodeTape<F>, z_star: &[F], x: &[F], num_states: usize) {
     assert_eq!(
         z_star.len(),
         num_states,
@@ -247,8 +239,20 @@ pub fn implicit_hvp<F: Float>(
 ) -> Option<Vec<F>> {
     let n = x.len();
     let m = num_states;
-    assert_eq!(v.len(), n, "v length ({}) must equal x length ({})", v.len(), n);
-    assert_eq!(w.len(), n, "w length ({}) must equal x length ({})", w.len(), n);
+    assert_eq!(
+        v.len(),
+        n,
+        "v length ({}) must equal x length ({})",
+        v.len(),
+        n
+    );
+    assert_eq!(
+        w.len(),
+        n,
+        "w length ({}) must equal x length ({})",
+        w.len(),
+        n
+    );
     validate_inputs(tape, z_star, x, num_states);
 
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
@@ -279,10 +283,7 @@ pub fn implicit_hvp<F: Float>(
         ));
     }
     for j in 0..n {
-        dd_inputs.push(Dual::new(
-            Dual::new(x[j], v[j]),
-            Dual::new(w[j], F::zero()),
-        ));
+        dd_inputs.push(Dual::new(Dual::new(x[j], v[j]), Dual::new(w[j], F::zero())));
     }
 
     let mut buf = Vec::new();
@@ -348,10 +349,7 @@ pub fn implicit_hessian<F: Float>(
             for (l, &x_l) in x.iter().enumerate() {
                 let p_l = if l == j { F::one() } else { F::zero() };
                 let w_l = if l == k { F::one() } else { F::zero() };
-                dd_inputs.push(Dual::new(
-                    Dual::new(x_l, p_l),
-                    Dual::new(w_l, F::zero()),
-                ));
+                dd_inputs.push(Dual::new(Dual::new(x_l, p_l), Dual::new(w_l, F::zero())));
             }
 
             tape.forward_tangent(&dd_inputs, &mut buf);

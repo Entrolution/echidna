@@ -75,7 +75,10 @@ fn forward_batch_rosenbrock_f32() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let flat_inputs: Vec<f32> = points.iter().flat_map(|p| p.iter().map(|&v| v as f32)).collect();
+    let flat_inputs: Vec<f32> = points
+        .iter()
+        .flat_map(|p| p.iter().map(|&v| v as f32))
+        .collect();
     let gpu_results = ctx.forward_batch(&gpu_tape, &flat_inputs, 100).unwrap();
 
     assert_eq!(gpu_results.len(), 100);
@@ -112,7 +115,10 @@ fn gradient_batch_rosenbrock_f32() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let flat_inputs: Vec<f32> = points.iter().flat_map(|p| p.iter().map(|&v| v as f32)).collect();
+    let flat_inputs: Vec<f32> = points
+        .iter()
+        .flat_map(|p| p.iter().map(|&v| v as f32))
+        .collect();
     let (_, gpu_grads) = ctx.gradient_batch(&gpu_tape, &flat_inputs, 50).unwrap();
 
     let num_inputs = tape.num_inputs();
@@ -270,9 +276,8 @@ fn sparse_hessian_rosenbrock_f64() {
     let gpu_tape = ctx.upload_tape_f64(&tape).unwrap();
 
     let x = [1.5_f64, 0.5];
-    let (gpu_val, gpu_grad, gpu_pattern, gpu_hess) = ctx
-        .sparse_hessian_f64(&gpu_tape, &mut tape, &x)
-        .unwrap();
+    let (gpu_val, gpu_grad, gpu_pattern, gpu_hess) =
+        ctx.sparse_hessian_f64(&gpu_tape, &mut tape, &x).unwrap();
 
     let (cpu_val, cpu_grad, cpu_pattern, cpu_hess) = tape.sparse_hessian(&x);
 

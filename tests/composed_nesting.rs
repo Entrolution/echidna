@@ -110,11 +110,8 @@ mod dual_breverse {
         let x = [0.5_f64, 1.2];
         let v = [1.0, 0.0];
 
-        let (ref_grad, ref_hvp) = echidna::hvp(
-            |x| x[0].sin() * x[1].cos() + (x[0] * x[1]).exp(),
-            &x,
-            &v,
-        );
+        let (ref_grad, ref_hvp) =
+            echidna::hvp(|x| x[0].sin() * x[1].cos() + (x[0] * x[1]).exp(), &x, &v);
 
         let (_, grad, hvp) = echidna::composed_hvp(
             |x: &[Dual<BReverse<f64>>]| x[0].sin() * x[1].cos() + (x[0] * x[1]).exp(),
@@ -123,24 +120,15 @@ mod dual_breverse {
         );
 
         for i in 0..2 {
-            assert!(
-                (grad[i] - ref_grad[i]).abs() < 1e-8,
-                "grad[{}] mismatch",
-                i
-            );
-            assert!(
-                (hvp[i] - ref_hvp[i]).abs() < 1e-8,
-                "hvp[{}] mismatch",
-                i
-            );
+            assert!((grad[i] - ref_grad[i]).abs() < 1e-8, "grad[{}] mismatch", i);
+            assert!((hvp[i] - ref_hvp[i]).abs() < 1e-8, "hvp[{}] mismatch", i);
         }
     }
 
     /// Test the composed_hvp convenience function at multiple points.
     #[test]
     fn composed_hvp_api() {
-        let points: &[([f64; 2], [f64; 2])] =
-            &[([1.0, 1.0], [1.0, 0.0]), ([0.0, 0.0], [0.0, 1.0])];
+        let points: &[([f64; 2], [f64; 2])] = &[([1.0, 1.0], [1.0, 0.0]), ([0.0, 0.0], [0.0, 1.0])];
 
         for (x, v) in points {
             let (ref_grad, ref_hvp) = echidna::hvp(
@@ -413,14 +401,11 @@ mod triple_nesting {
         let base = BReverse::from_tape(x_val, idx);
 
         // Inner Dual: tracks first tangent direction (v1 = 1)
-        let inner: Dual<BReverse<f64>> =
-            Dual::new(base, BReverse::constant(1.0));
+        let inner: Dual<BReverse<f64>> = Dual::new(base, BReverse::constant(1.0));
 
         // Outer Dual: tracks second tangent direction (v2 = 1)
-        let x: Dual<Dual<BReverse<f64>>> = Dual::new(
-            inner,
-            Dual::constant(BReverse::constant(1.0)),
-        );
+        let x: Dual<Dual<BReverse<f64>>> =
+            Dual::new(inner, Dual::constant(BReverse::constant(1.0)));
 
         let _guard = BtapeGuard::new(&mut tape);
         let y = x * x * x;
@@ -495,10 +480,7 @@ mod scalar_chain {
         assert!((val_f64 - 6.5).abs() < 1e-10);
 
         // Dual<f64>
-        let val_dual = rosenbrock(&[
-            Dual::constant(1.5_f64),
-            Dual::constant(2.0),
-        ]);
+        let val_dual = rosenbrock(&[Dual::constant(1.5_f64), Dual::constant(2.0)]);
         assert!((val_dual.re - 6.5).abs() < 1e-10);
 
         // BReverse<f64> — needs tape
@@ -506,10 +488,7 @@ mod scalar_chain {
             let mut tape = BytecodeTape::with_capacity(100);
             let i0 = tape.new_input(1.5);
             let i1 = tape.new_input(2.0);
-            let inputs = [
-                BReverse::from_tape(1.5, i0),
-                BReverse::from_tape(2.0, i1),
-            ];
+            let inputs = [BReverse::from_tape(1.5, i0), BReverse::from_tape(2.0, i1)];
             let _guard = BtapeGuard::new(&mut tape);
             let val_br = rosenbrock(&inputs);
             assert!((Scalar::value(&val_br) - 6.5_f64).abs() < 1e-10);
@@ -521,14 +500,8 @@ mod scalar_chain {
             let i0 = tape.new_input(1.5);
             let i1 = tape.new_input(2.0);
             let inputs: [Dual<BReverse<f64>>; 2] = [
-                Dual::new(
-                    BReverse::from_tape(1.5, i0),
-                    BReverse::constant(0.0),
-                ),
-                Dual::new(
-                    BReverse::from_tape(2.0, i1),
-                    BReverse::constant(0.0),
-                ),
+                Dual::new(BReverse::from_tape(1.5, i0), BReverse::constant(0.0)),
+                Dual::new(BReverse::from_tape(2.0, i1), BReverse::constant(0.0)),
             ];
             let _guard = BtapeGuard::new(&mut tape);
             let val_composed = rosenbrock(&inputs);
@@ -555,14 +528,10 @@ mod tape_lifecycle {
         let idx0 = tape.new_input(3.0);
         let idx1 = tape.new_input(4.0);
 
-        let x0: Dual<BReverse<f64>> = Dual::new(
-            BReverse::from_tape(3.0, idx0),
-            BReverse::constant(1.0),
-        );
-        let x1: Dual<BReverse<f64>> = Dual::new(
-            BReverse::from_tape(4.0, idx1),
-            BReverse::constant(0.0),
-        );
+        let x0: Dual<BReverse<f64>> =
+            Dual::new(BReverse::from_tape(3.0, idx0), BReverse::constant(1.0));
+        let x1: Dual<BReverse<f64>> =
+            Dual::new(BReverse::from_tape(4.0, idx1), BReverse::constant(0.0));
 
         {
             let _guard = BtapeGuard::new(&mut tape);

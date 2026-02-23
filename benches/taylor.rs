@@ -14,11 +14,9 @@ fn bench_taylor_grad(c: &mut Criterion) {
         // Rosenbrock
         let (tape, _) = record(|v| rosenbrock(v), &x);
 
-        group.bench_with_input(
-            BenchmarkId::new("rosenbrock_taylor2", n),
-            &x,
-            |b, x| b.iter(|| black_box(tape.taylor_grad::<2>(black_box(x), black_box(&v)))),
-        );
+        group.bench_with_input(BenchmarkId::new("rosenbrock_taylor2", n), &x, |b, x| {
+            b.iter(|| black_box(tape.taylor_grad::<2>(black_box(x), black_box(&v))))
+        });
 
         group.bench_with_input(BenchmarkId::new("rosenbrock_hvp", n), &x, |b, x| {
             b.iter(|| black_box(tape.hvp(black_box(x), black_box(&v))))
@@ -27,11 +25,9 @@ fn bench_taylor_grad(c: &mut Criterion) {
         // Rastrigin
         let (tape_r, _) = record(|v| rastrigin(v), &x);
 
-        group.bench_with_input(
-            BenchmarkId::new("rastrigin_taylor2", n),
-            &x,
-            |b, x| b.iter(|| black_box(tape_r.taylor_grad::<2>(black_box(x), black_box(&v)))),
-        );
+        group.bench_with_input(BenchmarkId::new("rastrigin_taylor2", n), &x, |b, x| {
+            b.iter(|| black_box(tape_r.taylor_grad::<2>(black_box(x), black_box(&v))))
+        });
 
         group.bench_with_input(BenchmarkId::new("rastrigin_hvp", n), &x, |b, x| {
             b.iter(|| black_box(tape_r.hvp(black_box(x), black_box(&v))))

@@ -524,7 +524,10 @@ fn algebraic_inf_sub_self_guard() {
         &[1000.0_f64],
     );
     // Value should be NaN (Inf - Inf).
-    assert!(val.is_nan(), "Inf - Inf should produce NaN, not be folded to 0");
+    assert!(
+        val.is_nan(),
+        "Inf - Inf should produce NaN, not be folded to 0"
+    );
 
     // x - x simplification should NOT have fired (value is NaN, not 0).
     assert!(tape.num_ops() > 2);
@@ -549,10 +552,7 @@ fn algebraic_zero_div_self_guard() {
 #[test]
 fn algebraic_tape_size_reduction() {
     // x + 0 + 0 + 0 should produce a smaller tape than without simplification.
-    let (tape, val) = record(
-        |x| x[0] + 0.0_f64 + 0.0_f64 + 0.0_f64,
-        &[5.0_f64],
-    );
+    let (tape, val) = record(|x| x[0] + 0.0_f64 + 0.0_f64 + 0.0_f64, &[5.0_f64]);
     assert_relative_eq!(val, 5.0, max_relative = 1e-12);
 
     // Without algebraic simplification, we'd have 1 Input + 3 Const(0) + 3 Add = 7 ops.
@@ -762,7 +762,7 @@ fn all_optimizations_combined() {
         // CSE would unify if they were separate ops, but they're already
         // the same index.
         let _dead = x.cos(); // DCE candidate
-        // Use a and b in a computation.
+                             // Use a and b in a computation.
         let c = a * b; // x^2
         let d = c + x; // x^2 + x
         d / 1.0_f64 // → d

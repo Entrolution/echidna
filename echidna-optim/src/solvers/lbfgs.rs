@@ -159,7 +159,9 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
             };
         }
 
-        if config.convergence.func_tol > F::zero() && (f_prev - f_val).abs() < config.convergence.func_tol {
+        if config.convergence.func_tol > F::zero()
+            && (f_prev - f_val).abs() < config.convergence.func_tol
+        {
             return OptimResult {
                 x,
                 value: f_val,

@@ -58,9 +58,7 @@ impl<F: Float> LinearizedGraph<F> {
                     let [a_idx, cb_idx] = arg_indices[i];
                     let a = values[a_idx as usize];
                     let b_idx_opt = custom_second_args.get(&(i as u32));
-                    let b = b_idx_opt
-                        .map(|&bi| values[bi as usize])
-                        .unwrap_or(zero);
+                    let b = b_idx_opt.map(|&bi| values[bi as usize]).unwrap_or(zero);
                     let r = values[i];
                     let (da, db) = custom_ops[cb_idx as usize].partials(a, b, r);
 

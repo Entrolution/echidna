@@ -296,13 +296,8 @@ fn online_matches_offline() {
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
     let g_offline = echidna::grad_checkpointed(step, loss, &x0, num_steps, 4);
-    let g_online = echidna::grad_checkpointed_online(
-        step,
-        |_, step_idx| step_idx >= num_steps,
-        loss,
-        &x0,
-        4,
-    );
+    let g_online =
+        echidna::grad_checkpointed_online(step, |_, step_idx| step_idx >= num_steps, loss, &x0, 4);
 
     for i in 0..2 {
         assert!(
@@ -414,13 +409,8 @@ fn online_exact_fill() {
     let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
-    let g_online = echidna::grad_checkpointed_online(
-        step,
-        |_, step_idx| step_idx >= num_steps,
-        loss,
-        &x0,
-        5,
-    );
+    let g_online =
+        echidna::grad_checkpointed_online(step, |_, step_idx| step_idx >= num_steps, loss, &x0, 5);
     let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
 
     for i in 0..2 {
@@ -449,13 +439,8 @@ fn online_thinning_stress() {
     };
     let loss = |x: &[BReverse<f64>]| x[0] + x[1];
 
-    let g_online = echidna::grad_checkpointed_online(
-        step,
-        |_, step_idx| step_idx >= num_steps,
-        loss,
-        &x0,
-        3,
-    );
+    let g_online =
+        echidna::grad_checkpointed_online(step, |_, step_idx| step_idx >= num_steps, loss, &x0, 3);
     let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
 
     for i in 0..2 {
@@ -498,8 +483,7 @@ fn hints_matches_unhinted() {
 
     let g_base = echidna::grad_checkpointed(step, loss, &x0, num_steps, 4);
     // The gradient must be correct regardless of which positions we require.
-    let g_hints =
-        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 4, &[3, 6]);
+    let g_hints = echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 4, &[3, 6]);
 
     for i in 0..2 {
         assert!(
@@ -518,8 +502,7 @@ fn hints_single_required() {
     let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
-    let g_hints =
-        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 4, &[4]);
+    let g_hints = echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 4, &[4]);
     let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
 
     for i in 0..2 {
@@ -541,14 +524,8 @@ fn hints_all_required() {
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
     let required: Vec<usize> = (1..num_steps).collect();
-    let g_hints = echidna::grad_checkpointed_with_hints(
-        step,
-        loss,
-        &x0,
-        num_steps,
-        num_steps,
-        &required,
-    );
+    let g_hints =
+        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, num_steps, &required);
     let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
 
     for i in 0..2 {
@@ -569,8 +546,7 @@ fn hints_empty() {
     let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
-    let g_hints =
-        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 3, &[]);
+    let g_hints = echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 3, &[]);
     let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, 3);
 
     for i in 0..2 {
@@ -591,14 +567,8 @@ fn hints_out_of_range() {
     let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
-    let g_hints = echidna::grad_checkpointed_with_hints(
-        step,
-        loss,
-        &x0,
-        num_steps,
-        3,
-        &[0, 3, 6, 100],
-    );
+    let g_hints =
+        echidna::grad_checkpointed_with_hints(step, loss, &x0, num_steps, 3, &[0, 3, 6, 100]);
     // Only position 3 is valid; 0, 6, 100 are out of range.
     let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
 
@@ -638,8 +608,7 @@ fn disk_matches_memory() {
     let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
 
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    let g_disk =
-        echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
+    let g_disk = echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
     let g_mem = echidna::grad_checkpointed(step, loss, &x0, num_steps, 3);
 
     for i in 0..2 {
@@ -739,8 +708,7 @@ fn disk_large_state() {
     };
 
     let dir = tempfile::tempdir().expect("failed to create temp dir");
-    let g_disk =
-        echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
+    let g_disk = echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
     let g_mem = echidna::grad_checkpointed(step, loss, &x0, num_steps, 3);
 
     for i in 0..dim {

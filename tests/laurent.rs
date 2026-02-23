@@ -84,8 +84,8 @@ fn pole_cancellation() {
 fn pole_arithmetic() {
     // (1/t²) + (1/t) — different pole orders must align
     let t: L4 = Laurent::variable(0.0);
-    let inv_t = Laurent::constant(1.0) / t;    // pole_order = -1
-    let inv_t2 = inv_t * inv_t;                 // pole_order = -2
+    let inv_t = Laurent::constant(1.0) / t; // pole_order = -1
+    let inv_t2 = inv_t * inv_t; // pole_order = -2
 
     let sum = inv_t2 + inv_t;
     // 1/t² + 1/t → pole_order = -2, coeffs[0] = 1 (t^{-2}), coeffs[1] = 1 (t^{-1})

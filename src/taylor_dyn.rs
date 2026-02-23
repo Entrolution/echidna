@@ -51,7 +51,8 @@ impl<F: Float> TaylorArena<F> {
     pub fn allocate(&mut self) -> u32 {
         let idx = self.count;
         self.count += 1;
-        self.data.resize(self.count as usize * self.degree, F::zero());
+        self.data
+            .resize(self.count as usize * self.degree, F::zero());
         idx
     }
 
@@ -288,11 +289,7 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     }
 
     /// Apply a binary operation.
-    pub(crate) fn binary_op(
-        x: &Self,
-        y: &Self,
-        f: impl FnOnce(&[F], &[F], &mut [F]),
-    ) -> Self {
+    pub(crate) fn binary_op(x: &Self, y: &Self, f: impl FnOnce(&[F], &[F], &mut [F])) -> Self {
         // Both constants: result is also a constant (optimize for forward_tangent)
         if x.index == CONSTANT && y.index == CONSTANT {
             let deg = with_active_arena(|arena: &mut TaylorArena<F>| arena.degree());
@@ -459,8 +456,14 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
             arena.coeffs_mut(sin_idx).copy_from_slice(&s);
             arena.coeffs_mut(cos_idx).copy_from_slice(&co);
             (
-                TaylorDyn { value: s[0], index: sin_idx },
-                TaylorDyn { value: co[0], index: cos_idx },
+                TaylorDyn {
+                    value: s[0],
+                    index: sin_idx,
+                },
+                TaylorDyn {
+                    value: co[0],
+                    index: cos_idx,
+                },
             )
         })
     }

@@ -40,9 +40,9 @@ pub fn tridiagonal<T: Scalar>(x: &[T]) -> T {
 
 pub fn rastrigin<T: Scalar>(x: &[T]) -> T {
     let ten = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(10.0).unwrap());
-    let two_pi = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(
-        2.0 * std::f64::consts::PI,
-    ).unwrap());
+    let two_pi = T::from_f(
+        <T::Float as num_traits::FromPrimitive>::from_f64(2.0 * std::f64::consts::PI).unwrap(),
+    );
     let n = T::from_f(<T::Float as num_traits::FromPrimitive>::from_usize(x.len()).unwrap());
     let mut sum = ten * n;
     for &xi in x {
@@ -62,9 +62,9 @@ pub fn nn_layer<T: Scalar>(x: &[T]) -> T {
     let scale = 1.0 / (n as f64 + 1.0);
     let mut total = T::zero();
     for j in 0..4_usize {
-        let mut z = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(
-            0.1 * (j as f64 + 1.0),
-        ).unwrap());
+        let mut z = T::from_f(
+            <T::Float as num_traits::FromPrimitive>::from_f64(0.1 * (j as f64 + 1.0)).unwrap(),
+        );
         for (i, &xi) in x.iter().enumerate() {
             let w = (j * n + i + 1) as f64;
             let w = w.sin() * scale;

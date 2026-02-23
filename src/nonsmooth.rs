@@ -54,16 +54,17 @@ impl<F: Float> NonsmoothInfo<F> {
 
     /// True if no kinks are active within the given tolerance.
     pub fn is_smooth(&self, tol: F) -> bool {
-        self.kinks
-            .iter()
-            .all(|k| k.switching_value.abs() >= tol)
+        self.kinks.iter().all(|k| k.switching_value.abs() >= tol)
     }
 
     /// Branch signature: `(tape_index, branch)` pairs for all kinks.
     ///
     /// Two evaluations at the same input produce the same signature.
     pub fn signature(&self) -> Vec<(u32, i8)> {
-        self.kinks.iter().map(|k| (k.tape_index, k.branch)).collect()
+        self.kinks
+            .iter()
+            .map(|k| (k.tape_index, k.branch))
+            .collect()
     }
 }
 
