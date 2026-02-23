@@ -678,3 +678,39 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         }
     }
 }
+
+#[cfg(feature = "serde")]
+mod laurent_serde {
+    use super::Laurent;
+    use crate::Float;
+    use serde::ser::SerializeStruct;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    impl<F: Float + Serialize, const K: usize> Serialize for Laurent<F, K> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let mut s = serializer.serialize_struct("Laurent", 2)?;
+            s.serialize_field("coeffs", self.coeffs.as_slice())?;
+            s.serialize_field("pole_order", &self.pole_order)?;
+            s.end()
+        }
+    }
+
+    impl<'de, F: Float + Deserialize<'de>, const K: usize> Deserialize<'de> for Laurent<F, K> {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            #[derive(Deserialize)]
+            struct LaurentData<F> {
+                coeffs: Vec<F>,
+                pole_order: i32,
+            }
+
+            let data = LaurentData::<F>::deserialize(deserializer)?;
+            let coeffs: [F; K] = data.coeffs.try_into().map_err(|v: Vec<F>| {
+                serde::de::Error::invalid_length(
+                    v.len(),
+                    &&*format!("array of length {K}"),
+                )
+            })?;
+            Ok(Laurent { coeffs, pole_order: data.pole_order })
+        }
+    }
+}

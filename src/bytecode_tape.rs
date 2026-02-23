@@ -2474,7 +2474,7 @@ mod serde_support {
                      custom ops must be re-registered after deserialization",
                 ));
             }
-            let mut s = serializer.serialize_struct("BytecodeTape", 7)?;
+            let mut s = serializer.serialize_struct("BytecodeTape", 8)?;
             s.serialize_field("opcodes", &self.opcodes)?;
             s.serialize_field("arg_indices", &self.arg_indices)?;
             s.serialize_field("values", &self.values)?;

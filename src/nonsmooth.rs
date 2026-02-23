@@ -15,6 +15,7 @@ use crate::opcode::OpCode;
 ///
 /// Records which nonsmooth operation was executed, where in the tape it lives,
 /// the switching value (distance from the kink), and which branch was taken.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct KinkEntry<F: Float> {
     /// Index into the tape's opcode/value arrays.
@@ -33,6 +34,7 @@ pub struct KinkEntry<F: Float> {
 }
 
 /// Summary of all nonsmooth operations encountered during a forward sweep.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub struct NonsmoothInfo<F: Float> {
     /// All kink entries, in tape order.
@@ -66,6 +68,7 @@ impl<F: Float> NonsmoothInfo<F> {
 }
 
 /// Errors that can occur during Clarke Jacobian computation.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug)]
 pub enum ClarkeError {
     /// Too many active kinks for enumeration.

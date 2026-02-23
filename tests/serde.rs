@@ -1,6 +1,6 @@
 #![cfg(all(feature = "bytecode", feature = "serde"))]
 
-use echidna::{record, Scalar};
+use echidna::{record, record_multi, Scalar};
 
 fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
@@ -112,4 +112,83 @@ fn sparsity_pattern_roundtrip() {
     assert_eq!(pattern.dim, pattern2.dim);
     assert_eq!(pattern.rows, pattern2.rows);
     assert_eq!(pattern.cols, pattern2.cols);
+}
+
+#[test]
+fn roundtrip_tape_f32() {
+    let x = [1.5_f32, 2.5];
+    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+
+    let json = serde_json::to_string(&tape).unwrap();
+    let mut tape2: echidna::BytecodeTape<f32> = serde_json::from_str(&json).unwrap();
+
+    let grad_orig = tape.gradient(&x);
+    let grad_deser = tape2.gradient(&x);
+
+    for (o, d) in grad_orig.iter().zip(grad_deser.iter()) {
+        assert!((o - d).abs() < 1e-5, "original={}, deserialized={}", o, d);
+    }
+}
+
+#[test]
+fn roundtrip_multi_output() {
+    // f: R^3 -> R^2, f(x,y,z) = (x*y + z, x - y*z)
+    let x = [2.0_f64, 3.0, 0.5];
+    let (mut tape, _) = record_multi(
+        |v| vec![v[0] * v[1] + v[2], v[0] - v[1] * v[2]],
+        &x,
+    );
+
+    let json = serde_json::to_string(&tape).unwrap();
+    let mut tape2: echidna::BytecodeTape<f64> = serde_json::from_str(&json).unwrap();
+
+    let jac_orig = tape.jacobian(&x);
+    let jac_deser = tape2.jacobian(&x);
+
+    assert_eq!(jac_orig.len(), jac_deser.len());
+    for (row_o, row_d) in jac_orig.iter().zip(jac_deser.iter()) {
+        for (o, d) in row_o.iter().zip(row_d.iter()) {
+            assert!((o - d).abs() < 1e-12, "original={}, deserialized={}", o, d);
+        }
+    }
+}
+
+#[test]
+fn roundtrip_tape_bincode() {
+    let x = [1.5_f64, 2.5];
+    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+
+    let bytes = bincode::serialize(&tape).unwrap();
+    let mut tape2: echidna::BytecodeTape<f64> = bincode::deserialize(&bytes).unwrap();
+
+    let grad_orig = tape.gradient(&x);
+    let grad_deser = tape2.gradient(&x);
+
+    for (o, d) in grad_orig.iter().zip(grad_deser.iter()) {
+        assert!((o - d).abs() < 1e-12, "original={}, deserialized={}", o, d);
+    }
+}
+
+#[test]
+fn roundtrip_nonsmooth_info() {
+    use num_traits::Float;
+
+    // f(x, y) = |x| + max(x, y)
+    let x = [0.0_f64, 0.0];
+    let (mut tape, _) = record(|v| v[0].abs() + v[0].max(v[1]), &x);
+
+    let info = tape.forward_nonsmooth(&x);
+    assert!(!info.kinks.is_empty());
+
+    let json = serde_json::to_string(&info).unwrap();
+    let info2: echidna::NonsmoothInfo<f64> = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(info.kinks.len(), info2.kinks.len());
+    for (k1, k2) in info.kinks.iter().zip(info2.kinks.iter()) {
+        assert_eq!(k1.tape_index, k2.tape_index);
+        assert_eq!(k1.opcode, k2.opcode);
+        assert_eq!(k1.branch, k2.branch);
+        assert!((k1.switching_value - k2.switching_value).abs() < 1e-15);
+    }
+    assert_eq!(info.signature(), info2.signature());
 }

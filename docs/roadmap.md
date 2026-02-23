@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), and R6 (nonsmooth extensions) are complete. 474 tests passing (419 core + 55 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), and R7 (tape serialization) are complete. 478 tests passing (423 core + 55 optim).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -32,10 +32,10 @@ This roadmap synthesizes:
 | R4d | Sparse F_z exploitation: `SparseImplicitContext` precomputes sparsity + coloring, `implicit_tangent_sparse`/`implicit_adjoint_sparse`/`implicit_jacobian_sparse` via faer sparse LU, feature-gated behind `sparse-implicit`, 9 tests | Complete |
 | R5 | Cross-country elimination: `LinearizedGraph` + Markowitz vertex elimination for Jacobian computation, `jacobian_cross_country` on BytecodeTape, 10 tests | Complete |
 | R6 | Nonsmooth extensions: branch tracking + kink detection (`forward_nonsmooth`), Clarke generalized Jacobian via limiting Jacobian enumeration (`clarke_jacobian`), `Laurent<F, K>` singularity analysis type with full `num_traits::Float`/`Scalar` integration, 31 tests | Complete |
+| R7 | Tape serialization: `BytecodeTape` serde support (manual Serialize/Deserialize impls), `OpCode`/`SparsityPattern` serde derives, R6 types (`KinkEntry`, `NonsmoothInfo`, `ClarkeError`) serde derives, `Laurent<F, K>` manual serde impls (const-generic array handling), JSON + bincode roundtrip, f32/f64/multi-output coverage, 9 tests | Complete |
 
 **Deferred from completed phases** (carried forward below):
 - Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
-- Tape serialization (serde)
 - `faer` / `ndarray` integration modules exist but are thin wrappers; no deep integration with tape operations
 - Checkpointing is binomial only; no online checkpointing for unknown-length computations
 
@@ -165,15 +165,12 @@ Key files: `src/laurent.rs`, `src/traits/laurent_std_ops.rs`, `src/traits/lauren
 
 ## Tier 3: Infrastructure and Polish
 
-### R7. Tape Serialization
+### R7. Tape Serialization — **COMPLETE**
 **Deferred from design principles**
 
-`serde` support for `BytecodeTape`. Enables:
-- Saving compiled tapes to disk (avoid re-recording)
-- Sending tapes across network boundaries
-- Caching tapes in long-running applications
+`serde` support for `BytecodeTape` with manual Serialize/Deserialize implementations. Custom ops are rejected at serialization time (must be re-registered after deserialization). R6 types (`KinkEntry`, `NonsmoothInfo`, `ClarkeError`) and `Laurent<F, K>` also support serde (Laurent uses manual impls due to const-generic array limitations in serde's derive). Feature-gated behind `serde` flag. JSON and bincode roundtrip verified. 9 tests covering f32/f64, single/multi-output tapes, binary format, custom-op rejection, sparsity patterns, and nonsmooth info.
 
-Feature-gated behind `serde` flag.
+Key files: `src/bytecode_tape.rs`, `src/nonsmooth.rs`, `src/laurent.rs`, `tests/serde.rs`.
 
 ### R8. Benchmarking Infrastructure
 
@@ -253,7 +250,7 @@ R5 (cross-country elimination)       ─── ✓ DONE
 R6a (branch tracking)                ─── ✓ DONE
 R6b (Clarke subdifferential)         ─── ✓ DONE
 R6c (Laurent numbers)                ─── ✓ DONE
-R7 (serde)                           ─── Independent, any time
+R7 (serde)                           ─── ✓ DONE
 R8 (benchmarks)                      ─── Independent, any time
 ```
 
@@ -265,7 +262,9 @@ R5 (cross-country elimination) is now complete.
 
 R6 (nonsmooth extensions) is now complete.
 
-R7 (serde) and R8 (benchmarks) are independent and can be started in any order.
+R7 (serde) is now complete.
+
+R8 (benchmarks) is independent and can be started at any time.
 
 R9+ are lower priority and can be scheduled opportunistically.
 
