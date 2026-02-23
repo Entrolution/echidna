@@ -298,6 +298,38 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
+    // ── GPU accessor methods ──
+
+    /// Slice view of all opcodes in the tape.
+    #[inline]
+    pub fn opcodes_slice(&self) -> &[OpCode] {
+        &self.opcodes
+    }
+
+    /// Slice view of all argument index pairs `[arg0, arg1]`.
+    #[inline]
+    pub fn arg_indices_slice(&self) -> &[[u32; 2]] {
+        &self.arg_indices
+    }
+
+    /// Slice view of all primal values in the tape.
+    #[inline]
+    pub fn values_slice(&self) -> &[F] {
+        &self.values
+    }
+
+    /// Total number of tape entries (inputs + constants + operations).
+    #[inline]
+    pub fn num_variables_count(&self) -> usize {
+        self.num_variables as usize
+    }
+
+    /// Returns `true` if the tape contains any custom operations.
+    #[inline]
+    pub fn has_custom_ops(&self) -> bool {
+        !self.custom_ops.is_empty()
+    }
+
     /// Reverse sweep with weighted seeds for multiple outputs.
     ///
     /// Computes `∑_i weights[i] * ∂output_i/∂x` — a vector-Jacobian product.

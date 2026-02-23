@@ -35,6 +35,9 @@ pub mod laurent;
 #[cfg(feature = "stde")]
 pub mod stde;
 
+#[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
+pub mod gpu;
+
 #[cfg(feature = "faer")]
 pub mod faer_support;
 #[cfg(feature = "nalgebra")]

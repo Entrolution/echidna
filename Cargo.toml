@@ -24,6 +24,10 @@ serde = { version = "1", features = ["derive"], optional = true }
 ndarray = { version = "0.16", optional = true }
 faer = { version = "0.20", optional = true }
 nalgebra = { version = "0.33", optional = true }
+wgpu = { version = "28", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+cudarc = { version = "0.17", optional = true, features = ["cuda-version-from-build-system"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -46,6 +50,8 @@ nalgebra = ["dep:nalgebra", "bytecode"]
 taylor = []
 laurent = ["taylor"]
 stde = ["bytecode", "taylor"]
+gpu-wgpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster", "bytecode"]
+gpu-cuda = ["dep:cudarc", "bytecode"]
 
 [[bench]]
 name = "forward"
@@ -80,6 +86,11 @@ name = "comparison"
 harness = false
 required-features = ["bytecode"]
 
+[[bench]]
+name = "gpu"
+harness = false
+required-features = ["gpu-wgpu"]
+
 [package.metadata.docs.rs]
-all-features = true
+features = ["simba", "bytecode", "parallel", "serde", "ndarray", "faer", "nalgebra", "taylor", "laurent", "stde", "gpu-wgpu"]
 rustdoc-args = ["--cfg", "docsrs"]

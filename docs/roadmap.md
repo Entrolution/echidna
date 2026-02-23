@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), and R10 (integration improvements) are complete. 510 tests passing (455 core + 55 optim).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), R10 (integration improvements), and R11 (GPU acceleration) are complete. 524 tests passing (455 core + 55 optim + 14 GPU).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -213,13 +213,18 @@ Key files: `src/faer_support.rs`, `src/nalgebra_support.rs`, `src/ndarray_suppor
 
 See Tier 2 section above for full details.
 
-### R11. GPU Acceleration
+### R11. GPU Acceleration — **COMPLETE**
 **Design principles mention this; significant engineering effort**
 
-- Batched forward mode on GPU (many inputs, same tape) — embarrassingly parallel
-- Taylor coefficient propagation maps well to GPU (convolution-heavy)
-- Sparse Jacobian assembly on GPU
-- Requires kernel authoring in WGSL/CUDA, not just Rust
+Two GPU backends for batched tape evaluation:
+
+**wgpu backend** (`gpu-wgpu` feature) — cross-platform (Metal, Vulkan, DX12), f32 only. Four WGSL compute shaders: `forward.wgsl` (batched forward evaluation), `reverse.wgsl` (batched adjoint sweep), `tangent_forward.wgsl` (forward tangent for JVP/sparse Jacobian), `tangent_reverse.wgsl` (forward-over-reverse for HVP/sparse Hessian). `WgpuContext` with methods: `forward_batch`, `gradient_batch`, `sparse_jacobian`, `hvp_batch`, `sparse_hessian`. 14 tests covering all operations.
+
+**CUDA backend** (`gpu-cuda` feature) — NVIDIA only, f32 + f64. Single templated CUDA kernel file `tape_eval.cu` with four kernels (`forward_eval`, `reverse_sweep`, `tangent_forward`, `tangent_reverse`), compiled via NVRTC at runtime for both float and double. `CudaContext` mirrors the wgpu API surface plus f64 variants: `forward_batch_f64`, `gradient_batch_f64`, `sparse_jacobian_f64`, `sparse_hessian_f64`, `hvp_batch_f64`. 6 CUDA tests (f32 + f64).
+
+CPU-side sparsity detection and graph coloring drive the GPU tangent sweeps. Custom ops are rejected at upload time (`GpuTapeData::from_tape`). All 38 opcodes implemented in all four shader/kernel variants.
+
+Key files: `src/gpu/mod.rs`, `src/gpu/wgpu_backend.rs`, `src/gpu/cuda_backend.rs`, `src/gpu/shaders/forward.wgsl`, `src/gpu/shaders/reverse.wgsl`, `src/gpu/shaders/tangent_forward.wgsl`, `src/gpu/shaders/tangent_reverse.wgsl`, `src/gpu/kernels/tape_eval.cu`, `tests/gpu_wgpu_tests.rs`, `tests/gpu_cuda_tests.rs`.
 
 ### R12. Composable Mode Nesting
 
@@ -270,6 +275,7 @@ R9c (checkpoint hints)               ─── ✓ DONE
 R10a (deepen faer)                   ─── ✓ DONE
 R10b (nalgebra integration)          ─── ✓ DONE
 R10c (ndarray extensions)            ─── ✓ DONE
+R11 (GPU acceleration)               ─── ✓ DONE
 ```
 
 All R1 items (Taylor mode AD) are now complete.
@@ -288,7 +294,9 @@ R9 (checkpointing improvements) is now complete.
 
 R10 (integration improvements) is now complete.
 
-R11+ are lower priority and can be scheduled opportunistically.
+R11 (GPU acceleration) is now complete.
+
+R12+ are lower priority and can be scheduled opportunistically.
 
 ---
 
