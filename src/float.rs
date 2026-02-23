@@ -1,3 +1,8 @@
+//! The [`Float`] trait marking raw floating-point types usable as AD bases.
+//!
+//! Bundles `num_traits::Float`, `FloatConst`, `Copy`, `Send`, `Sync`, and other
+//! utility traits. Implemented for `f32`, `f64`, and composed AD types.
+
 use std::fmt::{Debug, Display};
 
 use num_traits::{Float as NumFloat, FloatConst, FromPrimitive};

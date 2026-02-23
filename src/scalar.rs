@@ -1,3 +1,8 @@
+//! The [`Scalar`] trait for writing AD-generic numeric code.
+//!
+//! Functions written as `fn f<T: Scalar>(x: T) -> T` work transparently with plain
+//! `f64`, `Dual<f64>`, `Reverse<f64>`, `BReverse<f64>`, and `Taylor<f64, K>`.
+
 use std::fmt::{Debug, Display};
 
 use num_traits::FromPrimitive;

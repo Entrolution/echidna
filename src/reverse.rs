@@ -1,3 +1,9 @@
+//! Reverse-mode automatic differentiation via an Adept-style tape.
+//!
+//! [`Reverse<F>`] is a lightweight variable (12 bytes for f64, `Copy`) that records
+//! operations on a thread-local tape. Best suited for functions with many inputs and
+//! few outputs, such as computing gradients.
+
 use std::fmt::{self, Display};
 
 use crate::tape::CONSTANT;

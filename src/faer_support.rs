@@ -144,7 +144,7 @@ pub fn solve_dense_cholesky_faer(a: &Mat<f64>, b: &Col<f64>) -> Option<Col<f64>>
 //  Sparse solver wrappers
 // ══════════════════════════════════════════════
 
-/// Convert a [`SparsityPattern`] (lower-triangle COO) plus values into a full
+/// Convert a [`crate::SparsityPattern`] (lower-triangle COO) plus values into a full
 /// symmetric `SparseColMat` suitable for faer's sparse solvers.
 ///
 /// Returns `None` if the triplet construction fails.
@@ -171,7 +171,7 @@ pub fn sparsity_to_faer_symmetric(
 }
 
 /// Solve a symmetric linear system `H * x = b` via sparse Cholesky, where `H` is
-/// given by a [`SparsityPattern`] and its values (lower-triangle COO from `sparse_hessian`).
+/// given by a [`crate::SparsityPattern`] and its values (lower-triangle COO from `sparse_hessian`).
 ///
 /// Returns `None` if the matrix is not positive-definite or construction fails.
 pub fn solve_sparse_cholesky_faer(
@@ -190,7 +190,7 @@ pub fn solve_sparse_cholesky_faer(
 }
 
 /// Solve a symmetric linear system `H * x = b` via sparse LU, where `H` is
-/// given by a [`SparsityPattern`] and its values.
+/// given by a [`crate::SparsityPattern`] and its values.
 ///
 /// Returns `None` if the matrix is singular or construction fails.
 pub fn solve_sparse_lu_faer(

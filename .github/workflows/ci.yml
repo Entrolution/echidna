@@ -24,10 +24,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build
+        run: cargo build --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
 
-      - name: Run tests
-        run: cargo test
+      - name: Run tests (echidna with all features)
+        run: cargo test -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
+
+      - name: Run tests (echidna-optim)
+        run: cargo test -p echidna-optim
 
   lint:
     name: Lint
@@ -47,7 +50,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray" -- -D warnings
 
   docs:
     name: Documentation
@@ -61,8 +64,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build docs
-        run: cargo doc --no-deps
+      - name: Build docs (echidna)
+        run: cargo doc --no-deps --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Build docs (echidna-optim)
+        run: cargo doc -p echidna-optim --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
 
