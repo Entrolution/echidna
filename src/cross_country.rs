@@ -248,16 +248,16 @@ mod tests {
     fn diamond_graph() -> LinearizedGraph<f64> {
         // preds[v] = [(predecessor, weight)]
         let preds = vec![
-            vec![],                           // node 0: input
-            vec![],                           // node 1: input
-            vec![(0, 2.0), (1, 5.0)],         // node 2: intermediate
-            vec![(2, 3.0)],                   // node 3: output
+            vec![],                   // node 0: input
+            vec![],                   // node 1: input
+            vec![(0, 2.0), (1, 5.0)], // node 2: intermediate
+            vec![(2, 3.0)],           // node 3: output
         ];
         let succs = vec![
-            vec![(2, 2.0)],                   // node 0 → 2
-            vec![(2, 5.0)],                   // node 1 → 2
-            vec![(3, 3.0)],                   // node 2 → 3
-            vec![],                           // node 3: output (no successors)
+            vec![(2, 2.0)], // node 0 → 2
+            vec![(2, 5.0)], // node 1 → 2
+            vec![(3, 3.0)], // node 2 → 3
+            vec![],         // node 3: output (no successors)
         ];
         LinearizedGraph {
             num_inputs: 2,
@@ -276,18 +276,8 @@ mod tests {
     ///
     /// df/dx = 2*3*4 = 24.
     fn chain_graph() -> LinearizedGraph<f64> {
-        let preds = vec![
-            vec![],
-            vec![(0, 2.0)],
-            vec![(1, 3.0)],
-            vec![(2, 4.0)],
-        ];
-        let succs = vec![
-            vec![(1, 2.0)],
-            vec![(2, 3.0)],
-            vec![(3, 4.0)],
-            vec![],
-        ];
+        let preds = vec![vec![], vec![(0, 2.0)], vec![(1, 3.0)], vec![(2, 4.0)]];
+        let succs = vec![vec![(1, 2.0)], vec![(2, 3.0)], vec![(3, 4.0)], vec![]];
         LinearizedGraph {
             num_inputs: 1,
             output_indices: vec![3],
@@ -415,14 +405,10 @@ mod tests {
         //
         let preds = vec![
             vec![],
-            vec![(0, 2.0), (0, 4.0)],   // two edges from 0 to 1
+            vec![(0, 2.0), (0, 4.0)], // two edges from 0 to 1
             vec![(1, 3.0)],
         ];
-        let succs = vec![
-            vec![(1, 2.0), (1, 4.0)],
-            vec![(2, 3.0)],
-            vec![],
-        ];
+        let succs = vec![vec![(1, 2.0), (1, 4.0)], vec![(2, 3.0)], vec![]];
         let mut g = LinearizedGraph {
             num_inputs: 1,
             output_indices: vec![2],
@@ -447,12 +433,12 @@ mod tests {
         //
         // Markowitz should pick node 4 first.
         let preds = vec![
-            vec![],                                   // 0: input
-            vec![],                                   // 1: input
-            vec![],                                   // 2: input
-            vec![(0, 1.0), (1, 1.0), (2, 1.0)],      // 3: intermediate, fan-in=3
-            vec![(0, 1.0)],                           // 4: intermediate, fan-in=1
-            vec![(3, 1.0), (4, 1.0)],                 // 5: output
+            vec![],                             // 0: input
+            vec![],                             // 1: input
+            vec![],                             // 2: input
+            vec![(0, 1.0), (1, 1.0), (2, 1.0)], // 3: intermediate, fan-in=3
+            vec![(0, 1.0)],                     // 4: intermediate, fan-in=1
+            vec![(3, 1.0), (4, 1.0)],           // 5: output
         ];
         let succs = vec![
             vec![(3, 1.0), (4, 1.0)],
