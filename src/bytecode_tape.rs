@@ -142,6 +142,11 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// **Constant folding**: if all operands point to `Const` entries (not `Input`),
     /// the operation is replaced by a single `Const` with the already-computed value.
+    ///
+    /// **Algebraic simplification**: identity patterns (`x + 0 → x`, `x * 1 → x`,
+    /// etc.) and absorbing patterns (`x * 0 → 0`, `x - x → 0`, `x / x → 1`) are
+    /// detected and short-circuited. Absorbing patterns are guarded by a value check
+    /// to handle NaN/Inf edge cases correctly.
     #[inline]
     pub fn push_op(&mut self, op: OpCode, arg0: u32, arg1: u32, value: F) -> u32 {
         // Constant folding: if both args (when present) are Const, emit Const instead.
@@ -149,6 +154,20 @@ impl<F: Float> BytecodeTape<F> {
         let arg1_const = arg1 == UNUSED || self.opcodes[arg1 as usize] == OpCode::Const;
         if arg0_const && arg1_const {
             return self.push_const(value);
+        }
+
+        // Algebraic simplification: single-arg-const patterns (binary ops only).
+        if (arg0_const || arg1_const) && arg1 != UNUSED {
+            if let Some(idx) = self.try_algebraic_simplify(op, arg0, arg1, arg0_const, arg1_const, value) {
+                return idx;
+            }
+        }
+
+        // Same-index simplification: x - x → 0, x / x → 1.
+        if arg0 == arg1 && arg1 != UNUSED {
+            if let Some(idx) = self.try_same_index_simplify(op, value) {
+                return idx;
+            }
         }
 
         let idx = self.num_variables;
@@ -159,13 +178,89 @@ impl<F: Float> BytecodeTape<F> {
         idx
     }
 
+    /// Try to simplify a binary op where exactly one argument is a known constant.
+    ///
+    /// Identity patterns (`x + 0`, `x * 1`, etc.) are always safe — they return
+    /// the original index whose value is correct. Absorbing patterns (`x * 0`)
+    /// use `push_const(value)` (not `push_const(F::zero())`) to preserve IEEE 754
+    /// signed zero semantics, and are guarded by `value == expected` to handle
+    /// NaN/Inf correctly (e.g., `NaN * 0 = NaN`, not `0`).
+    #[inline(never)]
+    fn try_algebraic_simplify(
+        &mut self,
+        op: OpCode,
+        arg0: u32,
+        arg1: u32,
+        arg0_const: bool,
+        arg1_const: bool,
+        value: F,
+    ) -> Option<u32> {
+        let zero = F::zero();
+        let one = F::one();
+        match op {
+            OpCode::Add => {
+                if arg1_const && self.values[arg1 as usize] == zero { return Some(arg0); }
+                if arg0_const && self.values[arg0 as usize] == zero { return Some(arg1); }
+            }
+            OpCode::Sub => {
+                if arg1_const && self.values[arg1 as usize] == zero { return Some(arg0); }
+            }
+            OpCode::Mul => {
+                // Identity: x * 1 → x, 1 * x → x
+                if arg1_const && self.values[arg1 as usize] == one { return Some(arg0); }
+                if arg0_const && self.values[arg0 as usize] == one { return Some(arg1); }
+                // Absorbing: x * 0 → const (guarded: NaN * 0 = NaN, not 0)
+                if arg1_const && self.values[arg1 as usize] == zero && value == zero {
+                    return Some(self.push_const(value));
+                }
+                if arg0_const && self.values[arg0 as usize] == zero && value == zero {
+                    return Some(self.push_const(value));
+                }
+            }
+            OpCode::Div => {
+                if arg1_const && self.values[arg1 as usize] == one { return Some(arg0); }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Try to simplify a binary op where both arguments are the same index.
+    ///
+    /// `x - x → 0` is guarded (Inf - Inf = NaN, not 0).
+    /// `x / x → 1` is guarded (0/0 = NaN, not 1).
+    #[inline(never)]
+    fn try_same_index_simplify(&mut self, op: OpCode, value: F) -> Option<u32> {
+        match op {
+            OpCode::Sub if value == F::zero() => Some(self.push_const(value)),
+            OpCode::Div if value == F::one() => Some(self.push_const(value)),
+            _ => None,
+        }
+    }
+
     /// Record a powi operation. The `i32` exponent is stored in `arg_indices[1]`.
     ///
     /// **Constant folding**: if the operand is a `Const`, emit `Const` instead.
+    ///
+    /// **Algebraic simplification**: `x^0 → 1` (guarded), `x^1 → x`,
+    /// `x^(-1) → Recip(x)` (cheaper unary dispatch).
     #[inline]
     pub fn push_powi(&mut self, arg0: u32, exp: i32, value: F) -> u32 {
         if self.opcodes[arg0 as usize] == OpCode::Const {
             return self.push_const(value);
+        }
+
+        // x^0 → 1 (guarded: 0^0 edge case — only fold when value is actually 1)
+        if exp == 0 && value == F::one() {
+            return self.push_const(F::one());
+        }
+        // x^1 → x
+        if exp == 1 {
+            return arg0;
+        }
+        // x^(-1) → Recip(x) (cheaper unary opcode dispatch)
+        if exp == -1 {
+            return self.push_op(OpCode::Recip, arg0, UNUSED, value);
         }
 
         let idx = self.num_variables;
@@ -1581,6 +1676,90 @@ impl<F: Float> BytecodeTape<F> {
         for oi in &mut self.output_indices {
             *oi = remap[*oi as usize];
         }
+    }
+
+    /// Eliminate dead code, keeping only the specified outputs alive.
+    ///
+    /// Like [`dead_code_elimination`](Self::dead_code_elimination) but seeds
+    /// reachability only from `active_outputs`. After compaction,
+    /// `output_indices` contains only the active outputs (remapped), and
+    /// `output_index` is set to the first active output.
+    ///
+    /// **Note**: Like `dead_code_elimination`, this does not remap
+    /// `custom_second_args` (pre-existing limitation).
+    ///
+    /// # Panics
+    /// Panics if `active_outputs` is empty.
+    pub fn dead_code_elimination_for_outputs(&mut self, active_outputs: &[u32]) {
+        assert!(!active_outputs.is_empty(), "active_outputs must not be empty");
+
+        let n = self.opcodes.len();
+        let mut reachable = vec![false; n];
+
+        // Mark all inputs as reachable.
+        for flag in reachable.iter_mut().take(self.num_inputs as usize) {
+            *flag = true;
+        }
+
+        // Seed from active outputs only.
+        let mut stack: Vec<u32> = active_outputs.to_vec();
+
+        while let Some(idx) = stack.pop() {
+            let i = idx as usize;
+            if reachable[i] {
+                continue;
+            }
+            reachable[i] = true;
+            let [a, b] = self.arg_indices[i];
+            if a != UNUSED {
+                stack.push(a);
+            }
+            if b != UNUSED && self.opcodes[i] != OpCode::Powi {
+                stack.push(b);
+            }
+        }
+
+        // Build remap: old index -> new index.
+        let mut remap = vec![0u32; n];
+        let mut new_idx = 0u32;
+        for i in 0..n {
+            if reachable[i] {
+                remap[i] = new_idx;
+                new_idx += 1;
+            }
+        }
+        let new_len = new_idx as usize;
+
+        // Compact in-place.
+        let mut write = 0;
+        for (read, &is_reachable) in reachable.iter().enumerate().take(n) {
+            if is_reachable {
+                self.opcodes[write] = self.opcodes[read];
+                self.values[write] = self.values[read];
+                let [a, b] = self.arg_indices[read];
+                let ra = if a != UNUSED {
+                    remap[a as usize]
+                } else {
+                    UNUSED
+                };
+                let rb = if b != UNUSED && self.opcodes[read] != OpCode::Powi {
+                    remap[b as usize]
+                } else {
+                    b
+                };
+                self.arg_indices[write] = [ra, rb];
+                write += 1;
+            }
+        }
+
+        self.opcodes.truncate(new_len);
+        self.arg_indices.truncate(new_len);
+        self.values.truncate(new_len);
+        self.num_variables = new_len as u32;
+
+        // Update output tracking to only include active outputs.
+        self.output_indices = active_outputs.iter().map(|&oi| remap[oi as usize]).collect();
+        self.output_index = self.output_indices[0];
     }
 
     /// Common subexpression elimination.

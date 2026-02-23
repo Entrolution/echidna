@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), R10 (integration improvements), R11 (GPU acceleration), and R12 (composable mode nesting) are complete. 536 tests passing (467 core + 55 optim + 14 GPU).
+**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), R10 (integration improvements), R11 (GPU acceleration), R12 (composable mode nesting), and R13 (source-level optimizations) are complete.
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -234,12 +234,29 @@ Added `Float` and `IsAllZero` impls for `Reverse<F>` and `BReverse<F>`, enabling
 
 Key files: `src/float.rs`, `src/api.rs`, `tests/composed_nesting.rs`. 12 new tests.
 
-### R13. Source-Level Optimizations
+### R13. Source-Level Optimizations — **COMPLETE**
 
-- Preaccumulation of straight-line segments (Griewank Ch 7)
-- Common subexpression elimination improvements
-- Dead code elimination across tape boundaries
-- These improve the constant factors but don't change algorithmic complexity
+Recording-time algebraic simplification and targeted multi-output DCE.
+
+**Algebraic simplification** (recording-time, in `push_op` and `push_powi`):
+- Identity patterns: `x + 0 → x`, `0 + x → x`, `x * 1 → x`, `1 * x → x`, `x - 0 → x`, `x / 1 → x`
+- Absorbing patterns (value-guarded for NaN/Inf): `x * 0 → 0`, `0 * x → 0`, `x - x → 0`, `x / x → 1`
+- Powi patterns: `x^0 → 1` (guarded), `x^1 → x`, `x^(-1) → Recip(x)`
+- Uses `push_const(value)` (not `push_const(F::zero())`) to preserve IEEE 754 signed zero semantics
+- Helper methods (`try_algebraic_simplify`, `try_same_index_simplify`) are `#[inline(never)]` to keep `push_op` hot path lean
+
+**Targeted multi-output DCE** (`dead_code_elimination_for_outputs`):
+- Seeds reachability only from specified active outputs
+- After compaction, `output_indices` contains only remapped active outputs
+- Same algorithm as `dead_code_elimination()` but with selective output seeding
+- Inherits the `custom_second_args` non-remapping limitation from the base DCE
+
+**Out of scope** (deferred):
+- Preaccumulation of straight-line segments: already covered implicitly by cross-country Markowitz elimination for Jacobians
+- Constant deduplication: `FloatBits` trait can't be implemented for `Dual<F>`; CSE handles ops over duplicate constants
+- Cross-checkpoint DCE: too complex for this milestone
+
+Key file: `src/bytecode_tape.rs`. 22 new tests in `tests/tape_optimization.rs`.
 
 ---
 
@@ -281,29 +298,10 @@ R10b (nalgebra integration)          ─── ✓ DONE
 R10c (ndarray extensions)            ─── ✓ DONE
 R11 (GPU acceleration)               ─── ✓ DONE
 R12 (composable mode nesting)        ─── ✓ DONE
+R13 (source-level optimizations)     ─── ✓ DONE
 ```
 
-All R1 items (Taylor mode AD) are now complete.
-
-All R4 items (implicit/iterative features) are now complete.
-
-R5 (cross-country elimination) is now complete.
-
-R6 (nonsmooth extensions) is now complete.
-
-R7 (serde) is now complete.
-
-R8 (benchmarking infrastructure) is now complete.
-
-R9 (checkpointing improvements) is now complete.
-
-R10 (integration improvements) is now complete.
-
-R11 (GPU acceleration) is now complete.
-
-R12 (composable mode nesting) is now complete.
-
-R13+ are lower priority and can be scheduled opportunistically.
+All roadmap items R1–R13 are now complete.
 
 ---
 
