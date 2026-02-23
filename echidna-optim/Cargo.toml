@@ -14,7 +14,7 @@ categories = ["mathematics", "science", "algorithms"]
 [dependencies]
 echidna = { path = "..", features = ["bytecode"] }
 num-traits = "0.2"
-faer = { version = "0.20", optional = true }
+faer = { version = "0.24", optional = true }
 
 [dev-dependencies]
 approx = "0.5"

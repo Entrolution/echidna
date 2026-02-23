@@ -70,7 +70,7 @@ let g = tape.gradient(&[1.0, 2.0]);
 
 // Hessian and Hessian-vector product
 let (val, grad, hess) = tape.hessian(&[1.0, 2.0]);
-let (val, grad, hvp) = tape.hvp(&[1.0, 2.0], &[1.0, 0.0]);
+let (grad, hvp) = tape.hvp(&[1.0, 2.0], &[1.0, 0.0]);
 
 // Record a multi-output function, compute sparse Jacobian
 let (mut tape, vals) = echidna::record_multi(
@@ -140,9 +140,13 @@ echidna = { version = "0.1", features = ["bytecode", "taylor"] }
 | `tape.jacobian_cross_country(x)` | Jacobian via Markowitz vertex elimination |
 | `tape.forward_nonsmooth(x)` | Branch tracking and kink detection |
 | `tape.clarke_jacobian(x, tol)` | Clarke generalized Jacobian |
+| `composed_hvp(f, x, v)` | One-shot forward-over-reverse Hessian-vector product |
+| `tape.hessian_vec::<N>(x)` | Batched Hessian computation (N directions per pass) |
+| `tape.sparse_hessian_vec::<N>(x)` | Batched sparse Hessian (N directions per pass) |
 | `grad_checkpointed(f, x, segments)` | Binomial gradient checkpointing |
 | `grad_checkpointed_online(f, x, budget)` | Online checkpointing |
 | `grad_checkpointed_disk(f, x, segments, dir)` | Disk-backed checkpointing |
+| `grad_checkpointed_with_hints(f, x, hints)` | User-controlled checkpoint placement |
 
 ### Higher-Order (requires `taylor` or `stde`)
 
@@ -215,6 +219,8 @@ The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and im
 [dependencies]
 echidna-optim = "0.1"
 ```
+
+Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).
 
 ## Development
 

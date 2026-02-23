@@ -1,4 +1,7 @@
-//! Sparse Hessian computation via structural sparsity detection and graph coloring.
+//! Sparse derivative computation via structural sparsity detection and graph coloring.
+//!
+//! Provides sparsity detection for both Jacobians ([`JacobianSparsityPattern`]) and
+//! Hessians ([`SparsityPattern`]), plus graph coloring algorithms for compressed evaluation.
 
 use crate::opcode::{OpCode, UNUSED};
 

@@ -128,7 +128,7 @@ pub fn tape_sparse_hessian_faer(
 
 /// Solve `A * x = b` via dense partial-pivoting LU decomposition.
 pub fn solve_dense_lu_faer(a: &Mat<f64>, b: &Col<f64>) -> Col<f64> {
-    use faer::linalg::solvers::SpSolver;
+    use faer::linalg::solvers::Solve;
     a.partial_piv_lu().solve(b)
 }
 
@@ -136,8 +136,8 @@ pub fn solve_dense_lu_faer(a: &Mat<f64>, b: &Col<f64>) -> Col<f64> {
 ///
 /// Returns `None` if `A` is not positive-definite.
 pub fn solve_dense_cholesky_faer(a: &Mat<f64>, b: &Col<f64>) -> Option<Col<f64>> {
-    use faer::linalg::solvers::SpSolver;
-    Some(a.cholesky(faer::Side::Lower).ok()?.solve(b))
+    use faer::linalg::solvers::Solve;
+    Some(a.llt(faer::Side::Lower).ok()?.solve(b))
 }
 
 // ══════════════════════════════════════════════
@@ -153,13 +153,22 @@ pub fn sparsity_to_faer_symmetric(
     values: &[f64],
 ) -> Option<faer::sparse::SparseColMat<usize, f64>> {
     assert_eq!(pattern.nnz(), values.len());
-    let mut triplets: Vec<(usize, usize, f64)> = Vec::with_capacity(pattern.nnz() * 2);
+    let mut triplets: Vec<faer::sparse::Triplet<usize, usize, f64>> =
+        Vec::with_capacity(pattern.nnz() * 2);
     for ((&row, &col), &v) in pattern.rows.iter().zip(&pattern.cols).zip(values) {
         let r = row as usize;
         let c = col as usize;
-        triplets.push((r, c, v));
+        triplets.push(faer::sparse::Triplet {
+            row: r,
+            col: c,
+            val: v,
+        });
         if r != c {
-            triplets.push((c, r, v));
+            triplets.push(faer::sparse::Triplet {
+                row: c,
+                col: r,
+                val: v,
+            });
         }
     }
     faer::sparse::SparseColMat::<usize, f64>::try_new_from_triplets(
@@ -179,13 +188,9 @@ pub fn solve_sparse_cholesky_faer(
     values: &[f64],
     b: &Col<f64>,
 ) -> Option<Col<f64>> {
-    use faer::linalg::solvers::SpSolver;
+    use faer::linalg::solvers::Solve;
     let mat = sparsity_to_faer_symmetric(pattern, values)?;
-    let chol = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mat.sp_cholesky(faer::Side::Lower)
-    }))
-    .ok()?
-    .ok()?;
+    let chol = mat.sp_cholesky(faer::Side::Lower).ok()?;
     Some(chol.solve(b))
 }
 
@@ -198,10 +203,8 @@ pub fn solve_sparse_lu_faer(
     values: &[f64],
     b: &Col<f64>,
 ) -> Option<Col<f64>> {
-    use faer::linalg::solvers::SpSolver;
+    use faer::linalg::solvers::Solve;
     let mat = sparsity_to_faer_symmetric(pattern, values)?;
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mat.sp_lu().ok()))
-        .ok()
-        .flatten()
-        .map(|lu| lu.solve(b))
+    let lu = mat.sp_lu().ok()?;
+    Some(lu.solve(b))
 }

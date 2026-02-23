@@ -70,6 +70,7 @@
 //! **With `bytecode`:**
 //! - [`BytecodeTape`] -- recorded computation graph
 //! - [`BReverse<F>`] -- reverse-mode variable for bytecode evaluation
+//! - [`CustomOp`] / [`CustomOpHandle`] -- user-defined tape operations
 //! - Type aliases: [`BReverse64`], [`BReverse32`]
 //!
 //! **With `taylor`:**

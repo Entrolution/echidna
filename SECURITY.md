@@ -20,6 +20,16 @@ We aim to acknowledge reports within 48 hours and provide a fix or mitigation wi
 
 ## Security Practices
 
-- No `unsafe` code outside of the thread-local tape pointer, which is guarded by RAII scoping.
 - NaN propagation for undefined derivatives (no panics on hot paths).
-- All floating-point operations use standard Rust primitives — no FFI or raw memory manipulation.
+- All floating-point operations use standard Rust primitives.
+
+### Unsafe Usage
+
+echidna uses `unsafe` in the following scoped contexts:
+
+| Location | Purpose |
+|----------|---------|
+| `tape.rs`, `bytecode_tape.rs`, `taylor_dyn.rs` | Thread-local mutable pointer dereference for tape/arena access. Each is RAII-guarded: the pointer is valid for the lifetime of the enclosing scope guard. |
+| `checkpoint.rs` | Byte-level transmutation (`&[F]` ↔ `&[u8]`) for disk-backed checkpoint serialisation. Relies on `F: Float` being `f32`/`f64` (IEEE 754, no padding). |
+| `gpu/cuda_backend.rs` | FFI kernel launches via `cudarc`. Each call passes validated buffer sizes and grid dimensions to the CUDA driver. |
+| `traits/simba_impls.rs` | `extract_unchecked` / `replace_unchecked` for simba's `SimdValue` trait. Scalar types have only one lane, so the index is always 0. |

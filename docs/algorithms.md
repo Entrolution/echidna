@@ -14,7 +14,7 @@ every elemental operation `f` to dual numbers yields `f(a + b*epsilon) =
 f(a) + f'(a)*b*epsilon`, so the derivative is carried alongside the value
 through every operation. This is called tangent propagation: at each step the
 pair `(f(x), f'(x) * x_dot)` is propagated forward through the computation.
-In echidna, `Dual<F>` stores the value in `val` and the tangent in `eps`.
+In echidna, `Dual<F>` stores the value in `re` and the tangent in `eps`.
 For a function `f: R^n -> R^m`, one forward pass with a tangent seed vector
 `v` computes the Jacobian-vector product (JVP) `J * v`. Computing the full
 Jacobian requires `n` forward passes (one per input), so forward mode is most

@@ -21,8 +21,8 @@ simba = { version = "0.9", optional = true }
 bumpalo = { version = "3", features = ["collections"], optional = true }
 rayon = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
-ndarray = { version = "0.16", optional = true }
-faer = { version = "0.20", optional = true }
+ndarray = { version = "0.17", optional = true }
+faer = { version = "0.24", optional = true }
 nalgebra = { version = "0.33", optional = true }
 wgpu = { version = "28", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }

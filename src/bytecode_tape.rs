@@ -445,11 +445,7 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// Returns the gradient with respect to all inputs (length [`num_inputs`](Self::num_inputs)).
     pub fn reverse_seeded(&self, seeds: &[F]) -> Vec<F> {
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         assert_eq!(
             seeds.len(),
@@ -458,7 +454,7 @@ impl<F: Float> BytecodeTape<F> {
         );
 
         let ni = self.num_inputs as usize;
-        let adjoints = self.reverse_seeded_full(seeds, &out_indices);
+        let adjoints = self.reverse_seeded_full(seeds, out_indices);
         adjoints[..ni].to_vec()
     }
 
@@ -468,16 +464,12 @@ impl<F: Float> BytecodeTape<F> {
     pub fn jacobian(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
         self.forward(inputs);
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let ni = self.num_inputs as usize;
         let mut jac = Vec::with_capacity(out_indices.len());
 
-        for &out_idx in &out_indices {
+        for &out_idx in out_indices {
             let adjoints = self.reverse(out_idx);
             jac.push(adjoints[..ni].to_vec());
         }
@@ -505,16 +497,12 @@ impl<F: Float> BytecodeTape<F> {
         self.forward(inputs);
 
         let sign_map: HashMap<u32, i8> = forced_signs.iter().copied().collect();
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let ni = self.num_inputs as usize;
         let mut jac = Vec::with_capacity(out_indices.len());
 
-        for &out_idx in &out_indices {
+        for &out_idx in out_indices {
             let adjoints = self.reverse_with_forced_signs(out_idx, &sign_map);
             jac.push(adjoints[..ni].to_vec());
         }
@@ -562,11 +550,7 @@ impl<F: Float> BytecodeTape<F> {
             .map(|e| (e.tape_index, e.branch))
             .collect();
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
         let ni = self.num_inputs as usize;
 
         let num_combos = 1usize << k;
@@ -580,7 +564,7 @@ impl<F: Float> BytecodeTape<F> {
             }
 
             let mut jac = Vec::with_capacity(out_indices.len());
-            for &out_idx in &out_indices {
+            for &out_idx in out_indices {
                 let adjoints = self.reverse_with_forced_signs(out_idx, &sign_map);
                 jac.push(adjoints[..ni].to_vec());
             }
@@ -689,14 +673,17 @@ impl<F: Float> BytecodeTape<F> {
         crate::nonsmooth::NonsmoothInfo { kinks }
     }
 
-    /// Reverse sweep: compute adjoints seeded at the output.
+    /// Core reverse sweep loop shared by all scalar reverse sweep variants.
     ///
-    /// Returns the full adjoint vector (length = `num_variables`).
-    pub fn reverse(&self, seed_index: u32) -> Vec<F> {
-        let n = self.num_variables as usize;
-        let mut adjoints = vec![F::zero(); n];
-        adjoints[seed_index as usize] = F::one();
-
+    /// Expects `adjoints` to be pre-seeded by the caller (length = `num_variables`).
+    /// Reads primal values from `values` (either `self.values` or an external buffer).
+    /// When `forced_signs` is `Some`, uses forced partials at matching tape indices.
+    fn reverse_sweep_core(
+        &self,
+        adjoints: &mut [F],
+        values: &[F],
+        forced_signs: Option<&HashMap<u32, i8>>,
+    ) {
         for i in (0..self.opcodes.len()).rev() {
             let adj = adjoints[i];
             if adj == F::zero() {
@@ -708,12 +695,10 @@ impl<F: Float> BytecodeTape<F> {
                 OpCode::Custom => {
                     adjoints[i] = F::zero();
                     let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
+                    let a = values[a_idx as usize];
                     let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let r = self.values[i];
+                    let b = b_idx_opt.map(|bi| values[bi as usize]).unwrap_or(F::zero());
+                    let r = values[i];
                     let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
                     adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                     if let Some(bi) = b_idx_opt {
@@ -723,16 +708,20 @@ impl<F: Float> BytecodeTape<F> {
                 op => {
                     adjoints[i] = F::zero();
                     let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
+                    let a = values[a_idx as usize];
                     let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        self.values[b_idx as usize]
+                        values[b_idx as usize]
                     } else if op == OpCode::Powi {
                         F::from(b_idx).unwrap_or_else(|| F::zero())
                     } else {
                         F::zero()
                     };
-                    let r = self.values[i];
-                    let (da, db) = opcode::reverse_partials(op, a, b, r);
+                    let r = values[i];
+
+                    let (da, db) = match forced_signs.and_then(|fs| fs.get(&(i as u32))) {
+                        Some(&sign) => opcode::forced_reverse_partials(op, a, b, r, sign),
+                        None => opcode::reverse_partials(op, a, b, r),
+                    };
 
                     adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                     if b_idx != UNUSED && op != OpCode::Powi {
@@ -741,13 +730,20 @@ impl<F: Float> BytecodeTape<F> {
                 }
             }
         }
+    }
+
+    /// Reverse sweep: compute adjoints seeded at the output.
+    ///
+    /// Returns the full adjoint vector (length = `num_variables`).
+    pub fn reverse(&self, seed_index: u32) -> Vec<F> {
+        let n = self.num_variables as usize;
+        let mut adjoints = vec![F::zero(); n];
+        adjoints[seed_index as usize] = F::one();
+        self.reverse_sweep_core(&mut adjoints, &self.values, None);
         adjoints
     }
 
     /// Reverse sweep with forced branch choices at specified tape indices.
-    ///
-    /// Mirrors the structure of [`reverse`](Self::reverse) exactly, including the
-    /// three-way dispatch for Custom / forced / standard ops.
     fn reverse_with_forced_signs(
         &self,
         seed_index: u32,
@@ -756,57 +752,7 @@ impl<F: Float> BytecodeTape<F> {
         let n = self.num_variables as usize;
         let mut adjoints = vec![F::zero(); n];
         adjoints[seed_index as usize] = F::one();
-
-        for i in (0..self.opcodes.len()).rev() {
-            let adj = adjoints[i];
-            if adj == F::zero() {
-                continue;
-            }
-
-            match self.opcodes[i] {
-                OpCode::Input | OpCode::Const => continue,
-                OpCode::Custom => {
-                    // Custom ops always use their callback — never forced.
-                    adjoints[i] = F::zero();
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let r = self.values[i];
-                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if let Some(bi) = b_idx_opt {
-                        adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
-                    }
-                }
-                op => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        self.values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
-                    } else {
-                        F::zero()
-                    };
-                    let r = self.values[i];
-
-                    let (da, db) = if let Some(&sign) = forced_signs.get(&(i as u32)) {
-                        opcode::forced_reverse_partials(op, a, b, r, sign)
-                    } else {
-                        opcode::reverse_partials(op, a, b, r)
-                    };
-
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
-                        adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
-                    }
-                }
-            }
-        }
+        self.reverse_sweep_core(&mut adjoints, &self.values, Some(forced_signs));
         adjoints
     }
 
@@ -872,49 +818,7 @@ impl<F: Float> BytecodeTape<F> {
         assert_eq!(values.len(), n, "values buffer has wrong length");
         let mut adjoints = vec![F::zero(); n];
         adjoints[seed_index as usize] = F::one();
-
-        for i in (0..self.opcodes.len()).rev() {
-            let adj = adjoints[i];
-            if adj == F::zero() {
-                continue;
-            }
-
-            match self.opcodes[i] {
-                OpCode::Input | OpCode::Const => continue,
-                OpCode::Custom => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = values[a_idx as usize];
-                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt.map(|bi| values[bi as usize]).unwrap_or(F::zero());
-                    let r = values[i];
-                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if let Some(bi) = b_idx_opt {
-                        adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
-                    }
-                }
-                op => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
-                    } else {
-                        F::zero()
-                    };
-                    let r = values[i];
-                    let (da, db) = opcode::reverse_partials(op, a, b, r);
-
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
-                        adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
-                    }
-                }
-            }
-        }
+        self.reverse_sweep_core(&mut adjoints, values, None);
         adjoints
     }
 
@@ -1168,15 +1072,12 @@ impl<F: Float> BytecodeTape<F> {
         dual_vals_buf: &mut Vec<Dual<F>>,
         adjoint_buf: &mut Vec<Dual<F>>,
     ) {
-        let n = self.num_inputs as usize;
-
         // Reuse the input buffer instead of allocating
         dual_input_buf.clear();
         dual_input_buf.extend(x.iter().zip(v.iter()).map(|(&xi, &vi)| Dual::new(xi, vi)));
 
         self.forward_tangent(dual_input_buf, dual_vals_buf);
         self.reverse_tangent(dual_vals_buf, adjoint_buf);
-        let _ = n; // suppress unused warning
     }
 
     /// Full Hessian matrix via `n` Hessian-vector products.
@@ -1293,17 +1194,13 @@ impl<F: Float> BytecodeTape<F> {
     /// Walks the tape forward propagating input-dependency bitsets (first-order).
     /// For each output, determines which inputs it depends on.
     pub fn detect_jacobian_sparsity(&self) -> crate::sparse::JacobianSparsityPattern {
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
         crate::sparse::detect_jacobian_sparsity_impl(
             &self.opcodes,
             &self.arg_indices,
             self.num_inputs as usize,
             self.num_variables as usize,
-            &out_indices,
+            out_indices,
         )
     }
 
@@ -1581,11 +1478,7 @@ impl<F: Float> BytecodeTape<F> {
             "ODE tape must have num_outputs == num_inputs (f: R^n -> R^n)"
         );
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let mut y_coeffs = vec![[F::zero(); K]; n];
         for i in 0..n {
@@ -1612,7 +1505,12 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// Walks backward from all outputs, marks reachable entries, then compacts
     /// the tape in-place with an index remap. Inputs are never removed.
-    pub fn dead_code_elimination(&mut self) {
+    /// Core DCE: reachability walk from `seeds`, compact tape, return index remap.
+    ///
+    /// Shared by [`dead_code_elimination`](Self::dead_code_elimination) and
+    /// [`dead_code_elimination_for_outputs`](Self::dead_code_elimination_for_outputs).
+    /// Callers handle output index updates after compaction.
+    fn dce_compact(&mut self, seeds: &[u32]) -> Vec<u32> {
         let n = self.opcodes.len();
         let mut reachable = vec![false; n];
 
@@ -1621,12 +1519,7 @@ impl<F: Float> BytecodeTape<F> {
             *flag = true;
         }
 
-        // Seed from outputs.
-        let mut stack: Vec<u32> = Vec::new();
-        stack.push(self.output_index);
-        for &oi in &self.output_indices {
-            stack.push(oi);
-        }
+        let mut stack: Vec<u32> = seeds.to_vec();
 
         while let Some(idx) = stack.pop() {
             let i = idx as usize;
@@ -1680,6 +1573,14 @@ impl<F: Float> BytecodeTape<F> {
         self.arg_indices.truncate(new_len);
         self.values.truncate(new_len);
         self.num_variables = new_len as u32;
+
+        remap
+    }
+
+    pub fn dead_code_elimination(&mut self) {
+        let mut seeds = vec![self.output_index];
+        seeds.extend_from_slice(&self.output_indices);
+        let remap = self.dce_compact(&seeds);
         self.output_index = remap[self.output_index as usize];
         for oi in &mut self.output_indices {
             *oi = remap[*oi as usize];
@@ -1703,72 +1604,7 @@ impl<F: Float> BytecodeTape<F> {
             !active_outputs.is_empty(),
             "active_outputs must not be empty"
         );
-
-        let n = self.opcodes.len();
-        let mut reachable = vec![false; n];
-
-        // Mark all inputs as reachable.
-        for flag in reachable.iter_mut().take(self.num_inputs as usize) {
-            *flag = true;
-        }
-
-        // Seed from active outputs only.
-        let mut stack: Vec<u32> = active_outputs.to_vec();
-
-        while let Some(idx) = stack.pop() {
-            let i = idx as usize;
-            if reachable[i] {
-                continue;
-            }
-            reachable[i] = true;
-            let [a, b] = self.arg_indices[i];
-            if a != UNUSED {
-                stack.push(a);
-            }
-            if b != UNUSED && self.opcodes[i] != OpCode::Powi {
-                stack.push(b);
-            }
-        }
-
-        // Build remap: old index -> new index.
-        let mut remap = vec![0u32; n];
-        let mut new_idx = 0u32;
-        for i in 0..n {
-            if reachable[i] {
-                remap[i] = new_idx;
-                new_idx += 1;
-            }
-        }
-        let new_len = new_idx as usize;
-
-        // Compact in-place.
-        let mut write = 0;
-        for (read, &is_reachable) in reachable.iter().enumerate().take(n) {
-            if is_reachable {
-                self.opcodes[write] = self.opcodes[read];
-                self.values[write] = self.values[read];
-                let [a, b] = self.arg_indices[read];
-                let ra = if a != UNUSED {
-                    remap[a as usize]
-                } else {
-                    UNUSED
-                };
-                let rb = if b != UNUSED && self.opcodes[read] != OpCode::Powi {
-                    remap[b as usize]
-                } else {
-                    b
-                };
-                self.arg_indices[write] = [ra, rb];
-                write += 1;
-            }
-        }
-
-        self.opcodes.truncate(new_len);
-        self.arg_indices.truncate(new_len);
-        self.values.truncate(new_len);
-        self.num_variables = new_len as u32;
-
-        // Update output tracking to only include active outputs.
+        let remap = self.dce_compact(active_outputs);
         self.output_indices = active_outputs
             .iter()
             .map(|&oi| remap[oi as usize])
@@ -1950,11 +1786,7 @@ impl<F: Float> BytecodeTape<F> {
         let n = self.num_inputs as usize;
         let mut jac_values = vec![F::zero(); pattern.nnz()];
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let mut dual_input_buf: Vec<Dual<F>> = Vec::with_capacity(n);
         let mut dual_vals_buf: Vec<Dual<F>> = Vec::new();
@@ -2001,11 +1833,7 @@ impl<F: Float> BytecodeTape<F> {
         let m = self.num_outputs();
         let mut jac_values = vec![F::zero(); pattern.nnz()];
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         for color in 0..num_colors {
             // Build seeds: weight = 1 for outputs with this color
@@ -2019,7 +1847,7 @@ impl<F: Float> BytecodeTape<F> {
                 })
                 .collect();
 
-            let adjoints = self.reverse_seeded_full(&seeds, &out_indices);
+            let adjoints = self.reverse_seeded_full(&seeds, out_indices);
 
             // Extract Jacobian entries: for entry (row, col) with colors[row] == color,
             // adjoint[col] gives J[row][col]
@@ -2045,50 +1873,7 @@ impl<F: Float> BytecodeTape<F> {
             adjoints[out_idx as usize] = adjoints[out_idx as usize] + weight;
         }
 
-        for i in (0..self.opcodes.len()).rev() {
-            let adj = adjoints[i];
-            if adj == F::zero() {
-                continue;
-            }
-
-            match self.opcodes[i] {
-                OpCode::Input | OpCode::Const => continue,
-                OpCode::Custom => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let r = self.values[i];
-                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if let Some(bi) = b_idx_opt {
-                        adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
-                    }
-                }
-                op => {
-                    adjoints[i] = F::zero();
-                    let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        self.values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
-                    } else {
-                        F::zero()
-                    };
-                    let r = self.values[i];
-                    let (da, db) = opcode::reverse_partials(op, a, b, r);
-
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
-                        adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
-                    }
-                }
-            }
-        }
+        self.reverse_sweep_core(&mut adjoints, &self.values, None);
         adjoints
     }
 
@@ -2107,11 +1892,7 @@ impl<F: Float> BytecodeTape<F> {
         let n = self.num_inputs as usize;
         let mut jac_values = vec![F::zero(); pattern.nnz()];
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let mut dual_input_buf: Vec<DualVec<F, N>> = Vec::with_capacity(n);
         let mut dual_vals_buf: Vec<DualVec<F, N>> = Vec::new();
@@ -2154,11 +1935,7 @@ impl<F: Float> BytecodeTape<F> {
     pub fn jacobian_forward(&self, x: &[F]) -> Vec<Vec<F>> {
         let n = self.num_inputs as usize;
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
         let m = out_indices.len();
 
         let mut jac = vec![vec![F::zero(); n]; m];
@@ -2191,18 +1968,14 @@ impl<F: Float> BytecodeTape<F> {
     pub fn jacobian_cross_country(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
         self.forward(inputs);
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let mut graph = crate::cross_country::LinearizedGraph::from_tape(
             &self.opcodes,
             &self.arg_indices,
             &self.values,
             self.num_inputs as usize,
-            &out_indices,
+            out_indices,
             &self.custom_ops,
             &self.custom_second_args,
         );
@@ -2374,11 +2147,7 @@ impl<F: Float> BytecodeTape<F> {
         let mut values_buf = Vec::new();
         self.forward_into(inputs, &mut values_buf);
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
 
         let ni = self.num_inputs as usize;
         out_indices
@@ -2515,11 +2284,7 @@ impl<F: Float> BytecodeTape<F> {
         let mut values_buf = Vec::new();
         self.forward_into(x, &mut values_buf);
 
-        let out_indices = if self.output_indices.is_empty() {
-            vec![self.output_index]
-        } else {
-            self.output_indices.clone()
-        };
+        let out_indices = self.all_output_indices();
         let m = out_indices.len();
         let outputs: Vec<F> = out_indices
             .iter()
