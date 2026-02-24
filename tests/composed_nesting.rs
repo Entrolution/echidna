@@ -2,6 +2,7 @@
 //!
 //! Forward-wrapping-reverse compositions: `Dual<BReverse<f64>>`, `Dual<Reverse<f64>>`,
 //! `DualVec<BReverse<f64>, N>`, `Taylor<BReverse<f64>, K>`, and triple nesting.
+//! Reverse-wrapping-forward composition: `BReverse<Dual<f64>>`.
 
 // ══════════════════════════════════════════════
 //  Dual<BReverse<f64>> — forward-over-bytecode-reverse
@@ -429,6 +430,197 @@ mod triple_nesting {
             "third derivative: got {}, expected 6",
             adj[0]
         );
+    }
+}
+
+// ══════════════════════════════════════════════
+//  BReverse<Dual<f64>> — reverse-over-forward (bytecode)
+// ══════════════════════════════════════════════
+
+#[cfg(feature = "bytecode")]
+mod breverse_dual {
+    use echidna::{BReverse, Dual, Scalar};
+
+    /// f(x) = x³ → f'(x) = 3x², f''(x) = 6x
+    /// Record with BReverse<Dual<f64>>, then gradient gives Dual<f64>
+    /// where .re = gradient, .eps = directional second derivative.
+    #[test]
+    fn single_variable_cubic() {
+        let dual_inputs = [Dual::new(2.0_f64, 1.0)]; // x=2, tangent dx=1
+
+        let (mut tape, val) = echidna::record(|x| x[0] * x[0] * x[0], &dual_inputs);
+
+        // f(2) = 8, tangent = 3x²·1 = 12
+        assert!((val.re - 8.0).abs() < 1e-10);
+        assert!((val.eps - 12.0).abs() < 1e-10);
+
+        let grad = tape.gradient(&dual_inputs);
+
+        // grad[0].re = ∂f/∂x = 3x² = 12
+        assert!(
+            (grad[0].re - 12.0).abs() < 1e-10,
+            "grad.re = {}, expected 12",
+            grad[0].re
+        );
+        // grad[0].eps = d/dx(3x²)·dx = 6x·1 = 12
+        assert!(
+            (grad[0].eps - 12.0).abs() < 1e-10,
+            "grad.eps = {}, expected 12",
+            grad[0].eps
+        );
+    }
+
+    /// 2D Rosenbrock: compare BReverse<Dual<f64>> against echidna::hvp reference.
+    #[test]
+    fn rosenbrock_matches_hvp() {
+        let x = [1.5_f64, 2.0];
+        let v = [0.3, -0.7];
+
+        // Reference: tape-based hvp on plain f64
+        let (ref_grad, ref_hvp) = echidna::hvp(
+            |x| {
+                let a = BReverse::constant(1.0) - x[0];
+                let b = x[1] - x[0] * x[0];
+                a * a + BReverse::constant(100.0) * b * b
+            },
+            &x,
+            &v,
+        );
+
+        // Reverse-over-forward: record with F = Dual<f64>
+        let dual_inputs: Vec<Dual<f64>> = x
+            .iter()
+            .zip(v.iter())
+            .map(|(&xi, &vi)| Dual::new(xi, vi))
+            .collect();
+
+        fn rosenbrock_dual(x: &[BReverse<Dual<f64>>]) -> BReverse<Dual<f64>> {
+            let one: BReverse<Dual<f64>> = Scalar::from_f(Dual::new(1.0, 0.0));
+            let hundred: BReverse<Dual<f64>> = Scalar::from_f(Dual::new(100.0, 0.0));
+            let a = one - x[0];
+            let b = x[1] - x[0] * x[0];
+            a * a + hundred * b * b
+        }
+
+        let (mut tape, _val) = echidna::record(rosenbrock_dual, &dual_inputs);
+        let grad = tape.gradient(&dual_inputs);
+
+        // Check gradient matches (.re components)
+        for i in 0..2 {
+            assert!(
+                (grad[i].re - ref_grad[i]).abs() < 1e-10,
+                "grad[{}].re: got {}, expected {}",
+                i,
+                grad[i].re,
+                ref_grad[i]
+            );
+        }
+
+        // Check HVP matches (.eps components)
+        for i in 0..2 {
+            assert!(
+                (grad[i].eps - ref_hvp[i]).abs() < 1e-10,
+                "hvp[{}]: got {}, expected {}",
+                i,
+                grad[i].eps,
+                ref_hvp[i]
+            );
+        }
+    }
+
+    /// Test the record API end-to-end, and verify tape reuse with different
+    /// tangent directions produces different .eps results.
+    #[test]
+    fn record_api() {
+        let dual_inputs = [Dual::new(3.0_f64, 1.0), Dual::new(4.0, 0.0)];
+
+        // f(x,y) = x² + y²
+        let (mut tape, val) = echidna::record(|x| x[0] * x[0] + x[1] * x[1], &dual_inputs);
+
+        // f(3,4) = 25
+        assert!((val.re - 25.0).abs() < 1e-10);
+        // tangent with v=(1,0): 2*3*1 + 2*4*0 = 6
+        assert!((val.eps - 6.0).abs() < 1e-10);
+
+        // Gradient with tangent direction v=(1,0)
+        // Gradient: ∂f/∂x = 2x = 6, ∂f/∂y = 2y = 8
+        let grad1 = tape.gradient(&dual_inputs);
+        assert!((grad1[0].re - 6.0).abs() < 1e-10);
+        assert!((grad1[1].re - 8.0).abs() < 1e-10);
+        // HVP with v=(1,0): H = 2I, so Hv = (2,0)
+        assert!((grad1[0].eps - 2.0).abs() < 1e-10);
+        assert!(grad1[1].eps.abs() < 1e-10);
+
+        // Reuse tape with different tangent direction v=(0,1)
+        let dual_inputs2 = [Dual::new(3.0_f64, 0.0), Dual::new(4.0, 1.0)];
+        let grad2 = tape.gradient(&dual_inputs2);
+        // Gradient .re should be the same
+        assert!((grad2[0].re - 6.0).abs() < 1e-10);
+        assert!((grad2[1].re - 8.0).abs() < 1e-10);
+        // HVP with v=(0,1): H = 2I, so Hv = (0,2)
+        assert!(grad2[0].eps.abs() < 1e-10);
+        assert!((grad2[1].eps - 2.0).abs() < 1e-10);
+    }
+
+    /// Compute full Hessian column-by-column via reverse-over-forward.
+    /// Compare against BytecodeTape<f64>::hessian().
+    #[test]
+    fn hessian_via_reverse_over_forward() {
+        let x = [1.5_f64, 2.0];
+        let n = x.len();
+
+        // Reference: full Hessian via BytecodeTape<f64>
+        let (ref_tape, _) = echidna::record(
+            |x: &[BReverse<f64>]| {
+                let a = BReverse::constant(1.0) - x[0];
+                let b = x[1] - x[0] * x[0];
+                a * a + BReverse::constant(100.0) * b * b
+            },
+            &x,
+        );
+        let (_ref_val, _ref_grad, ref_hessian) = ref_tape.hessian(&x);
+
+        // Record with F = Dual<f64> (one recording pass)
+        let base_inputs: Vec<Dual<f64>> = x.iter().map(|&xi| Dual::new(xi, 0.0)).collect();
+        let (mut dual_tape, _) = echidna::record(
+            |x: &[BReverse<Dual<f64>>]| {
+                let one: BReverse<Dual<f64>> = Scalar::from_f(Dual::new(1.0, 0.0));
+                let hundred: BReverse<Dual<f64>> = Scalar::from_f(Dual::new(100.0, 0.0));
+                let a = one - x[0];
+                let b = x[1] - x[0] * x[0];
+                a * a + hundred * b * b
+            },
+            &base_inputs,
+        );
+
+        // Extract Hessian column-by-column
+        let mut hessian = vec![vec![0.0_f64; n]; n];
+        for j in 0..n {
+            // Set tangent direction to e_j
+            let dual_inputs: Vec<Dual<f64>> = x
+                .iter()
+                .enumerate()
+                .map(|(i, &xi)| Dual::new(xi, if i == j { 1.0 } else { 0.0 }))
+                .collect();
+            let grad = dual_tape.gradient(&dual_inputs);
+            for i in 0..n {
+                hessian[i][j] = grad[i].eps;
+            }
+        }
+
+        // Compare against reference
+        for i in 0..n {
+            for j in 0..n {
+                assert!(
+                    (hessian[i][j] - ref_hessian[i][j]).abs() < 1e-8,
+                    "hessian[{}][{}]: got {}, expected {}",
+                    i,
+                    j,
+                    hessian[i][j],
+                    ref_hessian[i][j]
+                );
+            }
+        }
     }
 }
 
