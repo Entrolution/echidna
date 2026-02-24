@@ -35,8 +35,10 @@ pub const CONSTANT: u32 = u32::MAX;
 /// handles forward-mode tangent propagation and reverse-mode adjoint accumulation
 /// via chain rule using the partials you provide.
 ///
-/// For second-order derivatives (Hessian, HVP), implement `CustomOpSecondOrder`
-/// additionally.
+/// For correct second-order derivatives (Hessian, HVP) through custom ops,
+/// override [`eval_dual`](CustomOp::eval_dual) and
+/// [`partials_dual`](CustomOp::partials_dual). The defaults use first-order
+/// chain rule, which treats partials as constant.
 ///
 /// # Example
 ///
@@ -58,6 +60,28 @@ pub trait CustomOp<F: Float>: Send + Sync {
     fn eval(&self, a: F, b: F) -> F;
     /// Reverse partials `(∂result/∂a, ∂result/∂b)`.
     fn partials(&self, a: F, b: F, result: F) -> (F, F);
+
+    /// Evaluate in dual-number context for second-order derivatives (HVP, Hessian).
+    ///
+    /// Override this to propagate tangent information through the custom op.
+    /// The default uses first-order chain rule: correct for gradients, but
+    /// treats partials as constant for second-order derivatives.
+    ///
+    /// Primals are embedded in the dual numbers: `a.re` is the primal input.
+    fn eval_dual(&self, a: Dual<F>, b: Dual<F>) -> Dual<F> {
+        let result = self.eval(a.re, b.re);
+        let (da, db) = self.partials(a.re, b.re, result);
+        Dual::new(result, da * a.eps + db * b.eps)
+    }
+
+    /// Partials in dual-number context for second-order derivatives.
+    ///
+    /// Override this to return partials whose tangent components carry the
+    /// derivative of the partial itself. The default returns constant partials.
+    fn partials_dual(&self, a: Dual<F>, b: Dual<F>, result: Dual<F>) -> (Dual<F>, Dual<F>) {
+        let (da, db) = self.partials(a.re, b.re, result.re);
+        (Dual::constant(da), Dual::constant(db))
+    }
 }
 
 /// Handle returned by [`BytecodeTape::register_custom`], used to invoke custom ops.
@@ -532,7 +556,11 @@ impl<F: Float> BytecodeTape<F> {
     {
         #![allow(clippy::type_complexity)]
         let info = self.forward_nonsmooth(inputs);
-        let active: Vec<&crate::nonsmooth::KinkEntry<F>> = info.active_kinks(tol);
+        let active: Vec<&crate::nonsmooth::KinkEntry<F>> = info
+            .active_kinks(tol)
+            .into_iter()
+            .filter(|k| opcode::has_nontrivial_subdifferential(k.opcode))
+            .collect();
         let k = active.len();
         let limit = max_active_kinks.unwrap_or(20);
 
@@ -622,8 +650,13 @@ impl<F: Float> BytecodeTape<F> {
     /// Forward sweep with nonsmooth branch tracking.
     ///
     /// Calls [`forward`](Self::forward) to evaluate the tape, then scans for
-    /// nonsmooth operations (`abs`, `min`, `max`) and records which branch was
-    /// taken at each one.
+    /// nonsmooth operations and records which branch was taken at each one.
+    ///
+    /// Tracked operations:
+    /// - `Abs`, `Min`, `Max` — kinks with nontrivial subdifferentials
+    /// - `Signum`, `Floor`, `Ceil`, `Round`, `Trunc` — step-function
+    ///   discontinuities (zero derivative on both sides, tracked for proximity
+    ///   detection only)
     ///
     /// Returns [`crate::NonsmoothInfo`] containing all kink entries in tape order.
     pub fn forward_nonsmooth(&mut self, inputs: &[F]) -> crate::nonsmooth::NonsmoothInfo<F> {
@@ -664,6 +697,30 @@ impl<F: Float> BytecodeTape<F> {
                         opcode: op,
                         switching_value: a - b,
                         branch: if a <= b { 1 } else { -1 },
+                    });
+                }
+                OpCode::Signum => {
+                    // Kink at x = 0 (same as Abs).
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a,
+                        branch: if a >= F::zero() { 1 } else { -1 },
+                    });
+                }
+                OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
+                    // Kink at integer values. switching_value = distance to
+                    // nearest integer: zero exactly at kink points, works
+                    // symmetrically for both approach directions.
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a - a.round(),
+                        branch: if a - a.floor() < F::from(0.5).unwrap() {
+                            1
+                        } else {
+                            -1
+                        },
                     });
                 }
                 _ => unreachable!(),
@@ -896,6 +953,43 @@ impl<F: Float> BytecodeTape<F> {
     /// Generic over `T: NumFloat` so it works with both `Dual<F>` and
     /// `DualVec<F, N>`.
     pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
+        self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
+            // First-order chain rule: evaluate on primals, convert partials to T.
+            let [a_idx, cb_idx] = self.arg_indices[i];
+            let a_primal = self.values[a_idx as usize];
+            let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
+            let b_primal = b_idx_opt
+                .map(|bi| self.values[bi as usize])
+                .unwrap_or(F::zero());
+            let result = self.custom_ops[cb_idx as usize].eval(a_primal, b_primal);
+            let (da, db) = self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, result);
+            let result_t = T::from(result).unwrap();
+            let da_t = T::from(da).unwrap();
+            let db_t = T::from(db).unwrap();
+            let a_re_t = T::from(a_primal).unwrap();
+            let b_re_t = T::from(b_primal).unwrap();
+            result_t + da_t * (a_t - a_re_t) + db_t * (b_t - b_re_t)
+        });
+    }
+
+    /// Forward sweep specialized for `Dual<F>`, calling [`CustomOp::eval_dual`]
+    /// so that custom ops propagate tangent information for second-order derivatives.
+    fn forward_tangent_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+        self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
+            let [_a_idx, cb_idx] = self.arg_indices[i];
+            self.custom_ops[cb_idx as usize].eval_dual(a_t, b_t)
+        });
+    }
+
+    /// Common forward-tangent loop. The `handle_custom` closure receives
+    /// `(tape_index, a_value, b_value)` for custom op slots and returns
+    /// the result to store.
+    fn forward_tangent_inner<T: NumFloat>(
+        &self,
+        inputs: &[T],
+        buf: &mut Vec<T>,
+        handle_custom: impl Fn(usize, T, T) -> T,
+    ) {
         assert_eq!(
             inputs.len(),
             self.num_inputs as usize,
@@ -917,34 +1011,11 @@ impl<F: Float> BytecodeTape<F> {
                     buf[i] = T::from(self.values[i]).unwrap();
                 }
                 OpCode::Custom => {
-                    // For custom ops in tangent mode: evaluate on primal values,
-                    // then propagate tangent via chain rule using partials.
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a_primal = self.values[a_idx as usize];
+                    let [a_idx, _cb_idx] = self.arg_indices[i];
                     let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b_primal = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let result = self.custom_ops[cb_idx as usize].eval(a_primal, b_primal);
-                    let (da, db) =
-                        self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, result);
-                    // Apply chain rule: tangent = da * a_tangent + db * b_tangent
                     let a_t = buf[a_idx as usize];
                     let b_t = b_idx_opt.map(|bi| buf[bi as usize]).unwrap_or(T::zero());
-                    let result_t = T::from(result).unwrap();
-                    let da_t = T::from(da).unwrap();
-                    let db_t = T::from(db).unwrap();
-                    // Result tangent = da * a.eps + db * b.eps (for Dual<F>)
-                    // But we need to set both primal and tangent. With Dual numbers,
-                    // the result = f(a.re, b.re) + (da * a.eps + db * b.eps) * eps
-                    // We construct this by: result_primal + tangent_sum, where for generic
-                    // T we use: result_t + (da_t * (a_t - a_re_t) + db_t * (b_t - b_re_t))
-                    // But actually simpler: set buf[i] via arithmetic on T directly:
-                    // buf[i].re = result, buf[i].eps = da * a.eps + db * b.eps
-                    // Since T is opaque, we do: result_t + da_t * (a_t - T::from(a_primal)) + db_t * (b_t - T::from(b_primal))
-                    let a_re_t = T::from(a_primal).unwrap();
-                    let b_re_t = T::from(b_primal).unwrap();
-                    buf[i] = result_t + da_t * (a_t - a_re_t) + db_t * (b_t - b_re_t);
+                    buf[i] = handle_custom(i, a_t, b_t);
                 }
                 op => {
                     let [a_idx, b_idx] = self.arg_indices[i];
@@ -966,6 +1037,43 @@ impl<F: Float> BytecodeTape<F> {
     /// [`forward_tangent`](Self::forward_tangent). Uses [`IsAllZero`] to
     /// safely skip zero adjoints without dropping tangent contributions.
     fn reverse_tangent<T: NumFloat + IsAllZero>(&self, tangent_vals: &[T], buf: &mut Vec<T>) {
+        self.reverse_tangent_inner(tangent_vals, buf, |i| {
+            // First-order: convert primal-float partials to T.
+            let [a_idx, cb_idx] = self.arg_indices[i];
+            let a_primal = self.values[a_idx as usize];
+            let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
+            let b_primal = b_idx_opt
+                .map(|bi| self.values[bi as usize])
+                .unwrap_or(F::zero());
+            let r_primal = self.values[i];
+            let (da, db) = self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, r_primal);
+            (T::from(da).unwrap(), T::from(db).unwrap())
+        });
+    }
+
+    /// Reverse sweep specialized for `Dual<F>`, calling [`CustomOp::partials_dual`]
+    /// so that custom op partials carry tangent information for second-order derivatives.
+    fn reverse_tangent_dual(&self, tangent_vals: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+        self.reverse_tangent_inner(tangent_vals, buf, |i| {
+            let [a_idx, cb_idx] = self.arg_indices[i];
+            let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
+            let a_dual = tangent_vals[a_idx as usize];
+            let b_dual = b_idx_opt
+                .map(|bi| tangent_vals[bi as usize])
+                .unwrap_or(Dual::constant(F::zero()));
+            let r_dual = tangent_vals[i];
+            self.custom_ops[cb_idx as usize].partials_dual(a_dual, b_dual, r_dual)
+        });
+    }
+
+    /// Common reverse-tangent loop. The `custom_partials` closure receives
+    /// `tape_index` for custom op slots and returns `(da, db)` as T-valued partials.
+    fn reverse_tangent_inner<T: NumFloat + IsAllZero>(
+        &self,
+        tangent_vals: &[T],
+        buf: &mut Vec<T>,
+        custom_partials: impl Fn(usize) -> (T, T),
+    ) {
         let n = self.num_variables as usize;
         buf.clear();
         buf.resize(n, T::zero());
@@ -981,17 +1089,9 @@ impl<F: Float> BytecodeTape<F> {
                     }
                     buf[i] = T::zero();
 
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a_primal = self.values[a_idx as usize];
+                    let [a_idx, _cb_idx] = self.arg_indices[i];
                     let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b_primal = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let r_primal = self.values[i];
-                    let (da, db) =
-                        self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, r_primal);
-                    let da_t = T::from(da).unwrap();
-                    let db_t = T::from(db).unwrap();
+                    let (da_t, db_t) = custom_partials(i);
                     buf[a_idx as usize] = buf[a_idx as usize] + da_t * adj;
                     if let Some(bi) = b_idx_opt {
                         buf[bi as usize] = buf[bi as usize] + db_t * adj;
@@ -1054,8 +1154,8 @@ impl<F: Float> BytecodeTape<F> {
             .map(|(&xi, &vi)| Dual::new(xi, vi))
             .collect();
 
-        self.forward_tangent(&dual_inputs, dual_vals_buf);
-        self.reverse_tangent(dual_vals_buf, adjoint_buf);
+        self.forward_tangent_dual(&dual_inputs, dual_vals_buf);
+        self.reverse_tangent_dual(dual_vals_buf, adjoint_buf);
 
         let gradient: Vec<F> = (0..n).map(|i| adjoint_buf[i].re).collect();
         let hvp: Vec<F> = (0..n).map(|i| adjoint_buf[i].eps).collect();
@@ -1076,8 +1176,8 @@ impl<F: Float> BytecodeTape<F> {
         dual_input_buf.clear();
         dual_input_buf.extend(x.iter().zip(v.iter()).map(|(&xi, &vi)| Dual::new(xi, vi)));
 
-        self.forward_tangent(dual_input_buf, dual_vals_buf);
-        self.reverse_tangent(dual_vals_buf, adjoint_buf);
+        self.forward_tangent_dual(dual_input_buf, dual_vals_buf);
+        self.reverse_tangent_dual(dual_vals_buf, adjoint_buf);
     }
 
     /// Full Hessian matrix via `n` Hessian-vector products.
@@ -1101,8 +1201,8 @@ impl<F: Float> BytecodeTape<F> {
             dual_input_buf
                 .extend((0..n).map(|i| Dual::new(x[i], if i == j { F::one() } else { F::zero() })));
 
-            self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
-            self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
+            self.forward_tangent_dual(&dual_input_buf, &mut dual_vals_buf);
+            self.reverse_tangent_dual(&dual_vals_buf, &mut adjoint_buf);
 
             if j == 0 {
                 value = dual_vals_buf[self.output_index as usize].re;
@@ -2174,8 +2274,8 @@ impl<F: Float> BytecodeTape<F> {
             .collect();
         let mut dual_vals_buf = Vec::new();
         let mut adjoint_buf = Vec::new();
-        self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
-        self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
+        self.forward_tangent_dual(&dual_input_buf, &mut dual_vals_buf);
+        self.reverse_tangent_dual(&dual_vals_buf, &mut adjoint_buf);
 
         let value = dual_vals_buf[self.output_index as usize].re;
         let gradient: Vec<F> = (0..n).map(|i| adjoint_buf[i].re).collect();
@@ -2190,8 +2290,8 @@ impl<F: Float> BytecodeTape<F> {
                     .collect();
                 let mut dv = Vec::new();
                 let mut ab = Vec::new();
-                self.forward_tangent(&inputs, &mut dv);
-                self.reverse_tangent(&dv, &mut ab);
+                self.forward_tangent_dual(&inputs, &mut dv);
+                self.reverse_tangent_dual(&dv, &mut ab);
                 (0..n).map(|i| ab[i].eps).collect()
             })
             .collect();
@@ -2233,8 +2333,8 @@ impl<F: Float> BytecodeTape<F> {
         let di: Vec<Dual<F>> = (0..n).map(|i| Dual::new(x[i], v0[i])).collect();
         let mut dv = Vec::new();
         let mut ab = Vec::new();
-        self.forward_tangent(&di, &mut dv);
-        self.reverse_tangent(&dv, &mut ab);
+        self.forward_tangent_dual(&di, &mut dv);
+        self.reverse_tangent_dual(&dv, &mut ab);
         let value = dv[self.output_index as usize].re;
         let gradient: Vec<F> = (0..n).map(|i| ab[i].re).collect();
 
@@ -2253,8 +2353,8 @@ impl<F: Float> BytecodeTape<F> {
                 let inputs: Vec<Dual<F>> = (0..n).map(|i| Dual::new(x[i], v[i])).collect();
                 let mut dv_local = Vec::new();
                 let mut ab_local = Vec::new();
-                self.forward_tangent(&inputs, &mut dv_local);
-                self.reverse_tangent(&dv_local, &mut ab_local);
+                self.forward_tangent_dual(&inputs, &mut dv_local);
+                self.reverse_tangent_dual(&dv_local, &mut ab_local);
                 ab_local
             })
             .collect();
@@ -2509,9 +2609,14 @@ mod serde_support {
 thread_local! {
     static BTAPE_F32: Cell<*mut BytecodeTape<f32>> = const { Cell::new(std::ptr::null_mut()) };
     static BTAPE_F64: Cell<*mut BytecodeTape<f64>> = const { Cell::new(std::ptr::null_mut()) };
+    static BTAPE_DUAL_F32: Cell<*mut BytecodeTape<Dual<f32>>> = const { Cell::new(std::ptr::null_mut()) };
+    static BTAPE_DUAL_F64: Cell<*mut BytecodeTape<Dual<f64>>> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 /// Trait to select the correct thread-local for a given float type.
+///
+/// Implemented for `f32`, `f64`, `Dual<f32>`, and `Dual<f64>`, enabling
+/// `BReverse<F>` to be used with these base types.
 pub trait BtapeThreadLocal: Float {
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>>;
 }
@@ -2525,6 +2630,18 @@ impl BtapeThreadLocal for f32 {
 impl BtapeThreadLocal for f64 {
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
         &BTAPE_F64
+    }
+}
+
+impl BtapeThreadLocal for Dual<f32> {
+    fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
+        &BTAPE_DUAL_F32
+    }
+}
+
+impl BtapeThreadLocal for Dual<f64> {
+    fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
+        &BTAPE_DUAL_F64
     }
 }
 

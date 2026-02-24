@@ -28,7 +28,7 @@ pub fn grad<F: Float + TapeThreadLocal>(
     x: &[F],
 ) -> Vec<F> {
     let n = x.len();
-    let mut tape = Tape::with_capacity(n * 10);
+    let mut tape = Tape::take_pooled(n * 10);
 
     // Create input variables.
     let inputs: Vec<Reverse<F>> = x
@@ -39,14 +39,17 @@ pub fn grad<F: Float + TapeThreadLocal>(
         })
         .collect();
 
-    let _guard = TapeGuard::new(&mut tape);
+    let guard = TapeGuard::new(&mut tape);
     let output = f(&inputs);
+    drop(guard);
 
     // Run reverse sweep.
     let adjoints = tape.reverse(output.index);
 
     // Extract gradients for input variables (indices 0..n).
-    (0..n).map(|i| adjoints[i]).collect()
+    let result = (0..n).map(|i| adjoints[i]).collect();
+    Tape::return_to_pool(tape);
+    result
 }
 
 /// Jacobian-vector product (forward mode): `(f(x), J·v)`.
@@ -74,7 +77,7 @@ pub fn vjp<F: Float + TapeThreadLocal>(
     w: &[F],
 ) -> (Vec<F>, Vec<F>) {
     let n = x.len();
-    let mut tape = Tape::with_capacity(n * 10);
+    let mut tape = Tape::take_pooled(n * 10);
 
     let inputs: Vec<Reverse<F>> = x
         .iter()
@@ -84,8 +87,9 @@ pub fn vjp<F: Float + TapeThreadLocal>(
         })
         .collect();
 
-    let _guard = TapeGuard::new(&mut tape);
+    let guard = TapeGuard::new(&mut tape);
     let outputs = f(&inputs);
+    drop(guard);
 
     assert_eq!(
         outputs.len(),
@@ -105,7 +109,9 @@ pub fn vjp<F: Float + TapeThreadLocal>(
     let adjoints = tape.reverse_seeded(&seeds);
 
     let grad: Vec<F> = (0..n).map(|i| adjoints[i]).collect();
-    (values, grad)
+    let result = (values, grad);
+    Tape::return_to_pool(tape);
+    result
 }
 
 /// Compute the full Jacobian of `f : R^n → R^m` using forward mode.
