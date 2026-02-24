@@ -2,7 +2,7 @@
 //!
 //! Cross-platform (Metal, Vulkan, DX12). f32 only — WGSL does not support f64.
 
-use super::{GpuError, GpuTapeData, TapeMeta};
+use super::{GpuBackend, GpuError, GpuTapeData, TapeMeta};
 
 /// GPU buffers holding an uploaded tape (wgpu backend).
 pub struct WgpuTapeBuffers {
@@ -238,9 +238,12 @@ impl WgpuContext {
             tangent_rev_io_bind_group_layout,
         })
     }
+}
 
-    /// Upload a tape to GPU buffers.
-    pub fn upload_tape(&self, data: &GpuTapeData) -> WgpuTapeBuffers {
+impl GpuBackend for WgpuContext {
+    type TapeBuffers = WgpuTapeBuffers;
+
+    fn upload_tape(&self, data: &GpuTapeData) -> WgpuTapeBuffers {
         use wgpu::util::DeviceExt;
 
         let opcodes_buf = self
@@ -311,7 +314,7 @@ impl WgpuContext {
     ///
     /// Returns `[f32; batch_size * num_outputs]` — one output per batch element
     /// (or `num_outputs` per element for multi-output tapes).
-    pub fn forward_batch(
+    fn forward_batch(
         &self,
         tape: &WgpuTapeBuffers,
         inputs: &[f32],
@@ -484,7 +487,7 @@ impl WgpuContext {
     /// Returns `(outputs, gradients)`:
     /// - `outputs`: `[f32; batch_size * num_outputs]`
     /// - `gradients`: `[f32; batch_size * num_inputs]` in row-major order
-    pub fn gradient_batch(
+    fn gradient_batch(
         &self,
         tape: &WgpuTapeBuffers,
         inputs: &[f32],
@@ -737,7 +740,7 @@ impl WgpuContext {
     /// - `output_values`: function values at x
     /// - `sparsity_pattern`: the Jacobian sparsity pattern
     /// - `jacobian_values`: non-zero Jacobian entries matching the pattern
-    pub fn sparse_jacobian(
+    fn sparse_jacobian(
         &self,
         tape: &WgpuTapeBuffers,
         tape_cpu: &mut crate::BytecodeTape<f32>,
@@ -956,7 +959,7 @@ impl WgpuContext {
     /// `tangent_dirs` is `[f32; batch_size * num_inputs]` — one direction per element.
     ///
     /// Returns `(gradients, hvps)` each of shape `[f32; batch_size * num_inputs]`.
-    pub fn hvp_batch(
+    fn hvp_batch(
         &self,
         tape: &WgpuTapeBuffers,
         x: &[f32],
@@ -1191,7 +1194,7 @@ impl WgpuContext {
     /// dispatches all colored HVP sweeps in parallel.
     ///
     /// Returns `(value, gradient, sparsity_pattern, hessian_values)`.
-    pub fn sparse_hessian(
+    fn sparse_hessian(
         &self,
         tape: &WgpuTapeBuffers,
         tape_cpu: &mut crate::BytecodeTape<f32>,

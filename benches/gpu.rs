@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use echidna::gpu::{GpuTapeData, WgpuContext};
+use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
 use echidna::record;
 
 #[path = "common/mod.rs"]

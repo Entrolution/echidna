@@ -1,6 +1,6 @@
 #![cfg(feature = "gpu-wgpu")]
 
-use echidna::gpu::{GpuTapeData, WgpuContext};
+use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
 use echidna::{record, Scalar};
 
 /// Try to acquire a GPU. If none available, print a warning and return None.
@@ -639,4 +639,10 @@ fn custom_ops_rejected() {
         matches!(result, Err(echidna::gpu::GpuError::CustomOpsNotSupported)),
         "expected CustomOpsNotSupported error"
     );
+}
+
+#[test]
+fn wgpu_implements_gpu_backend() {
+    fn assert_backend<B: GpuBackend>() {}
+    assert_backend::<WgpuContext>();
 }

@@ -23,7 +23,7 @@ use cudarc::driver::{
 };
 use cudarc::nvrtc::compile_ptx;
 
-use super::{GpuError, GpuTapeData};
+use super::{GpuBackend, GpuError, GpuTapeData};
 
 const KERNEL_SRC: &str = include_str!("kernels/tape_eval.cu");
 const BLOCK_SIZE: u32 = 256;
@@ -122,22 +122,6 @@ impl CudaContext {
         (BLOCK_SIZE, 1, 1)
     }
 
-    /// Upload an f32 tape to the GPU.
-    pub fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
-        let s = &self.stream;
-        CudaTapeBuffers {
-            opcodes: s.clone_htod(&data.opcodes).unwrap(),
-            arg0: s.clone_htod(&data.arg0).unwrap(),
-            arg1: s.clone_htod(&data.arg1).unwrap(),
-            constants_f32: s.clone_htod(&data.constants).unwrap(),
-            output_indices: s.clone_htod(&data.output_indices).unwrap(),
-            num_ops: data.num_ops,
-            num_inputs: data.num_inputs,
-            num_variables: data.num_variables,
-            num_outputs: data.output_indices.len() as u32,
-        }
-    }
-
     /// Upload an f64 tape to the GPU for native f64 operations.
     pub fn upload_tape_f64(
         &self,
@@ -166,11 +150,27 @@ impl CudaContext {
             num_outputs: output_indices.len() as u32,
         })
     }
+}
 
-    // ── f32 operations ──
+impl GpuBackend for CudaContext {
+    type TapeBuffers = CudaTapeBuffers;
 
-    /// Batched forward evaluation (f32).
-    pub fn forward_batch(
+    fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
+        let s = &self.stream;
+        CudaTapeBuffers {
+            opcodes: s.clone_htod(&data.opcodes).unwrap(),
+            arg0: s.clone_htod(&data.arg0).unwrap(),
+            arg1: s.clone_htod(&data.arg1).unwrap(),
+            constants_f32: s.clone_htod(&data.constants).unwrap(),
+            output_indices: s.clone_htod(&data.output_indices).unwrap(),
+            num_ops: data.num_ops,
+            num_inputs: data.num_inputs,
+            num_variables: data.num_variables,
+            num_outputs: data.output_indices.len() as u32,
+        }
+    }
+
+    fn forward_batch(
         &self,
         tape: &CudaTapeBuffers,
         inputs: &[f32],
@@ -224,7 +224,7 @@ impl CudaContext {
     }
 
     /// Batched gradient (forward + reverse) (f32).
-    pub fn gradient_batch(
+    fn gradient_batch(
         &self,
         tape: &CudaTapeBuffers,
         inputs: &[f32],
@@ -304,23 +304,22 @@ impl CudaContext {
     }
 
     /// Sparse Jacobian using forward-mode tangent sweeps (f32).
-    pub fn sparse_jacobian(
+    fn sparse_jacobian(
         &self,
         tape: &CudaTapeBuffers,
         tape_cpu: &mut crate::BytecodeTape<f32>,
         x: &[f32],
-    ) -> Result<(Vec<f32>, crate::sparse::SparsityPattern, Vec<f32>), GpuError> {
+    ) -> Result<(Vec<f32>, crate::sparse::JacobianSparsityPattern, Vec<f32>), GpuError> {
         let ni = tape.num_inputs as usize;
         let no = tape.num_outputs as usize;
 
-        let jac_pattern = crate::sparse::JacobianSparsityPattern::detect(tape_cpu);
-        let pattern = &jac_pattern.pattern;
-        let (colors, num_colors) = crate::sparse::column_coloring(pattern);
+        let pattern = tape_cpu.detect_jacobian_sparsity();
+        let (colors, num_colors) = crate::sparse::column_coloring(&pattern);
 
         if num_colors == 0 {
             tape_cpu.forward(x);
             let vals = tape_cpu.output_values();
-            return Ok((vals, pattern.clone(), vec![]));
+            return Ok((vals, pattern, vec![]));
         }
 
         // Build tangent seeds for each color
@@ -403,11 +402,11 @@ impl CudaContext {
             jac_values[k] = tangent_outs[c * no + row as usize];
         }
 
-        Ok((output_values, pattern.clone(), jac_values))
+        Ok((output_values, pattern, jac_values))
     }
 
     /// HVP batch (forward-over-reverse) (f32).
-    pub fn hvp_batch(
+    fn hvp_batch(
         &self,
         tape: &CudaTapeBuffers,
         x: &[f32],
@@ -489,7 +488,7 @@ impl CudaContext {
     }
 
     /// Sparse Hessian using GPU HVP sweeps (f32).
-    pub fn sparse_hessian(
+    fn sparse_hessian(
         &self,
         tape: &CudaTapeBuffers,
         tape_cpu: &mut crate::BytecodeTape<f32>,
@@ -535,7 +534,9 @@ impl CudaContext {
 
         Ok((value, gradient, pattern, hess_values))
     }
+}
 
+impl CudaContext {
     // ── f64 operations ──
 
     /// Batched forward evaluation (f64, CUDA only).
@@ -678,18 +679,17 @@ impl CudaContext {
         tape: &CudaTapeBuffersF64,
         tape_cpu: &mut crate::BytecodeTape<f64>,
         x: &[f64],
-    ) -> Result<(Vec<f64>, crate::sparse::SparsityPattern, Vec<f64>), GpuError> {
+    ) -> Result<(Vec<f64>, crate::sparse::JacobianSparsityPattern, Vec<f64>), GpuError> {
         let ni = tape.num_inputs as usize;
         let no = tape.num_outputs as usize;
 
-        let jac_pattern = crate::sparse::JacobianSparsityPattern::detect(tape_cpu);
-        let pattern = &jac_pattern.pattern;
-        let (colors, num_colors) = crate::sparse::column_coloring(pattern);
+        let pattern = tape_cpu.detect_jacobian_sparsity();
+        let (colors, num_colors) = crate::sparse::column_coloring(&pattern);
 
         if num_colors == 0 {
             tape_cpu.forward(x);
             let vals = tape_cpu.output_values();
-            return Ok((vals, pattern.clone(), vec![]));
+            return Ok((vals, pattern, vec![]));
         }
 
         let batch = num_colors as u32;
@@ -768,7 +768,7 @@ impl CudaContext {
             jac_values[k] = tangent_outs[c * no + row as usize];
         }
 
-        Ok((output_values, pattern.clone(), jac_values))
+        Ok((output_values, pattern, jac_values))
     }
 
     /// Sparse Hessian (f64, CUDA only).
