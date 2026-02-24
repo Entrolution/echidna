@@ -828,7 +828,7 @@ pub fn laplacian_hutchpp<F: Float>(
 /// For each random direction v with `E[vv^T] = I`:
 /// 1. Seed `Dual` inputs: `Dual(x_i, v_i)`
 /// 2. Forward pass: `tape.forward_tangent(&dual_inputs, &mut buf)`
-/// 3. Sample = Σ_i v_i * buf[out_indices[i]].eps = v^T J v
+/// 3. Sample = Σ_i v_i * buf\[out_indices\[i\]\].eps = v^T J v
 ///
 /// The mean of these samples converges to tr(J) = div(f).
 ///
