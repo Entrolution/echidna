@@ -3,6 +3,7 @@
 #![cfg(feature = "bytecode")]
 
 use approx::assert_relative_eq;
+use echidna::opcode::OpCode;
 use echidna::record;
 use num_traits::Float;
 
@@ -211,4 +212,137 @@ fn clarke_too_many_kinks_error() {
             assert_eq!(limit, 2);
         }
     }
+}
+
+// ══════════════════════════════════════════════
+//  Extended nonsmooth ops (5.5): Signum, Floor, Ceil, Round, Trunc
+// ══════════════════════════════════════════════
+
+#[test]
+fn forward_nonsmooth_detects_signum_kink() {
+    // f(x) = signum(x) at x ≈ 0 → kink detected, switching_value ≈ 0
+    let (mut tape, _) = record(|x| x[0].signum(), &[1e-12]);
+    let info = tape.forward_nonsmooth(&[1e-12]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].opcode, OpCode::Signum);
+    assert_relative_eq!(info.kinks[0].switching_value, 1e-12, max_relative = 1e-6);
+    assert_eq!(info.kinks[0].branch, 1); // x >= 0 → +1
+}
+
+#[test]
+fn forward_nonsmooth_detects_signum_away() {
+    // f(x) = signum(x) at x = 5 → kink detected but not active at small tol
+    let (mut tape, _) = record(|x| x[0].signum(), &[5.0]);
+    let info = tape.forward_nonsmooth(&[5.0]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].opcode, OpCode::Signum);
+    assert_relative_eq!(info.kinks[0].switching_value, 5.0);
+    // Not active at tol = 0.1
+    assert_eq!(info.active_kinks(0.1).len(), 0);
+}
+
+#[test]
+fn forward_nonsmooth_detects_floor_kink() {
+    // f(x) = floor(x) at x ≈ 2.0 → kink detected, switching_value ≈ 0
+    let (mut tape, _) = record(|x| x[0].floor(), &[2.0001]);
+    let info = tape.forward_nonsmooth(&[2.0001]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].opcode, OpCode::Floor);
+    // switching_value = 2.0001 - round(2.0001) = 2.0001 - 2.0 = 0.0001
+    assert_relative_eq!(info.kinks[0].switching_value, 0.0001, max_relative = 1e-6);
+    // Active at tol = 0.01
+    assert_eq!(info.active_kinks(0.01).len(), 1);
+}
+
+#[test]
+fn forward_nonsmooth_detects_floor_away() {
+    // f(x) = floor(x) at x = 2.7 → kink detected but not active
+    let (mut tape, _) = record(|x| x[0].floor(), &[2.7]);
+    let info = tape.forward_nonsmooth(&[2.7]);
+    assert_eq!(info.kinks.len(), 1);
+    // switching_value = 2.7 - round(2.7) = 2.7 - 3.0 = -0.3
+    assert_relative_eq!(info.kinks[0].switching_value, -0.3, max_relative = 1e-6);
+    // Not active at tol = 0.1
+    assert_eq!(info.active_kinks(0.1).len(), 0);
+}
+
+#[test]
+fn forward_nonsmooth_detects_ceil_kink() {
+    // f(x) = ceil(x) at x ≈ 3.0 → kink detected
+    let (mut tape, _) = record(|x| x[0].ceil(), &[2.9999]);
+    let info = tape.forward_nonsmooth(&[2.9999]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].opcode, OpCode::Ceil);
+    // switching_value = 2.9999 - round(2.9999) = 2.9999 - 3.0 = -0.0001
+    assert_relative_eq!(info.kinks[0].switching_value, -0.0001, max_relative = 1e-3);
+    assert_eq!(info.active_kinks(0.01).len(), 1);
+}
+
+#[test]
+fn forward_nonsmooth_detects_round_trunc() {
+    // round(x) and trunc(x) near integers → kinks detected
+    let (mut tape, _) = record(|x| x[0].round() + x[0].trunc(), &[4.001]);
+    let info = tape.forward_nonsmooth(&[4.001]);
+    assert_eq!(info.kinks.len(), 2);
+    assert_eq!(info.kinks[0].opcode, OpCode::Round);
+    assert_eq!(info.kinks[1].opcode, OpCode::Trunc);
+    // Both near integer → active
+    assert_eq!(info.active_kinks(0.01).len(), 2);
+}
+
+#[test]
+fn clarke_filters_trivial_kinks() {
+    // f(x) = |x| + signum(x) near x = 0
+    // Both abs and signum kinks are active, but Clarke should only enumerate
+    // the abs kink (2 Jacobians), not the signum kink (which would give 4).
+    let (mut tape, _) = record(|x| x[0].abs() + x[0].signum(), &[0.0]);
+
+    let (info, jacobians) = tape.clarke_jacobian(&[0.0], 1e-8, None).unwrap();
+    // info.kinks has both abs and signum entries
+    assert_eq!(info.kinks.len(), 2);
+    // But active kinks with nontrivial subdifferential → only abs
+    assert_eq!(jacobians.len(), 2); // 2^1 = 2 (only abs), not 2^2 = 4
+}
+
+#[test]
+fn forced_partials_step_functions_zero() {
+    // forced_reverse_partials for step functions always returns (0, 0)
+    use echidna::opcode::forced_reverse_partials;
+    let ops = [
+        OpCode::Signum,
+        OpCode::Floor,
+        OpCode::Ceil,
+        OpCode::Round,
+        OpCode::Trunc,
+    ];
+    for op in ops {
+        let (da, db) = forced_reverse_partials(op, 1.5_f64, 0.0, 1.0, 1);
+        assert_eq!(da, 0.0, "expected zero da for {:?} with sign +1", op);
+        assert_eq!(db, 0.0, "expected zero db for {:?} with sign +1", op);
+
+        let (da, db) = forced_reverse_partials(op, 1.5, 0.0, 1.0, -1);
+        assert_eq!(da, 0.0, "expected zero da for {:?} with sign -1", op);
+        assert_eq!(db, 0.0, "expected zero db for {:?} with sign -1", op);
+    }
+}
+
+#[test]
+fn signum_records_to_tape() {
+    // Signed::signum() on BReverse now records OpCode::Signum (not a constant).
+    // We verify by checking the tape contains a Signum opcode.
+    use num_traits::Signed;
+
+    let (tape, val) = record(
+        |x| {
+            // Call signum through the Signed trait (takes &self)
+            Signed::signum(&x[0])
+        },
+        &[3.0],
+    );
+    assert_eq!(val, 1.0);
+    assert!(
+        tape.opcodes_slice().contains(&OpCode::Signum),
+        "expected OpCode::Signum in tape, got: {:?}",
+        tape.opcodes_slice()
+    );
 }

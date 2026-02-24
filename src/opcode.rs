@@ -88,25 +88,54 @@ pub enum OpCode {
     Custom,
 }
 
-/// Returns true if this opcode is a nonsmooth operation (abs, min, max).
+/// Returns true if this opcode is a nonsmooth operation.
 ///
-/// These operations have kinks where the derivative is undefined. Signum is
-/// excluded — it has zero derivative on both sides, so there's no useful
-/// subdifferential information.
+/// Includes both operations with nontrivial subdifferentials (`Abs`, `Min`,
+/// `Max` — where the two sides of the kink have different derivatives) and
+/// step-function operations (`Signum`, `Floor`, `Ceil`, `Round`, `Trunc` —
+/// where both sides have zero derivative but the value is discontinuous).
+///
+/// All eight ops are tracked for kink proximity detection via
+/// [`NonsmoothInfo::active_kinks`](crate::nonsmooth::NonsmoothInfo::active_kinks).
+/// Use [`has_nontrivial_subdifferential`] to distinguish the subset that
+/// contributes distinct limiting Jacobians for Clarke enumeration.
 #[inline]
 pub fn is_nonsmooth(op: OpCode) -> bool {
+    matches!(
+        op,
+        OpCode::Abs
+            | OpCode::Min
+            | OpCode::Max
+            | OpCode::Signum
+            | OpCode::Floor
+            | OpCode::Ceil
+            | OpCode::Round
+            | OpCode::Trunc
+    )
+}
+
+/// Returns true if forced branch choices produce distinct partial derivatives.
+///
+/// For `Abs`, `Min`, `Max`, the two sides of the kink have different derivatives
+/// (e.g., `abs` has slope +1 vs −1). For step functions (`Signum`, `Floor`, `Ceil`,
+/// `Round`, `Trunc`), both sides have zero derivative — forced branches produce
+/// identical partials, so enumerating them in Clarke Jacobian adds cost with no
+/// information.
+#[inline]
+pub fn has_nontrivial_subdifferential(op: OpCode) -> bool {
     matches!(op, OpCode::Abs | OpCode::Min | OpCode::Max)
 }
 
 /// Compute reverse-mode partials with a forced branch choice for nonsmooth ops.
 ///
-/// For nonsmooth ops (`Abs`, `Min`, `Max`), uses the given `sign` to select
-/// which branch's derivative to return, regardless of the actual operand values.
-/// For all other ops, delegates to [`reverse_partials`].
+/// For nonsmooth ops, uses the given `sign` to select which branch's derivative
+/// to return, regardless of the actual operand values. For all other ops,
+/// delegates to [`reverse_partials`].
 ///
 /// - `Abs`: `sign >= 0` → `(+1, 0)`, `sign < 0` → `(-1, 0)`
 /// - `Max`: `sign >= 0` → `(1, 0)` (first arg wins), `sign < 0` → `(0, 1)`
 /// - `Min`: `sign >= 0` → `(1, 0)` (first arg wins), `sign < 0` → `(0, 1)`
+/// - `Signum`, `Floor`, `Ceil`, `Round`, `Trunc`: `(0, 0)` regardless of sign
 #[inline]
 pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8) -> (T, T) {
     let zero = T::zero();
@@ -125,6 +154,9 @@ pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8)
             } else {
                 (zero, one)
             }
+        }
+        OpCode::Signum | OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
+            (zero, zero)
         }
         _ => reverse_partials(op, a, b, r),
     }
