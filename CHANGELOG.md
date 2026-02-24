@@ -34,13 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `directional_derivatives` — batched second-order directional derivatives
 - `laplacian_with_stats` — Welford's online variance tracking
 - `laplacian_with_control` — diagonal control variate variance reduction
+- `Estimator` trait generalizing per-direction sample computation (`Laplacian`, `GradientSquaredNorm`)
+- `estimate` / `estimate_weighted` generic pipeline
+- Hutchinson divergence estimator for vector fields via `Dual<F>` forward mode
+- Hutch++ (Meyer et al. 2021) O(1/S²) trace estimator via sketch + residual decomposition
+- Importance-weighted estimation (West's 1979 algorithm)
 
 #### Cross-Country Elimination
 - `jacobian_cross_country` — Markowitz vertex elimination on linearized computational graph
 
+#### Custom Operations
+- `eval_dual` / `partials_dual` default methods on `CustomOp<F>` for correct second-order derivatives (HVP, Hessian) through custom ops
+
 #### Nonsmooth AD
-- `forward_nonsmooth` — branch tracking and kink detection for abs/min/max
+- `forward_nonsmooth` — branch tracking and kink detection for abs/min/max/signum/floor/ceil/round/trunc
 - `clarke_jacobian` — Clarke generalized Jacobian via limiting Jacobian enumeration
+- `has_nontrivial_subdifferential()` — two-tier classification: all 8 nonsmooth ops tracked for proximity detection; only abs/min/max enumerated in Clarke Jacobian
 - `KinkEntry`, `NonsmoothInfo`, `ClarkeError` types
 
 #### Laurent Series
@@ -55,10 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### GPU Acceleration
 - wgpu backend: batched forward, gradient, sparse Jacobian, HVP, sparse Hessian (f32, Metal/Vulkan/DX12)
 - CUDA backend: same operations with f32 + f64 support (NVRTC runtime compilation)
+- `GpuBackend` trait unifying wgpu and CUDA backends behind a common interface
 
 #### Composable Mode Nesting
 - Type-level AD composition: `Dual<BReverse<f64>>`, `Taylor<BReverse<f64>, K>`, `DualVec<BReverse<f64>, N>`
 - `composed_hvp` convenience function for forward-over-reverse HVP
+- `BReverse<Dual<f64>>` reverse-wrapping-forward composition via `BtapeThreadLocal` impls for `Dual<f32>` and `Dual<f64>`
 
 #### Serialization
 - `serde` support for `BytecodeTape`, `Laurent<F, K>`, `KinkEntry`, `NonsmoothInfo`, `ClarkeError`
@@ -80,13 +91,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Benchmarking
 - Criterion benchmarks for Taylor mode, STDE, cross-country, sparse derivatives, nonsmooth
-- Comparison benchmarks against num-dual
+- Comparison benchmarks against num-dual and ad-trait (forward + reverse gradient)
+- Correctness cross-check tests verifying ad-trait gradient agreement with echidna
 - CI regression detection via criterion-compare-action
 
 ### Changed
 
 - Tape optimization: algebraic simplification at recording time (identity, absorbing, powi patterns)
 - Tape optimization: targeted multi-output DCE (`dead_code_elimination_for_outputs`)
+- Thread-local Adept tape pooling — `grad()`/`vjp()` reuse cleared tapes via thread-local pool instead of per-call allocation
+- `Signed::signum()` for `BReverse<F>` now records `OpCode::Signum` to tape (was returning a constant)
 
 ## [0.1.0] - 2026-02-21
 

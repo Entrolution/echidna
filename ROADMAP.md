@@ -78,15 +78,20 @@ Added `eval_dual` and `partials_dual` default methods to `CustomOp<F>`, enabling
 
 ---
 
-## Phase 4: Architecture (deferred tech debt)
+## ~~Phase 4: Architecture~~ Complete
 
-Larger refactors with clear motivation but no urgency.
+All Phase 4 items are done: GpuBackend trait, reverse-wrapping-forward composition, and thread-local tape pooling.
+
+<details>
+<summary>Completed items</summary>
 
 | # | Item | Type | Effort | Notes |
 |---|------|------|--------|-------|
-| 4.1 | ~~**GpuBackend trait**~~ — Unify wgpu and CUDA backends behind a common trait. f32 methods moved to `GpuBackend` trait in `gpu/mod.rs`; CUDA f64 methods remain inherent. CUDA `sparse_jacobian` compilation bugs fixed. | feature | ~~large~~ medium | **Done** |
-| 4.2 | ~~**Reverse-wrapping-forward composition**~~ — `BReverse<Dual<f64>>` via `BtapeThreadLocal` impls for `Dual<f32>` and `Dual<f64>`. Enables reverse-over-forward HVP and column-by-column Hessian. | feature | ~~large~~ small | **Done** |
-| 4.3 | ~~**Thread-local Adept tape pooling**~~ — Replaced per-call `Tape` allocation in `grad()`/`vjp()` with thread-local pool. Cleared tapes retain Vec capacity across calls. Zero API changes. Arena approach was rejected (lifetime cascading). | tech-debt | ~~large~~ small | **Done** |
+| 4.1 | **GpuBackend trait** — Unify wgpu and CUDA backends behind a common trait. f32 methods moved to `GpuBackend` trait in `gpu/mod.rs`; CUDA f64 methods remain inherent. CUDA `sparse_jacobian` compilation bugs fixed. | feature | medium | Done |
+| 4.2 | **Reverse-wrapping-forward composition** — `BReverse<Dual<f64>>` via `BtapeThreadLocal` impls for `Dual<f32>` and `Dual<f64>`. Enables reverse-over-forward HVP and column-by-column Hessian. | feature | small | Done |
+| 4.3 | **Thread-local Adept tape pooling** — Replaced per-call `Tape` allocation in `grad()`/`vjp()` with thread-local pool. Cleared tapes retain Vec capacity across calls. Zero API changes. Arena approach was rejected (lifetime cascading). | tech-debt | small | Done |
+
+</details>
 
 ---
 
@@ -100,10 +105,10 @@ Require motivation from concrete use cases before committing.
 | 5.2 | **Constant deduplication at record time** — Identical literal constants get separate tape entries. Blocked on `FloatBits` trait orphan rule for `Dual<F>`. CSE already handles ops over duplicate constants, limiting the benefit. | tech-debt | medium | Architecturally blocked |
 | 5.3 | **Cross-checkpoint DCE** — Dead code elimination across checkpoint boundaries. Targeted multi-output DCE (R13) covers most cases; cross-checkpoint adds complexity for diminishing returns. | tech-debt | large | |
 | 5.4 | ~~**Advanced STDE variance reduction**~~ — Importance-weighted estimation (West's 1979 algorithm) and Hutch++ (Meyer et al. 2021) O(1/S²) trace estimator via sketch + residual decomposition. Antithetic and stratified sampling subsumed by existing diagonal control variate and Hutch++. | feature | medium | **Done** |
-| 5.5 | **Extended nonsmooth operators** — `sign(·)`, `floor`/`ceil` step functions, broader Clarke subdifferential enumeration. Current support covers `abs`, `min`, `max`, and user-defined piecewise functions. | feature | small-medium | Incremental |
-| 5.6 | **SIMD vectorization** — `wide` crate integration for batched elemental kernels. Requires benchmarking to justify complexity vs benefit. | feature | large | |
+| 5.5 | ~~**Extended nonsmooth operators**~~ — Added `signum`, `floor`, `ceil`, `round`, `trunc` to kink detection. Two-tier classification: all 8 ops tracked for proximity detection via `is_nonsmooth()`; only `abs`/`min`/`max` enumerated in Clarke Jacobian via `has_nontrivial_subdifferential()`. Fixed `Signed::signum()` for `BReverse` to record to tape. | feature | small-medium | **Done** |
+| 5.6 | **SIMD vectorization** — `wide` crate integration for batched elemental kernels. Evaluated and deferred: profiling shows the bottleneck is opcode dispatch, not FP throughput. SIMD would help batched forward sweeps but not the dispatch overhead. | feature | large | Deferred |
 | 5.7 | **no_std / embedded** — Explicitly a non-goal currently. Would require removing dynamic allocation and thread-local tape infrastructure. | feature | epic | Non-goal |
-| 5.8 | **ad-trait comparison benchmarks** — Expand comparison suite beyond num-dual. | quality | small | Low priority |
+| 5.8 | ~~**ad-trait comparison benchmarks**~~ — Added `ad_trait` (v0.2.2) forward-mode and reverse-mode gradient benchmarks alongside existing num-dual comparisons. Correctness cross-check tests verify agreement with echidna. | quality | small | **Done** |
 
 ---
 
@@ -124,4 +129,4 @@ Require motivation from concrete use cases before committing.
 0.2 (nalgebra 0.34)            ← MSRV bump decision
 ```
 
-Phase 3 is complete. All remaining items are independent and can be worked in any order within their phase.
+Phases 1–4 are complete. Phase 5 items 5.1, 5.4, 5.5, and 5.8 are done. Remaining items (5.2 blocked, 5.3 deferred, 5.6 deferred, 5.7 non-goal) are independent and require no specific ordering.

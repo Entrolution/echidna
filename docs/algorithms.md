@@ -291,26 +291,42 @@ matrix for Laplacian smoothing splines".
 
 Standard AD assumes that all elemental operations are smooth (continuously
 differentiable). In practice, many functions contain piecewise-linear
-operations — `abs`, `min`, `max` — that introduce kinks where the classical
-derivative does not exist. echidna's nonsmooth AD module detects these kinks
-during forward evaluation and provides access to the Clarke generalized
-derivative, which is the appropriate generalized derivative concept for
-Lipschitz-continuous functions.
+operations — `abs`, `min`, `max` — and step functions — `signum`, `floor`,
+`ceil`, `round`, `trunc` — that introduce kinks or discontinuities where the
+classical derivative does not exist. echidna's nonsmooth AD module detects
+these kinks during forward evaluation and provides access to the Clarke
+generalized derivative, which is the appropriate generalized derivative concept
+for Lipschitz-continuous functions.
 
 `BytecodeTape::forward_nonsmooth` performs a standard forward evaluation while
-recording a `KinkEntry` for each abs/min/max operation whose input is near
-zero (within a user-configurable tolerance). Each entry stores the tape index,
-opcode, switching value, and the branch that was taken. The resulting
-`NonsmoothInfo` provides `active_kinks(tol)` to query kinks within a given
-tolerance, `is_smooth(tol)` to check whether the evaluation point lies in a
-smooth region, and `signature()` to characterize the combinatorial branch
-structure. When kinks are present, `BytecodeTape::clarke_jacobian` enumerates
-all `2^k` sign combinations for `k` active kinks, computing a limiting
-Jacobian for each combination by forcing the sign choices in the nonsmooth
-operations and running a standard reverse sweep. The convex hull of these
-limiting Jacobians is the Clarke generalized Jacobian. A configurable kink
-limit (default 20) prevents combinatorial explosion by returning
-`ClarkeError::TooManyKinks` when exceeded.
+recording a `KinkEntry` for each of the 8 nonsmooth operations. Each entry
+stores the tape index, opcode, switching value, and the branch that was taken.
+For `abs`/`min`/`max`/`signum`, the switching value is the operand value
+(kink at zero). For `floor`/`ceil`/`round`/`trunc`, the switching value is
+the distance to the nearest integer (`a - a.round()`), which is zero exactly
+at discontinuity points. The resulting `NonsmoothInfo` provides
+`active_kinks(tol)` to query kinks within a given tolerance,
+`is_smooth(tol)` to check whether the evaluation point lies in a smooth
+region, and `signature()` to characterize the combinatorial branch structure.
+
+echidna uses a two-tier classification for nonsmooth operations.
+`is_nonsmooth()` returns true for all 8 ops and is used for proximity
+detection — knowing whether the evaluation point is near any kink.
+`has_nontrivial_subdifferential()` returns true only for `abs`/`min`/`max`,
+where forced branch choices produce distinct partial derivatives (e.g.,
+`abs` has slope +1 vs -1). Step functions (`signum`/`floor`/`ceil`/`round`/
+`trunc`) have zero derivative on both sides of the kink, so enumerating
+forced branches would add 2^k cost with no new information.
+
+When kinks with nontrivial subdifferentials are present,
+`BytecodeTape::clarke_jacobian` enumerates all `2^k` sign combinations for
+`k` active nontrivial kinks, computing a limiting Jacobian for each
+combination by forcing the sign choices in the nonsmooth operations and
+running a standard reverse sweep. Step-function kinks are filtered before
+enumeration. The convex hull of these limiting Jacobians is the Clarke
+generalized Jacobian. A configurable kink limit (default 20) prevents
+combinatorial explosion by returning `ClarkeError::TooManyKinks` when
+exceeded.
 
 **References:** Griewank & Walther, *Evaluating Derivatives*, Chapter 14;
 Clarke, F.H. (1983), *Optimization and Nonsmooth Analysis*.
@@ -445,9 +461,9 @@ The convenience function `composed_hvp` provides a one-shot interface for
 forward-over-reverse HVP without requiring the user to manually set up nested
 types and tapes. Internally, it constructs `Dual<BReverse<f64>>` inputs,
 evaluates the function, and extracts the HVP from the adjoint dual components.
-One important limitation: reverse-wrapping-forward (e.g., `BReverse<Dual<f64>>`)
-is not supported, because it would require allocating separate thread-local
-tapes for each composed type.
+Reverse-wrapping-forward (`BReverse<Dual<f64>>`) is also supported via
+`BtapeThreadLocal` implementations for `Dual<f32>` and `Dual<f64>`, enabling
+reverse-over-forward HVP and column-by-column Hessian computation.
 
 **References:** Griewank & Walther, *Evaluating Derivatives*, Chapter 8
 (higher-order techniques via mode composition).
