@@ -70,6 +70,18 @@ impl<F: Float> Tape<F> {
         tape
     }
 
+    /// Clear all recorded operations, retaining allocated capacity for reuse.
+    pub fn clear(&mut self) {
+        self.statements.clear();
+        self.multipliers.clear();
+        self.indices.clear();
+        self.num_variables = 0;
+        self.statements.push(Statement {
+            lhs_index: 0,
+            end_plus_one: 0,
+        });
+    }
+
     /// Register a new independent variable. Returns `(gradient_index, value)`.
     ///
     /// No statement is pushed for input variables — they are leaf nodes
@@ -173,20 +185,52 @@ thread_local! {
     static TAPE_F64: Cell<*mut Tape<f64>> = const { Cell::new(std::ptr::null_mut()) };
 }
 
+// Thread-local tape pool (one tape per type per thread).
+thread_local! {
+    static POOL_F32: Cell<Option<Tape<f32>>> = const { Cell::new(None) };
+    static POOL_F64: Cell<Option<Tape<f64>>> = const { Cell::new(None) };
+}
+
 /// Trait to select the correct thread-local for a given float type.
 pub trait TapeThreadLocal: Float {
     fn cell() -> &'static std::thread::LocalKey<Cell<*mut Tape<Self>>>;
+    fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>>;
 }
 
 impl TapeThreadLocal for f32 {
     fn cell() -> &'static std::thread::LocalKey<Cell<*mut Tape<Self>>> {
         &TAPE_F32
     }
+    fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>> {
+        &POOL_F32
+    }
 }
 
 impl TapeThreadLocal for f64 {
     fn cell() -> &'static std::thread::LocalKey<Cell<*mut Tape<Self>>> {
         &TAPE_F64
+    }
+    fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>> {
+        &POOL_F64
+    }
+}
+
+impl<F: TapeThreadLocal> Tape<F> {
+    /// Take a tape from the thread-local pool, clearing it for reuse.
+    /// Falls back to creating a new tape if the pool is empty.
+    pub(crate) fn take_pooled(capacity: usize) -> Self {
+        F::pool_cell().with(|cell| match cell.take() {
+            Some(mut tape) => {
+                tape.clear();
+                tape
+            }
+            None => Tape::with_capacity(capacity),
+        })
+    }
+
+    /// Return a tape to the thread-local pool for future reuse.
+    pub(crate) fn return_to_pool(self) {
+        F::pool_cell().with(|cell| cell.set(Some(self)));
     }
 }
 
