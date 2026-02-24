@@ -3,6 +3,10 @@ use echidna::{grad, record};
 use nalgebra::DVector;
 use num_dual::DualNum;
 
+use ad_trait::differentiable_function::{DifferentiableFunctionTrait, ForwardAD, ReverseAD};
+use ad_trait::function_engine::FunctionEngine;
+use ad_trait::AD;
+
 #[path = "common/mod.rs"]
 mod common;
 use common::*;
@@ -28,6 +32,43 @@ fn two_output_nd<D: DualNum<f64> + Clone>(x: &[D]) -> [D; 2] {
         s2 = s2 + x[i].clone().sin();
     }
     [s1, s2]
+}
+
+// ─── ad-trait implementations ─────────────────────────────────────────────
+// ad-trait requires implementing DifferentiableFunctionTrait for a struct,
+// generic over AD types.
+
+fn rosenbrock_ad<T: AD>(x: &[T]) -> T {
+    let one = T::constant(1.0);
+    let hundred = T::constant(100.0);
+    let mut sum = T::constant(0.0);
+    for i in 0..x.len() - 1 {
+        let t1 = one - x[i];
+        let t2 = x[i + 1] - x[i] * x[i];
+        sum = sum + t1 * t1 + hundred * t2 * t2;
+    }
+    sum
+}
+
+#[derive(Clone)]
+struct RosenbrockAD {
+    n: usize,
+}
+
+impl<T: AD> DifferentiableFunctionTrait<T> for RosenbrockAD {
+    const NAME: &'static str = "Rosenbrock";
+
+    fn call(&self, inputs: &[T], _freeze: bool) -> Vec<T> {
+        vec![rosenbrock_ad(inputs)]
+    }
+
+    fn num_inputs(&self) -> usize {
+        self.n
+    }
+
+    fn num_outputs(&self) -> usize {
+        1
+    }
 }
 
 // ─── echidna 2-output function ─────────────────────────────────────────────
@@ -72,6 +113,21 @@ fn bench_gradient_comparison(c: &mut Criterion) {
                 );
                 black_box((f, g))
             })
+        });
+
+        // ad-trait forward-mode gradient (column-by-column via ForwardAD)
+        let rosen_std = RosenbrockAD { n };
+        let rosen_fwd = rosen_std.clone();
+        let engine_fwd = FunctionEngine::new(rosen_std.clone(), rosen_fwd, ForwardAD::new());
+        group.bench_with_input(BenchmarkId::new("ad_trait_fwd", n), &x, |b, x| {
+            b.iter(|| black_box(engine_fwd.derivative(black_box(x))))
+        });
+
+        // ad-trait reverse-mode gradient
+        let rosen_rev = rosen_std.clone();
+        let engine_rev = FunctionEngine::new(rosen_std, rosen_rev, ReverseAD::new());
+        group.bench_with_input(BenchmarkId::new("ad_trait_rev", n), &x, |b, x| {
+            b.iter(|| black_box(engine_rev.derivative(black_box(x))))
         });
     }
     group.finish();
