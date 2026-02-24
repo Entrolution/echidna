@@ -1,9 +1,19 @@
 //! Nonsmooth extensions: branch tracking, kink detection, and Clarke subdifferential.
 //!
 //! Implements Griewank & Walther, Chapter 14. Provides data structures for
-//! tracking which branch of `abs`, `min`, `max` was taken during forward
+//! tracking which branch of nonsmooth operations was taken during forward
 //! evaluation, and for computing the Clarke generalized Jacobian via
 //! enumeration of limiting Jacobians with forced branch choices.
+//!
+//! Eight nonsmooth operations are tracked:
+//! - **`Abs`, `Min`, `Max`** — kinks with nontrivial subdifferentials (the two
+//!   sides of the kink have different derivatives). These contribute distinct
+//!   limiting Jacobians in Clarke enumeration.
+//! - **`Signum`, `Floor`, `Ceil`, `Round`, `Trunc`** — step-function
+//!   discontinuities where both sides have zero derivative. These are tracked
+//!   for proximity detection (via [`NonsmoothInfo::active_kinks`]) but are
+//!   filtered out of Clarke enumeration since their forced branches produce
+//!   identical partials.
 
 use std::fmt;
 
@@ -20,16 +30,18 @@ use crate::opcode::OpCode;
 pub struct KinkEntry<F: Float> {
     /// Index into the tape's opcode/value arrays.
     pub tape_index: u32,
-    /// The nonsmooth opcode (Abs, Min, or Max).
+    /// The nonsmooth opcode.
     pub opcode: OpCode,
     /// Distance from the kink point:
-    /// - Abs: `x` (kink at `x = 0`)
-    /// - Min/Max: `a - b` (kink at `a = b`)
+    /// - `Abs`, `Signum`: `x` (kink at `x = 0`)
+    /// - `Min`, `Max`: `a - b` (kink at `a = b`)
+    /// - `Floor`, `Ceil`, `Round`, `Trunc`: `x - round(x)` (kink at integers)
     pub switching_value: F,
     /// Which branch was taken:
-    /// - Abs: `+1` if `x >= 0`, `-1` if `x < 0`
-    /// - Max: `+1` if `a >= b` (first wins), `-1` if `b > a`
-    /// - Min: `+1` if `a <= b` (first wins), `-1` if `b < a`
+    /// - `Abs`, `Signum`: `+1` if `x >= 0`, `-1` if `x < 0`
+    /// - `Max`: `+1` if `a >= b` (first wins), `-1` if `b > a`
+    /// - `Min`: `+1` if `a <= b` (first wins), `-1` if `b < a`
+    /// - `Floor`, `Ceil`, `Round`, `Trunc`: `+1` if `fract(x) < 0.5`, `-1` otherwise
     pub branch: i8,
 }
 

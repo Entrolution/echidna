@@ -105,10 +105,61 @@ fn bench_stde_jet(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_stde_hutchpp(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stde_hutchpp");
+    let k = 10; // sketch directions
+    let s = 20; // stochastic directions
+
+    for n in [10, 50, 100] {
+        let x = make_input(n);
+        let (tape, _) = record(|v| rosenbrock(v), &x);
+
+        let sketch = make_rademacher_directions(n, k);
+        let stoch = make_rademacher_directions(n, s);
+        let sketch_refs: Vec<&[f64]> = sketch.iter().map(|d| d.as_slice()).collect();
+        let stoch_refs: Vec<&[f64]> = stoch.iter().map(|d| d.as_slice()).collect();
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("hutchpp_k{}_S{}", k, s), n),
+            &x,
+            |b, x| {
+                b.iter(|| {
+                    black_box(echidna::stde::laplacian_hutchpp(
+                        &tape,
+                        black_box(x),
+                        black_box(&sketch_refs),
+                        black_box(&stoch_refs),
+                    ))
+                })
+            },
+        );
+
+        // Standard Hutchinson with same total budget (k + s directions)
+        let total_dirs = make_rademacher_directions(n, k + s);
+        let total_refs: Vec<&[f64]> = total_dirs.iter().map(|d| d.as_slice()).collect();
+
+        group.bench_with_input(
+            BenchmarkId::new(format!("hutchinson_S{}", k + s), n),
+            &x,
+            |b, x| {
+                b.iter(|| {
+                    black_box(echidna::stde::laplacian_with_stats(
+                        &tape,
+                        black_box(x),
+                        black_box(&total_refs),
+                    ))
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_stde_laplacian,
     bench_stde_hessian_diag,
-    bench_stde_jet
+    bench_stde_jet,
+    bench_stde_hutchpp
 );
 criterion_main!(benches);

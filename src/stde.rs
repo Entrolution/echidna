@@ -47,6 +47,7 @@
 //!   API conventions (`record`, `grad`, `hvp`).
 
 use crate::bytecode_tape::BytecodeTape;
+use crate::dual::Dual;
 use crate::taylor::Taylor;
 use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
 use crate::Float;
@@ -73,6 +74,197 @@ pub struct EstimatorResult<F> {
     pub standard_error: F,
     /// Number of direction samples used.
     pub num_samples: usize,
+}
+
+// ══════════════════════════════════════════════
+//  Estimator trait + built-in estimators
+// ══════════════════════════════════════════════
+
+/// Trait for stochastic estimators that combine Taylor jet coefficients into
+/// a per-direction sample.
+///
+/// Given the Taylor coefficients `(c0, c1, c2)` from propagating a random
+/// direction through a tape, an `Estimator` produces a scalar sample whose
+/// expectation (over random directions with `E[vv^T] = I`) equals the
+/// desired quantity.
+pub trait Estimator<F: Float> {
+    /// Compute one sample from the Taylor jet coefficients.
+    ///
+    /// - `c0` = f(x)
+    /// - `c1` = ∇f(x)·v  (directional first derivative)
+    /// - `c2` = v^T H v / 2  (half directional second derivative)
+    fn sample(&self, c0: F, c1: F, c2: F) -> F;
+}
+
+/// Hutchinson trace estimator: estimates tr(H) = Laplacian.
+///
+/// Each sample is `2 * c2 = v^T H v`. Since `E[v^T H v] = tr(H)` when
+/// `E[vv^T] = I`, the mean of these samples converges to the Laplacian.
+pub struct Laplacian;
+
+impl<F: Float> Estimator<F> for Laplacian {
+    #[inline]
+    fn sample(&self, _c0: F, _c1: F, c2: F) -> F {
+        F::from(2.0).unwrap() * c2
+    }
+}
+
+/// Estimates `||∇f||²` (squared gradient norm).
+///
+/// Each sample is `c1² = (∇f·v)²`. Since `E[(∇f·v)²] = ∇f^T E[vv^T] ∇f = ||∇f||²`
+/// when `E[vv^T] = I`, the mean converges to the squared gradient norm.
+///
+/// Useful for score matching loss functions where `||∇ log p||²` appears.
+pub struct GradientSquaredNorm;
+
+impl<F: Float> Estimator<F> for GradientSquaredNorm {
+    #[inline]
+    fn sample(&self, _c0: F, c1: F, _c2: F) -> F {
+        c1 * c1
+    }
+}
+
+// ══════════════════════════════════════════════
+//  Generic estimation pipeline
+// ══════════════════════════════════════════════
+
+/// Result of a divergence estimation.
+///
+/// Separate from [`EstimatorResult`] because the function output is a vector
+/// (`values: Vec<F>`) rather than a scalar (`value: F`).
+#[derive(Clone, Debug)]
+pub struct DivergenceResult<F> {
+    /// Function output vector f(x).
+    pub values: Vec<F>,
+    /// Estimated divergence (trace of the Jacobian).
+    pub estimate: F,
+    /// Sample variance of per-direction estimates.
+    pub sample_variance: F,
+    /// Standard error of the mean.
+    pub standard_error: F,
+    /// Number of direction samples used.
+    pub num_samples: usize,
+}
+
+/// Estimate a quantity using the given [`Estimator`] and Welford's online algorithm.
+///
+/// Evaluates the tape at `x` for each direction, computes the estimator's sample
+/// from the Taylor jet, and aggregates with running mean and variance.
+///
+/// # Panics
+///
+/// Panics if `directions` is empty or any direction's length does not match
+/// `tape.num_inputs()`.
+pub fn estimate<F: Float>(
+    estimator: &impl Estimator<F>,
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    directions: &[&[F]],
+) -> EstimatorResult<F> {
+    assert!(!directions.is_empty(), "directions must not be empty");
+
+    let mut buf = Vec::new();
+    let mut value = F::zero();
+
+    // Welford's online algorithm
+    let mut mean = F::zero();
+    let mut m2 = F::zero();
+
+    for (k, v) in directions.iter().enumerate() {
+        let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
+        value = c0;
+        let s = estimator.sample(c0, c1, c2);
+
+        let k1 = F::from(k + 1).unwrap();
+        let delta = s - mean;
+        mean = mean + delta / k1;
+        let delta2 = s - mean;
+        m2 = m2 + delta * delta2;
+    }
+
+    let n = directions.len();
+    let nf = F::from(n).unwrap();
+    let (sample_variance, standard_error) = if n > 1 {
+        let var = m2 / (nf - F::one());
+        (var, (var / nf).sqrt())
+    } else {
+        (F::zero(), F::zero())
+    };
+
+    EstimatorResult {
+        value,
+        estimate: mean,
+        sample_variance,
+        standard_error,
+        num_samples: n,
+    }
+}
+
+/// Estimate a quantity using importance-weighted samples (West's 1979 algorithm).
+///
+/// Each direction `directions[s]` has an associated weight `weights[s]`.
+/// The weighted mean is `Σ(w_s * sample_s) / Σ(w_s)` and the variance uses
+/// the reliability-weight Bessel correction: `M2 / (W - W2/W)` where
+/// `W = Σw_s` and `W2 = Σw_s²`.
+///
+/// # Panics
+///
+/// Panics if `directions` is empty, `weights.len() != directions.len()`,
+/// or any direction's length does not match `tape.num_inputs()`.
+pub fn estimate_weighted<F: Float>(
+    estimator: &impl Estimator<F>,
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    directions: &[&[F]],
+    weights: &[F],
+) -> EstimatorResult<F> {
+    assert!(!directions.is_empty(), "directions must not be empty");
+    assert_eq!(
+        weights.len(),
+        directions.len(),
+        "weights.len() must match directions.len()"
+    );
+
+    let mut buf = Vec::new();
+    let mut value = F::zero();
+
+    // West's (1979) weighted online algorithm
+    let mut w_sum = F::zero();
+    let mut w_sum2 = F::zero();
+    let mut mean = F::zero();
+    let mut m2 = F::zero();
+
+    for (k, v) in directions.iter().enumerate() {
+        let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
+        value = c0;
+        let s = estimator.sample(c0, c1, c2);
+        let w = weights[k];
+
+        w_sum = w_sum + w;
+        w_sum2 = w_sum2 + w * w;
+        let delta = s - mean;
+        mean = mean + (w / w_sum) * delta;
+        let delta2 = s - mean;
+        m2 = m2 + w * delta * delta2;
+    }
+
+    let n = directions.len();
+    let denom = w_sum - w_sum2 / w_sum;
+    let (sample_variance, standard_error) = if n > 1 && denom > F::zero() {
+        let var = m2 / denom;
+        let nf = F::from(n).unwrap();
+        (var, (var / nf).sqrt())
+    } else {
+        (F::zero(), F::zero())
+    };
+
+    EstimatorResult {
+        value,
+        estimate: mean,
+        sample_variance,
+        standard_error,
+        num_samples: n,
+    }
 }
 
 // ══════════════════════════════════════════════
@@ -212,44 +404,7 @@ pub fn laplacian_with_stats<F: Float>(
     x: &[F],
     directions: &[&[F]],
 ) -> EstimatorResult<F> {
-    assert!(!directions.is_empty(), "directions must not be empty");
-
-    let two = F::from(2.0).unwrap();
-    let mut buf = Vec::new();
-    let mut value = F::zero();
-
-    // Welford's online algorithm
-    let mut mean = F::zero();
-    let mut m2 = F::zero();
-
-    for (k, v) in directions.iter().enumerate() {
-        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
-        value = c0;
-        let sample = two * c2;
-
-        let k1 = F::from(k + 1).unwrap();
-        let delta = sample - mean;
-        mean = mean + delta / k1;
-        let delta2 = sample - mean;
-        m2 = m2 + delta * delta2;
-    }
-
-    let s = directions.len();
-    let sf = F::from(s).unwrap();
-    let (sample_variance, standard_error) = if s > 1 {
-        let var = m2 / (sf - F::one());
-        (var, (var / sf).sqrt())
-    } else {
-        (F::zero(), F::zero())
-    };
-
-    EstimatorResult {
-        value,
-        estimate: mean,
-        sample_variance,
-        standard_error,
-        num_samples: s,
-    }
+    estimate(&Laplacian, tape, x, directions)
 }
 
 /// Estimate the Laplacian with a diagonal control variate.
@@ -471,4 +626,286 @@ pub fn laplacian_dyn<F: Float + TaylorArenaLocal>(
     }
 
     (value, sum / s)
+}
+
+// ══════════════════════════════════════════════
+//  Hutch++ trace estimator
+// ══════════════════════════════════════════════
+
+/// Modified Gram-Schmidt orthonormalisation, in-place.
+///
+/// Orthonormalises the columns of the matrix represented as `columns: &mut Vec<Vec<F>>`.
+/// Drops near-zero columns (norm < epsilon). Returns the rank (number of retained columns).
+fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usize {
+    let mut rank = 0;
+    let mut i = 0;
+    while i < columns.len() {
+        // Orthogonalise against all previously accepted columns
+        for j in 0..rank {
+            // Split to satisfy the borrow checker: j < rank <= i
+            let (left, right) = columns.split_at_mut(i);
+            let qj = &left[j];
+            let ci = &mut right[0];
+            let dot: F = qj
+                .iter()
+                .zip(ci.iter())
+                .fold(F::zero(), |acc, (&a, &b)| acc + a * b);
+            for (c, &q) in ci.iter_mut().zip(qj.iter()) {
+                *c = *c - dot * q;
+            }
+        }
+
+        // Compute norm
+        let norm_sq: F = columns[i].iter().fold(F::zero(), |acc, &v| acc + v * v);
+        let norm = norm_sq.sqrt();
+
+        if norm < epsilon {
+            // Drop this column (near-zero after projection)
+            columns.swap_remove(i);
+            // Don't increment i — swapped element needs processing
+        } else {
+            // Normalise
+            let inv_norm = F::one() / norm;
+            for v in columns[i].iter_mut() {
+                *v = *v * inv_norm;
+            }
+            // Move to rank position
+            if i != rank {
+                columns.swap(i, rank);
+            }
+            rank += 1;
+            i += 1;
+        }
+    }
+    columns.truncate(rank);
+    rank
+}
+
+/// Hutch++ trace estimator (Meyer et al. 2021) for the Laplacian.
+///
+/// Achieves O(1/S²) convergence for matrices with decaying eigenvalues by
+/// splitting the work into:
+///
+/// 1. **Sketch phase**: k HVPs (via `tape.hvp_with_buf`) produce columns of H·S,
+///    which are orthonormalised via Modified Gram-Schmidt to give a basis Q.
+/// 2. **Exact subspace trace**: For each q_i in Q, `taylor_jet_2nd` gives
+///    q_i^T H q_i. Sum = tr(Q^T H Q) — this part has zero variance.
+/// 3. **Residual Hutchinson**: For each stochastic direction g_s, project out Q
+///    (g' = g - Q(Q^T g)) and estimate the residual trace via `taylor_jet_2nd`.
+/// 4. **Total** = exact_trace + residual_mean.
+///
+/// The variance and standard error in the result refer to the residual only.
+///
+/// # Arguments
+///
+/// - `sketch_directions`: k directions for the sketch phase. Typically Rademacher
+///   or Gaussian. More directions capture more of the spectrum exactly.
+/// - `stochastic_directions`: S directions for residual estimation. Rademacher recommended.
+///
+/// # Cost
+///
+/// k HVPs (≈2k forward passes) + k Taylor jets (exact subspace) + S Taylor jets
+/// (residual) + O(k²·n) for Gram-Schmidt.
+///
+/// # Panics
+///
+/// Panics if `sketch_directions` or `stochastic_directions` is empty, or if any
+/// direction's length does not match `tape.num_inputs()`.
+pub fn laplacian_hutchpp<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    sketch_directions: &[&[F]],
+    stochastic_directions: &[&[F]],
+) -> EstimatorResult<F> {
+    assert!(
+        !sketch_directions.is_empty(),
+        "sketch_directions must not be empty"
+    );
+    assert!(
+        !stochastic_directions.is_empty(),
+        "stochastic_directions must not be empty"
+    );
+
+    let n = tape.num_inputs();
+    let two = F::from(2.0).unwrap();
+    let eps = F::from(1e-12).unwrap();
+
+    // ── Step 1: Sketch — k HVPs to get columns of H·S ──
+    let mut dual_vals_buf = Vec::new();
+    let mut adjoint_buf = Vec::new();
+    let mut hs_columns: Vec<Vec<F>> = Vec::with_capacity(sketch_directions.len());
+
+    for s in sketch_directions {
+        assert_eq!(
+            s.len(),
+            n,
+            "sketch direction length must match tape.num_inputs()"
+        );
+        let (_grad, hvp) = tape.hvp_with_buf(x, s, &mut dual_vals_buf, &mut adjoint_buf);
+        hs_columns.push(hvp);
+    }
+
+    // ── Step 2: QR via Modified Gram-Schmidt ──
+    let rank = modified_gram_schmidt(&mut hs_columns, eps);
+    let q = &hs_columns; // q[0..rank] are orthonormal basis vectors
+
+    // ── Step 3: Exact subspace trace ──
+    let mut taylor_buf = Vec::new();
+    let mut value = F::zero();
+    let mut exact_trace = F::zero();
+
+    for qi in q.iter().take(rank) {
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, qi, &mut taylor_buf);
+        value = c0;
+        exact_trace = exact_trace + two * c2; // q_i^T H q_i
+    }
+
+    // ── Step 4: Residual Hutchinson ──
+    // For each stochastic direction g, project out Q: g' = g - Q(Q^T g)
+    let mut mean = F::zero();
+    let mut m2 = F::zero();
+    let mut projected = vec![F::zero(); n];
+
+    for (k, g) in stochastic_directions.iter().enumerate() {
+        assert_eq!(
+            g.len(),
+            n,
+            "stochastic direction length must match tape.num_inputs()"
+        );
+
+        // g' = g - Q(Q^T g)
+        projected.copy_from_slice(g);
+        for qi in q.iter().take(rank) {
+            let dot: F = qi
+                .iter()
+                .zip(g.iter())
+                .fold(F::zero(), |acc, (&a, &b)| acc + a * b);
+            for (p, &qv) in projected.iter_mut().zip(qi.iter()) {
+                *p = *p - dot * qv;
+            }
+        }
+
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, &projected, &mut taylor_buf);
+        value = c0;
+        let sample = two * c2;
+
+        // Welford
+        let k1 = F::from(k + 1).unwrap();
+        let delta = sample - mean;
+        mean = mean + delta / k1;
+        let delta2 = sample - mean;
+        m2 = m2 + delta * delta2;
+    }
+
+    let s = stochastic_directions.len();
+    let sf = F::from(s).unwrap();
+    let (sample_variance, standard_error) = if s > 1 {
+        let var = m2 / (sf - F::one());
+        (var, (var / sf).sqrt())
+    } else {
+        (F::zero(), F::zero())
+    };
+
+    EstimatorResult {
+        value,
+        estimate: exact_trace + mean,
+        sample_variance,
+        standard_error,
+        num_samples: s,
+    }
+}
+
+// ══════════════════════════════════════════════
+//  Divergence estimator
+// ══════════════════════════════════════════════
+
+/// Estimate the divergence (trace of Jacobian) of a vector field f: R^n → R^n.
+///
+/// Uses Hutchinson's trace estimator with first-order forward-mode AD (`Dual<F>`).
+/// The tape must be recorded via [`record_multi`](crate::record_multi) with
+/// `num_inputs == num_outputs`.
+///
+/// For each random direction v with `E[vv^T] = I`:
+/// 1. Seed `Dual` inputs: `Dual(x_i, v_i)`
+/// 2. Forward pass: `tape.forward_tangent(&dual_inputs, &mut buf)`
+/// 3. Sample = Σ_i v_i * buf\[out_indices\[i\]\].eps = v^T J v
+///
+/// The mean of these samples converges to tr(J) = div(f).
+///
+/// # Panics
+///
+/// Panics if `directions` is empty, if `tape.num_outputs() != tape.num_inputs()`,
+/// or if any direction's length does not match `tape.num_inputs()`.
+pub fn divergence<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    directions: &[&[F]],
+) -> DivergenceResult<F> {
+    assert!(!directions.is_empty(), "directions must not be empty");
+    let n = tape.num_inputs();
+    let m = tape.num_outputs();
+    assert_eq!(
+        m, n,
+        "divergence requires num_outputs ({}) == num_inputs ({})",
+        m, n
+    );
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let out_indices = tape.all_output_indices();
+    let mut buf: Vec<Dual<F>> = Vec::new();
+    let mut values = vec![F::zero(); m];
+
+    // Welford's online algorithm
+    let mut mean = F::zero();
+    let mut m2_acc = F::zero();
+
+    for (k, v) in directions.iter().enumerate() {
+        assert_eq!(v.len(), n, "direction length must match tape.num_inputs()");
+
+        // Build Dual inputs
+        let dual_inputs: Vec<Dual<F>> = x
+            .iter()
+            .zip(v.iter())
+            .map(|(&xi, &vi)| Dual::new(xi, vi))
+            .collect();
+
+        tape.forward_tangent(&dual_inputs, &mut buf);
+
+        // Extract function values (from first direction only is fine — all give same primal)
+        if k == 0 {
+            for (i, &oi) in out_indices.iter().enumerate() {
+                values[i] = buf[oi as usize].re;
+            }
+        }
+
+        // sample = v^T J v = Σ_i v_i * (J v)_i
+        let sample: F = v
+            .iter()
+            .zip(out_indices.iter())
+            .fold(F::zero(), |acc, (&vi, &oi)| acc + vi * buf[oi as usize].eps);
+
+        // Welford
+        let k1 = F::from(k + 1).unwrap();
+        let delta = sample - mean;
+        mean = mean + delta / k1;
+        let delta2 = sample - mean;
+        m2_acc = m2_acc + delta * delta2;
+    }
+
+    let s = directions.len();
+    let sf = F::from(s).unwrap();
+    let (sample_variance, standard_error) = if s > 1 {
+        let var = m2_acc / (sf - F::one());
+        (var, (var / sf).sqrt())
+    } else {
+        (F::zero(), F::zero())
+    };
+
+    DivergenceResult {
+        values,
+        estimate: mean,
+        sample_variance,
+        standard_error,
+        num_samples: s,
+    }
 }

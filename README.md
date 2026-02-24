@@ -14,11 +14,11 @@ A high-performance automatic differentiation library for Rust.
 - **Taylor-mode higher-order derivatives** -- const-generic and arena-based dynamic implementations
 - **Sparse Jacobian/Hessian** -- automatic sparsity detection and graph coloring
 - **GPU acceleration** -- wgpu (Metal/Vulkan/DX12) and CUDA batch evaluation
-- **Nonsmooth AD** -- branch tracking, kink detection, Clarke generalized Jacobians
+- **Nonsmooth AD** -- branch tracking, kink detection for abs/min/max/signum/floor/ceil/round/trunc, Clarke generalized Jacobians
 - **Gradient checkpointing** -- binomial, online, disk-backed, and hint-guided strategies
 - **Cross-country elimination** -- Markowitz vertex elimination for optimal Jacobian accumulation
 - **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, variance reduction
-- **Composable type nesting** -- `Dual<BReverse<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for arbitrary-order differentiation
+- **Composable type nesting** -- `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for arbitrary-order differentiation
 
 ## Feature Overview
 
@@ -32,10 +32,10 @@ A high-performance automatic differentiation library for Rust.
 | Cross-country elimination | Markowitz vertex elimination for optimal Jacobian accumulation |
 | Checkpointing | Binomial, online, disk-backed, and hint-guided gradient checkpointing |
 | STDE | Stochastic Taylor Derivative Estimators -- Laplacian, Hessian diagonal, variance reduction |
-| Nonsmooth AD | Branch tracking, kink detection, Clarke generalized Jacobian |
+| Nonsmooth AD | Branch tracking, kink detection (8 nonsmooth ops), Clarke generalized Jacobian |
 | Laurent series | `Laurent<F, K>` -- singularity analysis via Laurent expansion |
 | GPU acceleration | wgpu (Metal/Vulkan/DX12, f32) and CUDA (NVIDIA, f32+f64) batch evaluation |
-| Composable nesting | `Dual<BReverse<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for higher-order |
+| Composable nesting | `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for higher-order |
 | Optimization | L-BFGS, Newton, trust-region solvers; implicit differentiation and piggyback (via `echidna-optim`) |
 
 ## Quick Start
@@ -199,14 +199,15 @@ Types compose via nesting: `Dual<BReverse<f64>>` gives forward-over-reverse for 
 |---------|---------|---------|------------|--------|--------|-----|-----------|
 | **echidna** | Yes | Yes | Yes (bytecode, optimized) | Yes (auto coloring) | Yes (const-generic + dynamic) | Yes (wgpu + CUDA) | Yes (Clarke) |
 | num-dual | Yes | No | No | No | No | No | No |
+| ad-trait | Yes | Yes | No | No | No | No | No |
 | autodiff (crate) | Yes | No | No | No | No | No | No |
 | Enzyme (via LLVM) | Yes | Yes | LLVM IR | No | No | No | No |
 
-Enzyme operates at the LLVM IR level and is not a Rust-native library; it requires compiler integration. num-dual and the autodiff crate are pure Rust but limited to forward mode.
+Enzyme operates at the LLVM IR level and is not a Rust-native library; it requires compiler integration. num-dual, ad-trait, and the autodiff crate are pure Rust libraries. Comparison benchmarks against num-dual and ad-trait are included in `benches/comparison.rs`.
 
 ## Performance
 
-Benchmarks use Criterion and cover forward mode, reverse mode, bytecode tape, Taylor mode, STDE, GPU, and comparison with num-dual. Run with:
+Benchmarks use Criterion and cover forward mode, reverse mode, bytecode tape, Taylor mode, STDE, GPU, and comparison with num-dual and ad-trait. Run with:
 
 ```bash
 cargo bench                                         # Forward + reverse

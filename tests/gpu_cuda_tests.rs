@@ -1,6 +1,6 @@
 #![cfg(feature = "gpu-cuda")]
 
-use echidna::gpu::{CudaContext, GpuTapeData};
+use echidna::gpu::{CudaContext, GpuBackend, GpuTapeData};
 use echidna::{record, Scalar};
 
 /// Try to acquire a CUDA GPU. If none available, print a warning and return None.
@@ -308,4 +308,10 @@ fn sparse_hessian_rosenbrock_f64() {
             cpu_hess[k]
         );
     }
+}
+
+#[test]
+fn cuda_implements_gpu_backend() {
+    fn assert_backend<B: GpuBackend>() {}
+    assert_backend::<CudaContext>();
 }

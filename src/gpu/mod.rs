@@ -6,17 +6,18 @@
 //!
 //! # Context Contract
 //!
-//! Both `WgpuContext` and `CudaContext` follow the same method pattern:
+//! Both [`WgpuContext`] and [`CudaContext`] implement the [`GpuBackend`] trait,
+//! which defines the shared f32 operation set:
 //!
-//! - `new() -> Option<Self>` — acquire a GPU device, `None` if unavailable
-//! - `upload_tape(&self, data: &GpuTapeData) -> TapeBuffers` — upload tape to device
-//! - `forward_batch(&self, tape, inputs, batch) -> Result<Vec<f32>, GpuError>` — batched forward
-//! - `gradient_batch(&self, tape, inputs, batch) -> Result<(Vec<f32>, Vec<f32>), GpuError>` — batched gradient
-//! - `sparse_jacobian(&self, tape, tape_cpu, x) -> Result<..., GpuError>` — GPU-accelerated sparse Jacobian
-//! - `sparse_hessian(&self, tape, tape_cpu, x) -> Result<..., GpuError>` — GPU-accelerated sparse Hessian
+//! - `new() -> Option<Self>` — acquire a GPU device (inherent, not in trait)
+//! - [`upload_tape`](GpuBackend::upload_tape) — upload tape to device
+//! - [`forward_batch`](GpuBackend::forward_batch) — batched forward evaluation
+//! - [`gradient_batch`](GpuBackend::gradient_batch) — batched gradient (forward + reverse)
+//! - [`sparse_jacobian`](GpuBackend::sparse_jacobian) — GPU-accelerated sparse Jacobian
+//! - [`hvp_batch`](GpuBackend::hvp_batch) — batched Hessian-vector product
+//! - [`sparse_hessian`](GpuBackend::sparse_hessian) — GPU-accelerated sparse Hessian
 //!
-//! No trait is extracted yet — a `GpuBackend` trait can be added later once both
-//! backends are stable and the shared surface is proven.
+//! CUDA additionally provides f64 methods as inherent methods on [`CudaContext`].
 
 use crate::bytecode_tape::BytecodeTape;
 use crate::opcode::OpCode;
@@ -32,6 +33,91 @@ pub use wgpu_backend::{WgpuContext, WgpuTapeBuffers};
 
 #[cfg(feature = "gpu-cuda")]
 pub use cuda_backend::{CudaContext, CudaTapeBuffers};
+
+/// Common interface for GPU backends (f32 operations).
+///
+/// Both [`WgpuContext`] and [`CudaContext`] implement this trait for the f32
+/// operation set. CUDA additionally provides f64 methods as inherent methods
+/// on [`CudaContext`] directly.
+///
+/// # Associated Type
+///
+/// [`TapeBuffers`](GpuBackend::TapeBuffers) is the backend-specific opaque
+/// handle returned by [`upload_tape`](GpuBackend::upload_tape) and passed to
+/// all dispatch methods. It holds GPU-resident buffers and is not cloneable.
+///
+/// # Implementing a New Backend
+///
+/// A backend must implement all six methods. Construction (`new()`) is not
+/// part of the trait — backends may have different initialization requirements.
+pub trait GpuBackend {
+    /// Backend-specific uploaded tape handle.
+    type TapeBuffers;
+
+    /// Upload a tape to the GPU.
+    ///
+    /// The returned handle is used for all subsequent operations and holds
+    /// GPU-resident buffers for the tape's opcodes, arguments, and constants.
+    fn upload_tape(&self, data: &GpuTapeData) -> Self::TapeBuffers;
+
+    /// Batched forward evaluation.
+    ///
+    /// `inputs` is `[f32; batch_size * num_inputs]` (row-major, one point per row).
+    /// Returns output values `[f32; batch_size * num_outputs]`.
+    fn forward_batch(
+        &self,
+        tape: &Self::TapeBuffers,
+        inputs: &[f32],
+        batch_size: u32,
+    ) -> Result<Vec<f32>, GpuError>;
+
+    /// Batched gradient (forward + reverse sweep).
+    ///
+    /// Returns `(outputs, gradients)` where outputs is
+    /// `[f32; batch_size * num_outputs]` and gradients is
+    /// `[f32; batch_size * num_inputs]`.
+    fn gradient_batch(
+        &self,
+        tape: &Self::TapeBuffers,
+        inputs: &[f32],
+        batch_size: u32,
+    ) -> Result<(Vec<f32>, Vec<f32>), GpuError>;
+
+    /// GPU-accelerated sparse Jacobian.
+    ///
+    /// CPU detects sparsity and computes coloring; GPU dispatches colored
+    /// tangent sweeps. Returns `(output_values, pattern, jacobian_values)`.
+    fn sparse_jacobian(
+        &self,
+        tape: &Self::TapeBuffers,
+        tape_cpu: &mut BytecodeTape<f32>,
+        x: &[f32],
+    ) -> Result<(Vec<f32>, crate::sparse::JacobianSparsityPattern, Vec<f32>), GpuError>;
+
+    /// Batched Hessian-vector product (forward-over-reverse).
+    ///
+    /// `tangent_dirs` is `[f32; batch_size * num_inputs]` — one direction per
+    /// batch element. Returns `(gradients, hvps)` each
+    /// `[f32; batch_size * num_inputs]`.
+    fn hvp_batch(
+        &self,
+        tape: &Self::TapeBuffers,
+        x: &[f32],
+        tangent_dirs: &[f32],
+        batch_size: u32,
+    ) -> Result<(Vec<f32>, Vec<f32>), GpuError>;
+
+    /// GPU-accelerated sparse Hessian.
+    ///
+    /// CPU detects Hessian sparsity and computes distance-2 coloring; GPU
+    /// dispatches HVP sweeps. Returns `(value, gradient, pattern, hessian_values)`.
+    fn sparse_hessian(
+        &self,
+        tape: &Self::TapeBuffers,
+        tape_cpu: &mut BytecodeTape<f32>,
+        x: &[f32],
+    ) -> Result<(f32, Vec<f32>, crate::sparse::SparsityPattern, Vec<f32>), GpuError>;
+}
 
 /// Error type for GPU operations.
 #[derive(Debug)]

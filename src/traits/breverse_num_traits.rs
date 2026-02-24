@@ -151,7 +151,7 @@ impl<F: Float + BtapeThreadLocal> Signed for BReverse<F> {
     }
     #[inline]
     fn signum(&self) -> Self {
-        BReverse::constant(self.value.signum())
+        brev_unary(*self, OpCode::Signum, self.value.signum())
     }
     #[inline]
     fn is_positive(&self) -> bool {
