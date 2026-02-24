@@ -63,22 +63,18 @@ Coverage baseline established (49.42% overall) and cross-country unit tests adde
 
 ---
 
-## Phase 3: CustomOp Extensibility
+## ~~Phase 3: CustomOp Second-Order Derivatives~~ Complete
 
-Breaking API changes — requires semver-minor or semver-major bump.
+Added `eval_dual` and `partials_dual` default methods to `CustomOp<F>`, enabling correct second-order derivatives (HVP, Hessian) through custom ops. The original plan items (3.1 and 3.2) were merged: instead of a separate `CustomOpSecondOrder` trait or generic eval, concrete `Dual<F>` methods on the existing trait preserve object safety while avoiding code duplication.
 
-| # | Item | Type | Effort | Notes |
-|---|------|------|--------|-------|
-| 3.2 | **CustomOp generic eval** — current `eval` takes `F: Float`. Forward-over-reverse (`Dual<BReverse<f64>>`) needs eval to accept `T: Scalar` to propagate tangent components through custom ops. Add a new method with a default impl to avoid semver-major. | tech-debt | medium | Prerequisite for 3.1 and 4.2 |
-| 3.1 | **CustomOpSecondOrder trait** — doc comment at `bytecode_tape.rs:38` references it but it doesn't exist. Needed for HVP/Hessian computation through user-defined ops. Without it, second-order derivatives silently fail for custom ops. | feature | medium | Depends on 3.2 |
+<details>
+<summary>Completed items</summary>
 
-### Dependencies
+| # | Item | Status |
+|---|------|--------|
+| 3.1+3.2 | **`eval_dual` / `partials_dual` on `CustomOp<F>`** — Default methods use first-order chain rule (backward compatible). Override to propagate tangent through custom ops for correct HVP/Hessian. Covers `Dual<F>` path (HVP, Hessian, sparse Hessian). `DualVec`, `Dual<Dual<F>>`, and `Taylor` paths remain first-order for custom ops. | Done |
 
-```
-3.2 (CustomOp generic eval)
- ├──▶ 3.1 (CustomOpSecondOrder trait)
- └──▶ 4.2 (reverse-wrapping-forward composition)
-```
+</details>
 
 ---
 
@@ -88,9 +84,9 @@ Larger refactors with clear motivation but no urgency.
 
 | # | Item | Type | Effort | Notes |
 |---|------|------|--------|-------|
-| 4.1 | **GpuBackend trait** — Unify wgpu and CUDA backends behind a common trait. Currently both backends exist (`wgpu_backend.rs`, `cuda_backend.rs`) with parallel but separate APIs. Natural next step if a third backend emerges (e.g., WebGPU, ROCm). | feature | large | Deliberately deferred |
-| 4.2 | **Reverse-wrapping-forward composition** — `BReverse<Dual<f64>>` is unsupported. Would require new thread-local tapes per composed type. Forward-wrapping-reverse (`Dual<BReverse<f64>>`) works. | feature | large | Depends on 3.2 |
-| 4.3 | **Bumpalo arena for Adept tape** — Replace Vec-based Adept tape allocation with arena. Deferred due to lifetime cascading: `Reverse<'a, F>` would propagate lifetimes through all APIs. Questionable value since bytecode tape covers the reuse case. | tech-debt | large | Low motivation |
+| 4.1 | ~~**GpuBackend trait**~~ — Unify wgpu and CUDA backends behind a common trait. f32 methods moved to `GpuBackend` trait in `gpu/mod.rs`; CUDA f64 methods remain inherent. CUDA `sparse_jacobian` compilation bugs fixed. | feature | ~~large~~ medium | **Done** |
+| 4.2 | ~~**Reverse-wrapping-forward composition**~~ — `BReverse<Dual<f64>>` via `BtapeThreadLocal` impls for `Dual<f32>` and `Dual<f64>`. Enables reverse-over-forward HVP and column-by-column Hessian. | feature | ~~large~~ small | **Done** |
+| 4.3 | ~~**Thread-local Adept tape pooling**~~ — Replaced per-call `Tape` allocation in `grad()`/`vjp()` with thread-local pool. Cleared tapes retain Vec capacity across calls. Zero API changes. Arena approach was rejected (lifetime cascading). | tech-debt | ~~large~~ small | **Done** |
 
 ---
 
@@ -100,10 +96,10 @@ Require motivation from concrete use cases before committing.
 
 | # | Item | Type | Effort | Notes |
 |---|------|------|--------|-------|
-| 5.1 | **DiffOperator abstraction** — General combinator for differential operators (Laplacian, divergence, curl). Current STDE module exposes individual functions; a trait would allow user-defined operators with the same estimation pipeline. Deferred pending motivation from variance reduction research. | feature | medium | |
+| 5.1 | ~~**Estimator abstraction + divergence**~~ — `Estimator` trait generalising per-direction sample computation (`Laplacian`, `GradientSquaredNorm`), generic `estimate`/`estimate_weighted` pipeline, and Hutchinson divergence estimator for vector fields via `Dual<F>` forward mode. | feature | medium | **Done** |
 | 5.2 | **Constant deduplication at record time** — Identical literal constants get separate tape entries. Blocked on `FloatBits` trait orphan rule for `Dual<F>`. CSE already handles ops over duplicate constants, limiting the benefit. | tech-debt | medium | Architecturally blocked |
 | 5.3 | **Cross-checkpoint DCE** — Dead code elimination across checkpoint boundaries. Targeted multi-output DCE (R13) covers most cases; cross-checkpoint adds complexity for diminishing returns. | tech-debt | large | |
-| 5.4 | **Advanced STDE variance reduction** — Importance sampling, stratified sampling for stochastic Laplacian/Hessian diagonal estimators. Antithetic sampling proven unnecessary (`v^T H v` is even in `v`). | feature | medium | Research-dependent |
+| 5.4 | ~~**Advanced STDE variance reduction**~~ — Importance-weighted estimation (West's 1979 algorithm) and Hutch++ (Meyer et al. 2021) O(1/S²) trace estimator via sketch + residual decomposition. Antithetic and stratified sampling subsumed by existing diagonal control variate and Hutch++. | feature | medium | **Done** |
 | 5.5 | **Extended nonsmooth operators** — `sign(·)`, `floor`/`ceil` step functions, broader Clarke subdifferential enumeration. Current support covers `abs`, `min`, `max`, and user-defined piecewise functions. | feature | small-medium | Incremental |
 | 5.6 | **SIMD vectorization** — `wide` crate integration for batched elemental kernels. Requires benchmarking to justify complexity vs benefit. | feature | large | |
 | 5.7 | **no_std / embedded** — Explicitly a non-goal currently. Would require removing dynamic allocation and thread-local tape infrastructure. | feature | epic | Non-goal |
@@ -126,10 +122,6 @@ Require motivation from concrete use cases before committing.
 ```
 0.1 (RUSTSEC-2024-0436)       ← upstream simba
 0.2 (nalgebra 0.34)            ← MSRV bump decision
-
-3.2 (CustomOp generic eval)
- ├──▶ 3.1 (CustomOpSecondOrder)
- └──▶ 4.2 (reverse-wrapping-forward)
 ```
 
-All other items are independent and can be worked in any order within their phase.
+Phase 3 is complete. All remaining items are independent and can be worked in any order within their phase.
