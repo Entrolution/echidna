@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-25
+
+### Added
+
+#### Differential Operator Evaluation (`diffop` feature)
+- `diffop::mixed_partial(tape, x, orders)` — compute any mixed partial derivative via jet coefficient extraction
+- `diffop::hessian(tape, x)` — full Hessian via jet extraction (cross-validated against `tape.hessian()`)
+- `MultiIndex` — specify which mixed partial to compute (e.g., `[2, 0, 1]` = ∂³u/∂x₀²∂x₂)
+- `JetPlan::plan(n, indices)` — precompute slot assignments and extraction prefactors; reuse across evaluation points
+- `diffop::eval_dyn(plan, tape, x)` — evaluate a plan at a new point using `TaylorDyn`
+- Pushforward grouping: multi-indices with different active variable sets get separate forward passes to avoid slot contamination
+- Prime window sliding for collision-free slot assignment up to high derivative orders
+
 ## [0.2.0] - 2026-02-25
 
 ### Added
@@ -149,6 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Entrolution/echidna/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Entrolution/echidna/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Entrolution/echidna/releases/tag/v0.1.0

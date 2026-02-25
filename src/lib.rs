@@ -49,6 +49,7 @@
 //! | `taylor` | no | Taylor-mode AD ([`Taylor<F, K>`], [`TaylorDyn<F>`]) |
 //! | `laurent` | no | Laurent series for singularity analysis (implies `taylor`) |
 //! | `stde` | no | Stochastic Taylor Derivative Estimators (implies `bytecode` + `taylor`) |
+//! | `diffop` | no | Arbitrary differential operator evaluation via jet coefficients (implies `bytecode` + `taylor`) |
 //! | `serde` | no | Serialization support via serde |
 //! | `faer` | no | faer linear algebra integration (implies `bytecode`) |
 //! | `nalgebra` | no | nalgebra linear algebra integration (implies `bytecode`) |
@@ -140,6 +141,10 @@ pub mod laurent;
 #[cfg_attr(docsrs, doc(cfg(feature = "stde")))]
 #[cfg(feature = "stde")]
 pub mod stde;
+
+#[cfg_attr(docsrs, doc(cfg(feature = "diffop")))]
+#[cfg(feature = "diffop")]
+pub mod diffop;
 
 #[cfg_attr(docsrs, doc(cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))))]
 #[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]

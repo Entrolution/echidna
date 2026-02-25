@@ -3,7 +3,7 @@ members = [".", "echidna-optim"]
 
 [package]
 name = "echidna"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.93"
 description = "A high-performance automatic differentiation library for Rust"
@@ -54,6 +54,7 @@ nalgebra = ["dep:nalgebra", "bytecode"]
 taylor = []
 laurent = ["taylor"]
 stde = ["bytecode", "taylor"]
+diffop = ["bytecode", "taylor"]
 gpu-wgpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster", "bytecode"]
 gpu-cuda = ["dep:cudarc", "bytecode"]
 
@@ -91,10 +92,15 @@ harness = false
 required-features = ["bytecode"]
 
 [[bench]]
+name = "diffop"
+harness = false
+required-features = ["diffop"]
+
+[[bench]]
 name = "gpu"
 harness = false
 required-features = ["gpu-wgpu"]
 
 [package.metadata.docs.rs]
-features = ["simba", "bytecode", "parallel", "serde", "ndarray", "faer", "nalgebra", "taylor", "laurent", "stde", "gpu-wgpu"]
+features = ["simba", "bytecode", "parallel", "serde", "ndarray", "faer", "nalgebra", "taylor", "laurent", "stde", "diffop", "gpu-wgpu"]
 rustdoc-args = ["--cfg", "docsrs"]

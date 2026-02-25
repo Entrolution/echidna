@@ -287,7 +287,58 @@ matrix for Laplacian smoothing splines".
 
 ---
 
-## 10. Nonsmooth AD
+## 10. Differential Operator Evaluation
+
+The STDE module (Section 9) uses random tangent directions through low-order
+Taylor jets to estimate aggregate second-order quantities like the Laplacian.
+The `diffop` module generalises this idea to extract *exact* arbitrary mixed
+partial derivatives from a single jet pushforward per group of active
+variables.
+
+The mathematical foundation is the multivariate Faà di Bruno formula applied
+to a parameterised curve. Given a function `u: R^n -> R` and a target mixed
+partial `∂^Q u / (∂x_{i₁}^{q₁} ... ∂x_{iT}^{qT})`, assign each active
+variable `i_t` a distinct integer "slot" `j_t`. Construct Taylor inputs where
+variable `i_t` has coefficient `1/j_t!` at index `j_t` (all other higher-order
+coefficients zero), then push through the tape via `forward_tangent`. The
+output jet coefficient at index `k = Σ j_t · q_t` equals the target derivative
+divided by the prefactor `Π_t (q_t! · (j_t!)^{q_t})`. This prefactor absorbs
+both the Taylor scaling (`1/k!` at the output) and the input scaling (`1/j_t!`
+per variable).
+
+The slot assignment must satisfy a uniqueness condition: the target partition
+of `k` into parts drawn from the assigned slots must be the *only* such
+partition. If another partition exists, it contaminates the output coefficient
+and the extraction is ambiguous. echidna uses a prime window sliding strategy:
+assign slots from consecutive primes `PRIMES[offset..offset+T]` and verify
+uniqueness by exhaustive partition enumeration. If a collision is detected,
+increment the offset and retry. For practical PDE operators (total order ≤ 6,
+≤ 4 active variables), convergence is fast.
+
+Multi-indices with different sets of active variables receive separate
+pushforwards ("pushforward groups"). This is essential: if slots from
+non-active variables are present in the Taylor input, their contributions
+create partition collisions that cannot be resolved by slot reassignment alone.
+Multi-indices sharing the same active variable set are batched into a single
+group, since their slot assignments are compatible and multiple output
+coefficients can be read from one pushforward.
+
+The `JetPlan` type precomputes all slot assignments, jet orders, and extraction
+prefactors. Once built, a plan is reused across evaluation points — only the
+Taylor input values change, not the combinatorial structure. This
+plan-once-evaluate-many design mirrors the `BytecodeTape` philosophy and is
+well suited to PDE solvers that evaluate the same differential operator at
+many grid points.
+
+**References:** Schatz et al. (2024), "Stochastic Taylor Derivative
+Estimators", NeurIPS (Section 3, jet extraction formula);
+Griewank & Walther, *Evaluating Derivatives*, Chapter 13 (Taylor propagation).
+
+**Module:** `echidna::diffop`
+
+---
+
+## 11. Nonsmooth AD
 
 Standard AD assumes that all elemental operations are smooth (continuously
 differentiable). In practice, many functions contain piecewise-linear
@@ -337,7 +388,7 @@ Clarke, F.H. (1983), *Optimization and Nonsmooth Analysis*.
 
 ---
 
-## 11. Laurent Series
+## 12. Laurent Series
 
 Laurent series extend Taylor series to handle singularities. A Laurent series
 has the form `sum_{k=p}^{K} a_k * t^k` where the pole order `p` may be
@@ -366,7 +417,7 @@ pole tracking.
 
 ---
 
-## 12. Implicit Differentiation
+## 13. Implicit Differentiation
 
 Many problems involve quantities `z*` defined implicitly by an equation
 `F(z*, x) = 0`, where `z*` is the solution and `x` is the parameter. The
@@ -411,7 +462,7 @@ Christianson, B. (1994), "Reverse accumulation and attractive fixed points".
 
 ---
 
-## 13. GPU Acceleration
+## 14. GPU Acceleration
 
 Batched tape evaluation is naturally parallel: the same sequence of operations
 is applied independently to many input vectors. echidna exploits this by
@@ -443,7 +494,7 @@ for AD-specific operations.
 
 ---
 
-## 14. Composable Mode Nesting
+## 15. Composable Mode Nesting
 
 echidna's AD modes are designed to compose via type-level nesting. The key
 insight is that `Dual<F>`, `Taylor<F, K>`, and `DualVec<F, N>` are all generic
@@ -472,7 +523,7 @@ reverse-over-forward HVP and column-by-column Hessian computation.
 
 ---
 
-## 15. Optimization Solvers
+## 16. Optimization Solvers
 
 The `echidna-optim` crate provides derivative-based optimization algorithms
 that use echidna's AD capabilities for gradient and Hessian computation. All
