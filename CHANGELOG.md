@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-25
+
 ### Added
 
 #### Bytecode Tape (Graph-Mode AD)
@@ -101,6 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tape optimization: targeted multi-output DCE (`dead_code_elimination_for_outputs`)
 - Thread-local Adept tape pooling — `grad()`/`vjp()` reuse cleared tapes via thread-local pool instead of per-call allocation
 - `Signed::signum()` for `BReverse<F>` now records `OpCode::Signum` to tape (was returning a constant)
+- MSRV raised from 1.80 to 1.93
+- `WelfordAccumulator` struct extracted, deduplicating Welford's algorithm across 4 STDE functions
+- `cuda_err` helper extracted, replacing 72 inline `.map_err` closures in CUDA backend
+- `create_tape_bind_group` method extracted, replacing 4 duplicated bind group blocks in wgpu backend
 
 ## [0.1.0] - 2026-02-21
 
@@ -143,5 +149,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Entrolution/echidna/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Entrolution/echidna/releases/tag/v0.1.0
