@@ -143,7 +143,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
         );
 
         // Save checkpoint if on the spacing grid.
-        if step_index % spacing == 0 {
+        if step_index.is_multiple_of(spacing) {
             buffer.push((step_index, current_state.clone()));
         }
 
