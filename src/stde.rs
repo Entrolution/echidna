@@ -45,6 +45,47 @@
 //! - **`TaylorDyn`** variants for runtime-determined order.
 //! - **Panics on misuse**: dimension mismatches panic, following existing
 //!   API conventions (`record`, `grad`, `hvp`).
+//!
+//! # Const-Generic Higher-Order Diagonal
+//!
+//! [`diagonal_kth_order_const`] is a stack-allocated variant of
+//! [`diagonal_kth_order`] for compile-time-known derivative order. It uses
+//! `Taylor<F, ORDER>` directly (no `TaylorDyn` arena), which is faster when
+//! the order is statically known. `ORDER = k + 1` where k is the derivative
+//! order. For f32, practical limit is `ORDER ≤ 14` (k ≤ 13) since `k! > 2^23`
+//! causes precision loss.
+//!
+//! # Higher-Order Estimation
+//!
+//! [`diagonal_kth_order`] generalises [`hessian_diagonal`] from k=2 to
+//! arbitrary k, computing exact `[∂^k u/∂x_j^k]` for all coordinates via
+//! `TaylorDyn` jets of order k+1. The stochastic variant
+//! [`diagonal_kth_order_stochastic`] subsamples coordinates for an unbiased
+//! estimate of `Σ_j ∂^k u/∂x_j^k`.
+//!
+//! # Dense STDE for Positive-Definite Operators
+//!
+//! [`dense_stde_2nd`] estimates `tr(C · H_u(x)) = Σ_{ij} C_{ij} ∂²u/∂x_i∂x_j`
+//! for a positive-definite coefficient matrix C. The caller provides a Cholesky
+//! factor L (such that `C = L L^T`) and standard Gaussian vectors z. Internally,
+//! `v = L · z` is computed, then pushed through a second-order Taylor jet. When
+//! `L = I`, this reduces to the Hutchinson Laplacian estimator.
+//!
+//! # Parabolic PDE σ-Transform
+//!
+//! [`parabolic_diffusion`] computes `½ tr(σσ^T · Hess u)` for parabolic PDEs
+//! (Fokker-Planck, Black-Scholes, HJB) by pushing columns of σ through
+//! second-order Taylor jets. This avoids forming the off-diagonal Hessian
+//! entries that a naïve `tr(A·H)` computation would require.
+//!
+//! # Sparse STDE (requires `stde` + `diffop`)
+//!
+//! `stde_sparse` estimates arbitrary differential operators `Lu(x)` by
+//! sampling sparse k-jets from a `SparseSamplingDistribution` built via
+//! `DiffOp::sparse_distribution`. Each sample is a single forward
+//! pushforward; the per-sample estimator is `sign(C_α) · Z · D^α u` where
+//! Z = Σ|C_α| is the normalization constant. This implements the core
+//! contribution of Shi et al. (NeurIPS 2024).
 
 use crate::bytecode_tape::BytecodeTape;
 use crate::dual::Dual;
@@ -544,6 +585,219 @@ pub fn hessian_diagonal_with_buf<F: Float>(
 }
 
 // ══════════════════════════════════════════════
+//  Higher-order diagonal estimation
+// ══════════════════════════════════════════════
+
+/// Exact k-th order diagonal: `[∂^k u/∂x_j^k for j in 0..n]`.
+///
+/// Pushes n basis vectors through order-(k+1) `TaylorDyn` jets. For each
+/// coordinate j, the input jet has `coeffs_j = [x_j, 1, 0, ..., 0]` and all
+/// other inputs `coeffs_i = [x_i, 0, ..., 0]`. The output coefficient at
+/// index k stores `∂^k u/∂x_j^k / k!`, so the derivative is `k! * coeffs[k]`.
+///
+/// Requires `F: Float + TaylorArenaLocal` because the jet order is
+/// runtime-determined (unlike [`hessian_diagonal`] which uses const-generic
+/// `Taylor<F, 3>`).
+///
+/// # Panics
+///
+/// Panics if `k < 2`, `k > 20` (factorial overflow guard for f64), or if
+/// `x.len()` does not match `tape.num_inputs()`.
+pub fn diagonal_kth_order<F: Float + TaylorArenaLocal>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    k: usize,
+) -> (F, Vec<F>) {
+    let mut buf = Vec::new();
+    diagonal_kth_order_with_buf(tape, x, k, &mut buf)
+}
+
+/// Like [`diagonal_kth_order`] but reuses a caller-provided buffer.
+pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    k: usize,
+    buf: &mut Vec<TaylorDyn<F>>,
+) -> (F, Vec<F>) {
+    assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
+    assert!(k <= 20, "k must be <= 20 (k! overflows f64 for k > 20)");
+    let n = tape.num_inputs();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let order = k + 1; // number of Taylor coefficients
+    let _guard = TaylorDynGuard::<F>::new(order);
+
+    let mut k_factorial = F::one();
+    for i in 2..=k {
+        k_factorial = k_factorial * F::from(i).unwrap();
+    }
+
+    let mut diag = Vec::with_capacity(n);
+    let mut value = F::zero();
+
+    for j in 0..n {
+        // Build TaylorDyn inputs: coeffs_j = [x_j, 1, 0, ..., 0], others = [x_i, 0, ..., 0]
+        let inputs: Vec<TaylorDyn<F>> = (0..n)
+            .map(|i| {
+                let mut coeffs = vec![F::zero(); order];
+                coeffs[0] = x[i];
+                if i == j {
+                    coeffs[1] = F::one();
+                }
+                TaylorDyn::from_coeffs(&coeffs)
+            })
+            .collect();
+
+        tape.forward_tangent(&inputs, buf);
+
+        let out_coeffs = buf[tape.output_index()].coeffs();
+        value = out_coeffs[0];
+        diag.push(k_factorial * out_coeffs[k]);
+    }
+
+    (value, diag)
+}
+
+/// Exact k-th order diagonal using const-generic `Taylor<F, ORDER>`.
+///
+/// `ORDER = k + 1` where `k = ORDER - 1` is the derivative order. Uses
+/// stack-allocated Taylor coefficients — faster than [`diagonal_kth_order`]
+/// when k is known at compile time.
+///
+/// # Precision Note
+///
+/// For f32, `k! > 2^23` when k ≥ 13 (ORDER ≥ 14), causing precision loss.
+/// The existing [`diagonal_kth_order`] has a runtime guard `k ≤ 20` for f64;
+/// the const-generic version has no such guard but users should be aware
+/// that for f32, ORDER ≤ 14 is the practical limit.
+///
+/// # Panics
+///
+/// Compile-time error if `ORDER < 3` (i.e., k < 2).
+/// Runtime panic if `x.len()` does not match `tape.num_inputs()`.
+pub fn diagonal_kth_order_const<F: Float, const ORDER: usize>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+) -> (F, Vec<F>) {
+    let mut buf: Vec<Taylor<F, ORDER>> = Vec::new();
+    diagonal_kth_order_const_with_buf(tape, x, &mut buf)
+}
+
+/// Like [`diagonal_kth_order_const`] but reuses a caller-provided buffer.
+pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    buf: &mut Vec<Taylor<F, ORDER>>,
+) -> (F, Vec<F>) {
+    const { assert!(ORDER >= 3, "ORDER must be >= 3 (k=ORDER-1 >= 2)") }
+
+    let k = ORDER - 1;
+    let n = tape.num_inputs();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let mut k_factorial = F::one();
+    for i in 2..=k {
+        k_factorial = k_factorial * F::from(i).unwrap();
+    }
+
+    let mut diag = Vec::with_capacity(n);
+    let mut value = F::zero();
+
+    for j in 0..n {
+        let inputs: Vec<Taylor<F, ORDER>> = (0..n)
+            .map(|i| {
+                let mut coeffs = [F::zero(); ORDER];
+                coeffs[0] = x[i];
+                if i == j {
+                    coeffs[1] = F::one();
+                }
+                Taylor::new(coeffs)
+            })
+            .collect();
+
+        tape.forward_tangent(&inputs, buf);
+
+        let out = buf[tape.output_index()];
+        value = out.coeffs[0];
+        diag.push(k_factorial * out.coeffs[k]);
+    }
+
+    (value, diag)
+}
+
+/// Stochastic k-th order diagonal estimate: `Σ_j ∂^k u/∂x_j^k`.
+///
+/// Evaluates only the coordinate indices in `sampled_indices`, then scales
+/// by `n / |J|` to produce an unbiased estimate of the full sum.
+///
+/// # Panics
+///
+/// Panics if `sampled_indices` is empty, `k < 2`, `k > 20`, or if
+/// `x.len()` does not match `tape.num_inputs()`.
+pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    k: usize,
+    sampled_indices: &[usize],
+) -> EstimatorResult<F> {
+    assert!(
+        !sampled_indices.is_empty(),
+        "sampled_indices must not be empty"
+    );
+    assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
+    assert!(k <= 20, "k must be <= 20 (k! overflows f64 for k > 20)");
+    let n = tape.num_inputs();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let order = k + 1;
+    let _guard = TaylorDynGuard::<F>::new(order);
+
+    let mut k_factorial = F::one();
+    for i in 2..=k {
+        k_factorial = k_factorial * F::from(i).unwrap();
+    }
+
+    let nf = F::from(n).unwrap();
+
+    let mut value = F::zero();
+    let mut acc = WelfordAccumulator::new();
+    let mut buf: Vec<TaylorDyn<F>> = Vec::new();
+
+    for &j in sampled_indices {
+        assert!(j < n, "sampled index {} out of bounds (n={})", j, n);
+
+        let inputs: Vec<TaylorDyn<F>> = (0..n)
+            .map(|i| {
+                let mut coeffs = vec![F::zero(); order];
+                coeffs[0] = x[i];
+                if i == j {
+                    coeffs[1] = F::one();
+                }
+                TaylorDyn::from_coeffs(&coeffs)
+            })
+            .collect();
+
+        tape.forward_tangent(&inputs, &mut buf);
+
+        let out_coeffs = buf[tape.output_index()].coeffs();
+        value = out_coeffs[0];
+        // Per-sample: k! * coeffs[k] (the diagonal entry for coordinate j)
+        acc.update(k_factorial * out_coeffs[k]);
+    }
+
+    let (mean, sample_variance, standard_error) = acc.finalize();
+
+    // Unbiased estimator for Σ_j d_j: n * mean(sampled d_j's)
+    EstimatorResult {
+        value,
+        estimate: mean * nf,
+        sample_variance,
+        standard_error,
+        num_samples: sampled_indices.len(),
+    }
+}
+
+// ══════════════════════════════════════════════
 //  TaylorDyn variants (runtime order)
 // ══════════════════════════════════════════════
 
@@ -885,5 +1139,271 @@ pub fn divergence<F: Float>(
         sample_variance,
         standard_error,
         num_samples: directions.len(),
+    }
+}
+
+// ══════════════════════════════════════════════
+//  Parabolic PDE σ-transform
+// ══════════════════════════════════════════════
+
+/// Estimate the diffusion term `½ tr(σσ^T · Hess u)` for parabolic PDEs.
+///
+/// Uses the σ-transform: `½ tr(σσ^T H) = ½ Σ_i (σ·e_i)^T H (σ·e_i)`
+/// where `σ·e_i` are the columns of σ (paper Eq 19, Appendix E).
+///
+/// Each column pushforward gives `(σ·e_i)^T H (σ·e_i)` via the second-order
+/// Taylor coefficient: `2 * c2`. The diffusion term is `½ * Σ 2*c2 = Σ c2`.
+///
+/// # Arguments
+///
+/// - `sigma_columns`: the columns of σ as slices, each of length `tape.num_inputs()`.
+///
+/// Returns `(value, diffusion_term)`.
+///
+/// # Panics
+///
+/// Panics if `sigma_columns` is empty or any column's length does not match
+/// `tape.num_inputs()`.
+pub fn parabolic_diffusion<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    sigma_columns: &[&[F]],
+) -> (F, F) {
+    assert!(!sigma_columns.is_empty(), "sigma_columns must not be empty");
+    let n = tape.num_inputs();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let half = F::from(0.5).unwrap();
+    let two = F::from(2.0).unwrap();
+    let mut buf = Vec::new();
+    let mut value = F::zero();
+    let mut sum = F::zero();
+
+    for col in sigma_columns {
+        assert_eq!(
+            col.len(),
+            n,
+            "sigma column length must match tape.num_inputs()"
+        );
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, col, &mut buf);
+        value = c0;
+        sum = sum + two * c2; // (σ·e_i)^T H (σ·e_i)
+    }
+
+    (value, half * sum)
+}
+
+/// Stochastic version of [`parabolic_diffusion`]: subsample column indices.
+///
+/// Estimate = `(d / |J|) · ½ · Σ_{i∈J} (σ·e_i)^T H (σ·e_i)`.
+///
+/// # Panics
+///
+/// Panics if `sampled_indices` is empty or any index is out of bounds.
+pub fn parabolic_diffusion_stochastic<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    sigma_columns: &[&[F]],
+    sampled_indices: &[usize],
+) -> EstimatorResult<F> {
+    assert!(
+        !sampled_indices.is_empty(),
+        "sampled_indices must not be empty"
+    );
+    let n = tape.num_inputs();
+    let d = sigma_columns.len();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let two = F::from(2.0).unwrap();
+    let half = F::from(0.5).unwrap();
+    let df = F::from(d).unwrap();
+
+    let mut buf = Vec::new();
+    let mut value = F::zero();
+    let mut acc = WelfordAccumulator::new();
+
+    for &i in sampled_indices {
+        assert!(i < d, "sampled index {} out of bounds (d={})", i, d);
+        let col = sigma_columns[i];
+        assert_eq!(
+            col.len(),
+            n,
+            "sigma column length must match tape.num_inputs()"
+        );
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, col, &mut buf);
+        value = c0;
+        acc.update(two * c2); // (σ·e_i)^T H (σ·e_i)
+    }
+
+    let (mean, sample_variance, standard_error) = acc.finalize();
+
+    // Unbiased estimator for ½ Σ_i (σ·e_i)^T H (σ·e_i): d * mean * ½
+    EstimatorResult {
+        value,
+        estimate: mean * df * half,
+        sample_variance,
+        standard_error,
+        num_samples: sampled_indices.len(),
+    }
+}
+
+// ══════════════════════════════════════════════
+//  Dense STDE for positive-definite operators
+// ══════════════════════════════════════════════
+
+/// Dense STDE for a positive-definite 2nd-order operator.
+///
+/// Given a Cholesky factor `L` (lower-triangular) such that `C = L L^T`,
+/// and standard Gaussian vectors `z_s ~ N(0, I)`, this computes
+/// `v_s = L · z_s` internally and estimates
+/// `tr(C · H_u(x)) = Σ_{ij} C_{ij} ∂²u/∂x_i∂x_j`.
+///
+/// The key insight: if `E[v v^T] = C`, then `E[v^T H v] = tr(C · H)`.
+/// With `v = L · z` where `z ~ N(0, I)`, we get `E[vv^T] = L L^T = C`.
+///
+/// The caller provides `z_vectors` (standard Gaussian samples) and
+/// `cholesky_rows` (the rows of L — only lower-triangular entries matter).
+///
+/// **Indefinite C deferred**: For indefinite operators, manually split into
+/// `C⁺ - C⁻`, compute Cholesky factors for each, and call twice.
+///
+/// **No `rand` dependency**: callers provide z_vectors.
+///
+/// # Panics
+///
+/// Panics if `z_vectors` is empty, `cholesky_rows.len()` does not match
+/// `tape.num_inputs()`, or any vector has the wrong length.
+pub fn dense_stde_2nd<F: Float>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    cholesky_rows: &[&[F]],
+    z_vectors: &[&[F]],
+) -> EstimatorResult<F> {
+    assert!(!z_vectors.is_empty(), "z_vectors must not be empty");
+    let n = tape.num_inputs();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+    assert_eq!(
+        cholesky_rows.len(),
+        n,
+        "cholesky_rows.len() must match tape.num_inputs()"
+    );
+
+    let two = F::from(2.0).unwrap();
+    let mut buf = Vec::new();
+    let mut v = vec![F::zero(); n];
+    let mut value = F::zero();
+    let mut acc = WelfordAccumulator::new();
+
+    for z in z_vectors.iter() {
+        assert_eq!(z.len(), n, "z_vector length must match tape.num_inputs()");
+
+        // Compute v = L · z (lower-triangular mat-vec)
+        for i in 0..n {
+            let row = cholesky_rows[i];
+            let mut sum = F::zero();
+            // Only use lower-triangular entries: j <= i
+            for j in 0..=i {
+                sum = sum + row[j] * z[j];
+            }
+            v[i] = sum;
+        }
+
+        let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, &v, &mut buf);
+        value = c0;
+        // 2 * c2 = v^T H v, and E[v^T H v] = tr(C · H) when E[vv^T] = C
+        acc.update(two * c2);
+    }
+
+    let (estimate, sample_variance, standard_error) = acc.finalize();
+
+    EstimatorResult {
+        value,
+        estimate,
+        sample_variance,
+        standard_error,
+        num_samples: z_vectors.len(),
+    }
+}
+
+// ══════════════════════════════════════════════
+//  Sparse STDE (requires stde + diffop)
+// ══════════════════════════════════════════════
+
+#[cfg(feature = "diffop")]
+use crate::diffop::SparseSamplingDistribution;
+
+/// Sparse STDE: estimate `Lu(x)` by sampling sparse k-jets.
+///
+/// Each sample index corresponds to an entry in `dist`. For each sample,
+/// one forward pushforward of a sparse k-jet is performed.
+///
+/// The per-sample estimator is: `sign(C_α) · Z · prefactor · coeffs[k]`
+/// where `Z = dist.normalization()` (paper Eq 13).
+///
+/// Paper reference: Eq 13, Section 4.3.
+///
+/// # Panics
+///
+/// Panics if `sampled_indices` is empty or any index is out of bounds.
+#[cfg(feature = "diffop")]
+pub fn stde_sparse<F: Float + TaylorArenaLocal>(
+    tape: &BytecodeTape<F>,
+    x: &[F],
+    dist: &SparseSamplingDistribution<F>,
+    sampled_indices: &[usize],
+) -> EstimatorResult<F> {
+    assert!(
+        !sampled_indices.is_empty(),
+        "sampled_indices must not be empty"
+    );
+    let n = tape.num_inputs();
+    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+
+    let order = dist.jet_order() + 1;
+    let z = dist.normalization();
+    let _guard = TaylorDynGuard::<F>::new(order);
+
+    let mut value = F::zero();
+    let mut acc = WelfordAccumulator::new();
+    let mut buf: Vec<TaylorDyn<F>> = Vec::new();
+
+    for &idx in sampled_indices {
+        let entry = dist.entry(idx);
+
+        // Build TaylorDyn inputs: coeffs[0] = x[i] for all, then set
+        // coeffs[slot] = 1/slot! for active variables per entry.input_coeffs
+        let inputs: Vec<TaylorDyn<F>> = (0..n)
+            .map(|i| {
+                let mut coeffs = vec![F::zero(); order];
+                coeffs[0] = x[i];
+                for &(var, slot, inv_fact) in entry.input_coeffs() {
+                    if var == i && slot < order {
+                        coeffs[slot] = inv_fact;
+                    }
+                }
+                TaylorDyn::from_coeffs(&coeffs)
+            })
+            .collect();
+
+        tape.forward_tangent(&inputs, &mut buf);
+
+        let out_coeffs = buf[tape.output_index()].coeffs();
+        value = out_coeffs[0];
+
+        // Extract: raw = coeffs[output_coeff_index] * extraction_prefactor
+        let raw = out_coeffs[entry.output_coeff_index()] * entry.extraction_prefactor();
+        // Sample = sign * Z * raw
+        let sample = entry.sign() * z * raw;
+        acc.update(sample);
+    }
+
+    let (estimate, sample_variance, standard_error) = acc.finalize();
+
+    EstimatorResult {
+        value,
+        estimate,
+        sample_variance,
+        standard_error,
+        num_samples: sampled_indices.len(),
     }
 }

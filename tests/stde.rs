@@ -961,3 +961,514 @@ fn refactored_stats_identical() {
     );
     assert_eq!(stats.num_samples, generic.num_samples);
 }
+
+// ══════════════════════════════════════════════
+//  17. Higher-order diagonal estimation
+// ══════════════════════════════════════════════
+
+/// f(x) = exp(x) — all derivatives equal exp(x).
+fn exp_1d<T: Scalar>(x: &[T]) -> T {
+    x[0].exp()
+}
+
+/// f(x,y) = x^4 + y^4
+fn quartic<T: Scalar>(x: &[T]) -> T {
+    let x0 = x[0];
+    let y0 = x[1];
+    x0 * x0 * x0 * x0 + y0 * y0 * y0 * y0
+}
+
+#[test]
+fn diagonal_kth_order_exp() {
+    // ∂^k(exp(x))/∂x^k = exp(x) for k=2,3,4,5
+    let tape = record_fn(exp_1d, &[1.0]);
+    let expected = 1.0_f64.exp();
+
+    for k in 2..=5 {
+        let (val, diag) = echidna::stde::diagonal_kth_order(&tape, &[1.0], k);
+        assert_relative_eq!(val, expected, epsilon = 1e-10);
+        assert_eq!(diag.len(), 1);
+        // Tolerance relaxes with k (higher-order coefficients accumulate error)
+        let tol = 10.0_f64.powi(-(12 - k as i32));
+        assert_relative_eq!(diag[0], expected, epsilon = tol);
+    }
+}
+
+#[test]
+fn diagonal_kth_order_polynomial() {
+    // f(x,y) = x^4 + y^4
+    // ∂^4f/∂x^4 = 24, ∂^4f/∂y^4 = 24
+    // ∂^5f/∂x^5 = 0, ∂^5f/∂y^5 = 0
+    let tape = record_fn(quartic, &[2.0, 3.0]);
+
+    let (_, diag4) = echidna::stde::diagonal_kth_order(&tape, &[2.0, 3.0], 4);
+    assert_eq!(diag4.len(), 2);
+    assert_relative_eq!(diag4[0], 24.0, epsilon = 1e-6);
+    assert_relative_eq!(diag4[1], 24.0, epsilon = 1e-6);
+
+    let (_, diag5) = echidna::stde::diagonal_kth_order(&tape, &[2.0, 3.0], 5);
+    assert_eq!(diag5.len(), 2);
+    assert_relative_eq!(diag5[0], 0.0, epsilon = 1e-4);
+    assert_relative_eq!(diag5[1], 0.0, epsilon = 1e-4);
+}
+
+#[test]
+fn diagonal_kth_order_matches_hessian_diagonal() {
+    // k=2 case must match existing hessian_diagonal
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let x = [1.0, 2.0, 3.0];
+
+    let (val_hd, diag_hd) = echidna::stde::hessian_diagonal(&tape, &x);
+    let (val_dk, diag_dk) = echidna::stde::diagonal_kth_order(&tape, &x, 2);
+
+    assert_relative_eq!(val_hd, val_dk, epsilon = 1e-10);
+    for j in 0..x.len() {
+        assert_relative_eq!(diag_hd[j], diag_dk[j], epsilon = 1e-10);
+    }
+}
+
+#[test]
+fn diagonal_kth_order_stochastic_full_sample() {
+    // Full sample (all indices) should give exact sum
+    let tape = record_fn(quartic, &[2.0, 3.0]);
+    let x = [2.0, 3.0];
+
+    let (_, diag) = echidna::stde::diagonal_kth_order(&tape, &x, 4);
+    let exact_sum: f64 = diag.iter().sum(); // 24 + 24 = 48
+
+    let all_indices: Vec<usize> = (0..x.len()).collect();
+    let result = echidna::stde::diagonal_kth_order_stochastic(&tape, &x, 4, &all_indices);
+
+    assert_relative_eq!(result.estimate, exact_sum, epsilon = 1e-4);
+}
+
+#[test]
+fn diagonal_kth_order_stochastic_scaling() {
+    // Subset estimate should have n/|J| scaling
+    let tape = record_fn(quartic, &[2.0, 3.0]);
+    let x = [2.0, 3.0];
+
+    // Sample only index 0: estimate = n/|J| * mean = 2/1 * 24 = 48
+    let result = echidna::stde::diagonal_kth_order_stochastic(&tape, &x, 4, &[0]);
+    assert_relative_eq!(result.estimate, 48.0, epsilon = 1e-4);
+}
+
+#[test]
+#[should_panic(expected = "k must be >= 2")]
+fn diagonal_kth_order_k_too_small() {
+    let tape = record_fn(exp_1d, &[1.0]);
+    let _ = echidna::stde::diagonal_kth_order(&tape, &[1.0], 1);
+}
+
+#[test]
+#[should_panic(expected = "k must be <= 20")]
+fn diagonal_kth_order_k_too_large() {
+    let tape = record_fn(exp_1d, &[1.0]);
+    let _ = echidna::stde::diagonal_kth_order(&tape, &[1.0], 21);
+}
+
+// ══════════════════════════════════════════════
+//  18. Parabolic diffusion
+// ══════════════════════════════════════════════
+
+#[test]
+fn parabolic_diffusion_identity_sigma() {
+    // σ=I reduces to standard Laplacian: ½ tr(I · H · I) = ½ tr(H)
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    let e0: Vec<f64> = vec![1.0, 0.0];
+    let e1: Vec<f64> = vec![0.0, 1.0];
+    let cols: Vec<&[f64]> = vec![&e0, &e1];
+
+    let (value, diffusion) = echidna::stde::parabolic_diffusion(&tape, &x, &cols);
+    assert_relative_eq!(value, 5.0, epsilon = 1e-10);
+    // H = [[2, 0], [0, 2]], tr(H) = 4, ½ tr(H) = 2
+    assert_relative_eq!(diffusion, 2.0, epsilon = 1e-10);
+}
+
+#[test]
+fn parabolic_diffusion_diagonal_sigma() {
+    // σ = diag(a₁, a₂): ½ tr(σσ^T H) = ½ Σ a_i² ∂²u/∂x_i²
+    // f(x,y) = x²y + y³ at (1,2): H diag = [2y, 6y] = [4, 12]
+    // σ = diag(2, 3): ½(4*4 + 9*12) = ½(16 + 108) = 62
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let x = [1.0, 2.0, 3.0];
+
+    // σ = diag(2, 3, 0.5) — columns of diagonal matrix
+    let c0: Vec<f64> = vec![2.0, 0.0, 0.0];
+    let c1: Vec<f64> = vec![0.0, 3.0, 0.0];
+    let c2: Vec<f64> = vec![0.0, 0.0, 0.5];
+    let cols: Vec<&[f64]> = vec![&c0, &c1, &c2];
+
+    let (_, diffusion) = echidna::stde::parabolic_diffusion(&tape, &x, &cols);
+    // H diag = [4, 12, 0], σ = diag(2,3,0.5)
+    // ½(4*4 + 9*12 + 0.25*0) = ½(16 + 108) = 62
+    assert_relative_eq!(diffusion, 62.0, epsilon = 1e-10);
+}
+
+#[test]
+fn parabolic_diffusion_stochastic_unbiased() {
+    // Full sample (all indices) matches exact
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    let e0: Vec<f64> = vec![1.0, 0.0];
+    let e1: Vec<f64> = vec![0.0, 1.0];
+    let cols: Vec<&[f64]> = vec![&e0, &e1];
+
+    let (_, exact) = echidna::stde::parabolic_diffusion(&tape, &x, &cols);
+    let result = echidna::stde::parabolic_diffusion_stochastic(&tape, &x, &cols, &[0, 1]);
+
+    assert_relative_eq!(result.estimate, exact, epsilon = 1e-10);
+}
+
+// ══════════════════════════════════════════════
+//  19. Const-generic diagonal_kth_order_const
+// ══════════════════════════════════════════════
+
+#[test]
+fn diagonal_const_matches_dyn_k3() {
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let x = [1.0, 2.0, 3.0];
+
+    let (val_c, diag_c) = echidna::stde::diagonal_kth_order_const::<_, 3>(&tape, &x);
+    let (val_d, diag_d) = echidna::stde::diagonal_kth_order(&tape, &x, 2);
+
+    assert_relative_eq!(val_c, val_d, epsilon = 1e-10);
+    for j in 0..x.len() {
+        assert_relative_eq!(diag_c[j], diag_d[j], epsilon = 1e-10);
+    }
+}
+
+#[test]
+fn diagonal_const_matches_dyn_k4() {
+    let tape = record_fn(quartic, &[2.0, 3.0]);
+    let x = [2.0, 3.0];
+
+    let (val_c, diag_c) = echidna::stde::diagonal_kth_order_const::<_, 4>(&tape, &x);
+    let (val_d, diag_d) = echidna::stde::diagonal_kth_order(&tape, &x, 3);
+
+    assert_relative_eq!(val_c, val_d, epsilon = 1e-10);
+    for j in 0..x.len() {
+        assert_relative_eq!(diag_c[j], diag_d[j], epsilon = 1e-6);
+    }
+}
+
+#[test]
+fn diagonal_const_matches_dyn_k5() {
+    let tape = record_fn(quartic, &[2.0, 3.0]);
+    let x = [2.0, 3.0];
+
+    let (val_c, diag_c) = echidna::stde::diagonal_kth_order_const::<_, 5>(&tape, &x);
+    let (val_d, diag_d) = echidna::stde::diagonal_kth_order(&tape, &x, 4);
+
+    assert_relative_eq!(val_c, val_d, epsilon = 1e-10);
+    for j in 0..x.len() {
+        assert_relative_eq!(diag_c[j], diag_d[j], epsilon = 1e-4);
+    }
+}
+
+#[test]
+fn diagonal_const_matches_hessian_diagonal() {
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let x = [1.0, 2.0, 3.0];
+
+    let (val_hd, diag_hd) = echidna::stde::hessian_diagonal(&tape, &x);
+    let (val_c, diag_c) = echidna::stde::diagonal_kth_order_const::<_, 3>(&tape, &x);
+
+    assert_relative_eq!(val_hd, val_c, epsilon = 1e-10);
+    for j in 0..x.len() {
+        assert_relative_eq!(diag_hd[j], diag_c[j], epsilon = 1e-10);
+    }
+}
+
+#[test]
+fn diagonal_const_with_buf_reuse() {
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let x = [1.0, 2.0, 3.0];
+
+    let (val_a, diag_a) = echidna::stde::diagonal_kth_order_const::<_, 3>(&tape, &x);
+
+    let mut buf = Vec::new();
+    let (val_b, diag_b) =
+        echidna::stde::diagonal_kth_order_const_with_buf::<_, 3>(&tape, &x, &mut buf);
+    let (val_c, diag_c) =
+        echidna::stde::diagonal_kth_order_const_with_buf::<_, 3>(&tape, &x, &mut buf);
+
+    assert_relative_eq!(val_a, val_b, epsilon = 1e-14);
+    assert_relative_eq!(val_b, val_c, epsilon = 1e-14);
+    for j in 0..x.len() {
+        assert_relative_eq!(diag_a[j], diag_b[j], epsilon = 1e-14);
+        assert_relative_eq!(diag_b[j], diag_c[j], epsilon = 1e-14);
+    }
+}
+
+#[test]
+fn diagonal_const_exp_1d() {
+    // ∂^k(exp(x))/∂x^k = exp(x) for all k
+    let tape = record_fn(exp_1d, &[1.0]);
+    let expected = 1.0_f64.exp();
+
+    let (val3, diag3) = echidna::stde::diagonal_kth_order_const::<_, 3>(&tape, &[1.0]);
+    assert_relative_eq!(val3, expected, epsilon = 1e-10);
+    assert_relative_eq!(diag3[0], expected, epsilon = 1e-10);
+
+    let (_, diag4) = echidna::stde::diagonal_kth_order_const::<_, 4>(&tape, &[1.0]);
+    assert_relative_eq!(diag4[0], expected, epsilon = 1e-8);
+
+    let (_, diag5) = echidna::stde::diagonal_kth_order_const::<_, 5>(&tape, &[1.0]);
+    assert_relative_eq!(diag5[0], expected, epsilon = 1e-7);
+}
+
+// ══════════════════════════════════════════════
+//  20. Dense STDE for positive-definite operators
+// ══════════════════════════════════════════════
+
+#[test]
+fn dense_stde_identity_is_laplacian() {
+    // L=I, dense_stde_2nd should equal laplacian (same z_vectors as directions)
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    // Identity Cholesky factor
+    let row0: Vec<f64> = vec![1.0, 0.0];
+    let row1: Vec<f64> = vec![0.0, 1.0];
+    let cholesky: Vec<&[f64]> = vec![&row0, &row1];
+
+    // Use Rademacher vectors as z
+    let z0: Vec<f64> = vec![1.0, 1.0];
+    let z1: Vec<f64> = vec![1.0, -1.0];
+    let z2: Vec<f64> = vec![-1.0, 1.0];
+    let z3: Vec<f64> = vec![-1.0, -1.0];
+    let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+    let dense_result = echidna::stde::dense_stde_2nd(&tape, &x, &cholesky, &z_vecs);
+
+    // With L=I, v=z, so dense_stde_2nd is the same as laplacian
+    let (_, lap) = echidna::stde::laplacian(&tape, &x, &z_vecs);
+
+    assert_relative_eq!(dense_result.estimate, lap, epsilon = 1e-10);
+}
+
+#[test]
+fn dense_stde_diagonal_scaling() {
+    // L=diag(a), C=diag(a²): tr(C·H) = Σ a_j² ∂²u/∂x_j²
+    // f(x,y) = x²+y², H=diag(2,2), a=(2,3)
+    // tr(C·H) = 4*2 + 9*2 = 26
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    let row0: Vec<f64> = vec![2.0, 0.0];
+    let row1: Vec<f64> = vec![0.0, 3.0];
+    let cholesky: Vec<&[f64]> = vec![&row0, &row1];
+
+    // All 4 Rademacher z-vectors for exact result
+    let z0: Vec<f64> = vec![1.0, 1.0];
+    let z1: Vec<f64> = vec![1.0, -1.0];
+    let z2: Vec<f64> = vec![-1.0, 1.0];
+    let z3: Vec<f64> = vec![-1.0, -1.0];
+    let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+    let result = echidna::stde::dense_stde_2nd(&tape, &x, &cholesky, &z_vecs);
+    assert_relative_eq!(result.estimate, 26.0, epsilon = 1e-10);
+}
+
+#[test]
+fn dense_stde_off_diagonal() {
+    // L with off-diagonal entries, verify against exact tr(C·H) from full Hessian
+    // f(x,y,z) = x²y + y³ at (1,2,3)
+    // H = [[4, 2, 0], [2, 12, 0], [0, 0, 0]]
+    // L = [[1, 0, 0], [0.5, 1, 0], [0, 0, 1]] (lower triangular)
+    // C = L·L^T = [[1, 0.5, 0], [0.5, 1.25, 0], [0, 0, 1]]
+    // tr(C·H) = C[0][0]*H[0][0] + C[0][1]*H[1][0] + C[1][0]*H[0][1] + C[1][1]*H[1][1]
+    //         + C[0][2]*H[2][0] + ... (all zero)
+    //         = 1*4 + 0.5*2 + 0.5*2 + 1.25*12 + 0 + 0 + 0 + 0 + 1*0
+    //         = 4 + 1 + 1 + 15 = 21
+    let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+    let x = [1.0, 2.0, 3.0];
+
+    let row0: Vec<f64> = vec![1.0, 0.0, 0.0];
+    let row1: Vec<f64> = vec![0.5, 1.0, 0.0];
+    let row2: Vec<f64> = vec![0.0, 0.0, 1.0];
+    let cholesky: Vec<&[f64]> = vec![&row0, &row1, &row2];
+
+    // All 8 Rademacher z-vectors for exact result
+    let signs: [f64; 2] = [1.0, -1.0];
+    let mut vecs = Vec::new();
+    for &s0 in &signs {
+        for &s1 in &signs {
+            for &s2 in &signs {
+                vecs.push(vec![s0, s1, s2]);
+            }
+        }
+    }
+    let z_vecs: Vec<&[f64]> = vecs.iter().map(|v| v.as_slice()).collect();
+
+    let result = echidna::stde::dense_stde_2nd(&tape, &x, &cholesky, &z_vecs);
+    assert_relative_eq!(result.estimate, 21.0, epsilon = 1e-8);
+}
+
+#[test]
+fn dense_stde_matches_parabolic() {
+    // L=σ, dense_stde_2nd matches 2*parabolic_diffusion (½ tr(σσ^T H) = ½ * dense_stde_2nd)
+    // σ = diag(2, 3) as column vectors
+    // parabolic_diffusion computes ½ tr(σσ^T H)
+    // dense_stde_2nd computes tr(σσ^T H) = tr(C·H)
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    // σ columns (for parabolic_diffusion)
+    let c0: Vec<f64> = vec![2.0, 0.0];
+    let c1: Vec<f64> = vec![0.0, 3.0];
+    let cols: Vec<&[f64]> = vec![&c0, &c1];
+    let (_, diffusion) = echidna::stde::parabolic_diffusion(&tape, &x, &cols);
+
+    // Same σ as Cholesky rows (for dense_stde_2nd)
+    let row0: Vec<f64> = vec![2.0, 0.0];
+    let row1: Vec<f64> = vec![0.0, 3.0];
+    let cholesky: Vec<&[f64]> = vec![&row0, &row1];
+
+    let z0: Vec<f64> = vec![1.0, 1.0];
+    let z1: Vec<f64> = vec![1.0, -1.0];
+    let z2: Vec<f64> = vec![-1.0, 1.0];
+    let z3: Vec<f64> = vec![-1.0, -1.0];
+    let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+    let dense_result = echidna::stde::dense_stde_2nd(&tape, &x, &cholesky, &z_vecs);
+
+    // parabolic_diffusion = ½ tr(C·H), dense_stde_2nd = tr(C·H)
+    assert_relative_eq!(dense_result.estimate, 2.0 * diffusion, epsilon = 1e-10);
+}
+
+#[test]
+fn dense_stde_stats_populated() {
+    let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    let row0: Vec<f64> = vec![1.0, 0.0];
+    let row1: Vec<f64> = vec![0.0, 1.0];
+    let cholesky: Vec<&[f64]> = vec![&row0, &row1];
+
+    let z0: Vec<f64> = vec![1.0, 1.0];
+    let z1: Vec<f64> = vec![1.0, -1.0];
+    let z_vecs: Vec<&[f64]> = vec![&z0, &z1];
+
+    let result = echidna::stde::dense_stde_2nd(&tape, &x, &cholesky, &z_vecs);
+    assert_eq!(result.num_samples, 2);
+    assert_relative_eq!(result.value, 5.0, epsilon = 1e-10);
+    // With diagonal H and identity Cholesky, variance is zero
+    assert_relative_eq!(result.sample_variance, 0.0, epsilon = 1e-10);
+}
+
+// ══════════════════════════════════════════════
+//  21. Sparse STDE (requires stde + diffop)
+// ══════════════════════════════════════════════
+
+#[cfg(feature = "diffop")]
+mod sparse_stde_tests {
+    use super::*;
+    use echidna::diffop::DiffOp;
+
+    #[test]
+    fn stde_sparse_full_sample_matches_exact() {
+        // Full sample (all entries) should match DiffOp::eval exactly
+        // Use Laplacian on sum_of_squares: exact = 4
+        let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let op = DiffOp::<f64>::laplacian(2);
+        let (_, exact) = op.eval(&tape, &x);
+
+        let dist = op.sparse_distribution();
+        let all_indices: Vec<usize> = (0..dist.len()).collect();
+        let result = echidna::stde::stde_sparse(&tape, &x, &dist, &all_indices);
+
+        assert_relative_eq!(result.estimate, exact, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn stde_sparse_laplacian_convergence() {
+        // 1000 deterministic samples: mean should be within tolerance of exact
+        let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+        let x = [1.0, 2.0, 3.0];
+
+        let op = DiffOp::<f64>::laplacian(3);
+        let (_, exact) = op.eval(&tape, &x); // 16.0
+
+        let dist = op.sparse_distribution();
+
+        // Generate deterministic "random" indices via simple hash
+        let num_samples = 1000;
+        let indices: Vec<usize> = (0..num_samples)
+            .map(|i| {
+                let u = ((i as u64 * 2654435761u64) % 1000) as f64 / 1000.0;
+                dist.sample_index(u)
+            })
+            .collect();
+
+        let result = echidna::stde::stde_sparse(&tape, &x, &dist, &indices);
+
+        // Mean should be close to exact (within 3 standard errors)
+        let error = (result.estimate - exact).abs();
+        let bound = 3.0 * result.standard_error;
+        assert!(
+            error < bound || error < 1.0,
+            "stde_sparse estimate {} too far from exact {}: error = {}, 3*SE = {}",
+            result.estimate,
+            exact,
+            error,
+            bound,
+        );
+    }
+
+    #[test]
+    fn stde_sparse_diagonal_4th() {
+        // Biharmonic on quartic: ∂⁴(x⁴+y⁴)/∂x⁴ + ∂⁴(x⁴+y⁴)/∂y⁴ = 24 + 24 = 48
+        let tape = record_fn(quartic, &[2.0, 3.0]);
+        let x = [2.0, 3.0];
+
+        let op = DiffOp::<f64>::biharmonic(2);
+        let (_, exact) = op.eval(&tape, &x);
+        assert_relative_eq!(exact, 48.0, epsilon = 1e-4);
+
+        let dist = op.sparse_distribution();
+        let all_indices: Vec<usize> = (0..dist.len()).collect();
+        let result = echidna::stde::stde_sparse(&tape, &x, &dist, &all_indices);
+
+        assert_relative_eq!(result.estimate, 48.0, epsilon = 1e-4);
+    }
+
+    /// f(x,y) = sin(x)*cos(y)
+    fn sin_cos_2d<T: Scalar>(x: &[T]) -> T {
+        x[0].sin() * x[1].cos()
+    }
+
+    #[test]
+    fn stde_sparse_mixed_second_order() {
+        // Test with an operator that has mixed second-order terms:
+        // L = ∂²/∂x² + 2∂²/∂y² on sin(x)cos(y) at (1, 2)
+        // ∂²(sin(x)cos(y))/∂x² = -sin(x)cos(y) = -sin(1)cos(2)
+        // ∂²(sin(x)cos(y))/∂y² = -sin(x)cos(y) = -sin(1)cos(2)
+        // L = -sin(1)cos(2) + 2*(-sin(1)cos(2)) = -3*sin(1)cos(2)
+        let tape = record_fn(sin_cos_2d, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let expected = -3.0 * 1.0_f64.sin() * 2.0_f64.cos();
+
+        let op = DiffOp::from_orders(
+            2,
+            &[
+                (1.0, &[2, 0]), // ∂²/∂x²
+                (2.0, &[0, 2]), // 2∂²/∂y²
+            ],
+        );
+        let (_, exact) = op.eval(&tape, &x);
+        assert_relative_eq!(exact, expected, epsilon = 1e-6);
+
+        let dist = op.sparse_distribution();
+        let all_indices: Vec<usize> = (0..dist.len()).collect();
+        let result = echidna::stde::stde_sparse(&tape, &x, &dist, &all_indices);
+        assert_relative_eq!(result.estimate, expected, epsilon = 1e-6);
+    }
+}

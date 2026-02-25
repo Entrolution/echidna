@@ -249,6 +249,164 @@ fn bench_transfer_overhead(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "stde")]
+fn bench_gpu_taylor_2nd(c: &mut Criterion) {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let mut group = c.benchmark_group("gpu_taylor_2nd");
+
+    let n = 100;
+    let x0: Vec<f32> = make_input(n).iter().map(|&v| v as f32).collect();
+    let x0_f64: Vec<f64> = make_input(n);
+    let (tape, _) = record(|v| rosenbrock(v), &x0_f64);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let gpu_tape = ctx.upload_tape(&gpu_data);
+
+    for &batch_size in &[100u32, 1000, 10000] {
+        let mut primals = Vec::with_capacity(batch_size as usize * n);
+        let mut seeds = Vec::with_capacity(batch_size as usize * n);
+        for b in 0..batch_size {
+            primals.extend_from_slice(&x0);
+            let seed: Vec<f32> = (0..n)
+                .map(|i| {
+                    if (b as usize * n + i) % 2 == 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                })
+                .collect();
+            seeds.extend_from_slice(&seed);
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("batch", batch_size),
+            &batch_size,
+            |b, &bs| {
+                b.iter(|| {
+                    ctx.taylor_forward_2nd_batch(
+                        black_box(&gpu_tape),
+                        black_box(&primals),
+                        black_box(&seeds),
+                        bs,
+                    )
+                    .unwrap()
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+#[cfg(feature = "stde")]
+fn bench_gpu_laplacian_vs_cpu(c: &mut Criterion) {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let mut group = c.benchmark_group("gpu_laplacian_vs_cpu");
+
+    let n = 100;
+    let x_f64: Vec<f64> = make_input(n);
+    let x_f32: Vec<f32> = x_f64.iter().map(|&v| v as f32).collect();
+    let (tape_f64, _) = record(|v| rosenbrock(v), &x_f64);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
+    let gpu_tape = ctx.upload_tape(&gpu_data);
+
+    let s = 100;
+    let dirs_f64: Vec<Vec<f64>> = (0..s)
+        .map(|si| {
+            (0..n)
+                .map(|i| if (si * n + i) % 2 == 0 { 1.0 } else { -1.0 })
+                .collect()
+        })
+        .collect();
+    let dir_refs_f64: Vec<&[f64]> = dirs_f64.iter().map(|d| d.as_slice()).collect();
+
+    let dirs_f32: Vec<Vec<f32>> = dirs_f64
+        .iter()
+        .map(|d| d.iter().map(|&v| v as f32).collect())
+        .collect();
+    let dir_refs_f32: Vec<&[f32]> = dirs_f32.iter().map(|d| d.as_slice()).collect();
+
+    group.bench_function(BenchmarkId::new("gpu", n), |b| {
+        b.iter(|| {
+            echidna::gpu::stde_gpu::laplacian_gpu(
+                black_box(&ctx),
+                black_box(&gpu_tape),
+                black_box(&x_f32),
+                black_box(&dir_refs_f32),
+            )
+            .unwrap()
+        })
+    });
+
+    group.bench_function(BenchmarkId::new("cpu", n), |b| {
+        b.iter(|| {
+            echidna::stde::laplacian(
+                black_box(&tape_f64),
+                black_box(&x_f64),
+                black_box(&dir_refs_f64),
+            )
+        })
+    });
+
+    group.finish();
+}
+
+#[cfg(feature = "stde")]
+fn bench_gpu_hessian_diag_vs_cpu(c: &mut Criterion) {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let mut group = c.benchmark_group("gpu_hessian_diag_vs_cpu");
+
+    for &n in &[100usize, 500] {
+        let x_f64: Vec<f64> = make_input(n);
+        let x_f32: Vec<f32> = x_f64.iter().map(|&v| v as f32).collect();
+        let (tape_f64, _) = record(|v| rosenbrock(v), &x_f64);
+        let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+
+        group.bench_function(BenchmarkId::new("gpu", n), |b| {
+            b.iter(|| {
+                echidna::gpu::stde_gpu::hessian_diagonal_gpu(
+                    black_box(&ctx),
+                    black_box(&gpu_tape),
+                    black_box(&x_f32),
+                )
+                .unwrap()
+            })
+        });
+
+        group.bench_function(BenchmarkId::new("cpu", n), |b| {
+            b.iter(|| echidna::stde::hessian_diagonal(black_box(&tape_f64), black_box(&x_f64)))
+        });
+    }
+
+    group.finish();
+}
+
+#[cfg(feature = "stde")]
+criterion_group!(
+    benches,
+    bench_forward_batch,
+    bench_gradient_batch,
+    bench_gpu_vs_cpu,
+    bench_transfer_overhead,
+    bench_gpu_taylor_2nd,
+    bench_gpu_laplacian_vs_cpu,
+    bench_gpu_hessian_diag_vs_cpu,
+);
+
+#[cfg(not(feature = "stde"))]
 criterion_group!(
     benches,
     bench_forward_batch,
@@ -256,4 +414,5 @@ criterion_group!(
     bench_gpu_vs_cpu,
     bench_transfer_overhead,
 );
+
 criterion_main!(benches);

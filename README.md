@@ -13,12 +13,12 @@ A high-performance automatic differentiation library for Rust.
 - **Bytecode graph-mode AD** -- record-once evaluate-many SoA tape with CSE, DCE, constant folding, and algebraic simplification
 - **Taylor-mode higher-order derivatives** -- const-generic and arena-based dynamic implementations
 - **Sparse Jacobian/Hessian** -- automatic sparsity detection and graph coloring
-- **GPU acceleration** -- wgpu (Metal/Vulkan/DX12) and CUDA batch evaluation
+- **GPU acceleration** -- wgpu (Metal/Vulkan/DX12) and CUDA batch evaluation, including GPU-accelerated STDE
 - **Nonsmooth AD** -- branch tracking, kink detection for abs/min/max/signum/floor/ceil/round/trunc, Clarke generalized Jacobians
 - **Gradient checkpointing** -- binomial, online, disk-backed, and hint-guided strategies
 - **Cross-country elimination** -- Markowitz vertex elimination for optimal Jacobian accumulation
-- **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, variance reduction
-- **Arbitrary differential operators** -- any mixed partial via jet coefficients, plan-once evaluate-many
+- **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, higher-order diagonals, sparse STDE for arbitrary operators, parabolic PDE σ-transform, variance reduction
+- **Arbitrary differential operators** -- any mixed partial via jet coefficients, plan-once evaluate-many, `DiffOp` type with sparse sampling distributions
 - **Composable type nesting** -- `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for arbitrary-order differentiation
 
 ## Feature Overview
@@ -32,11 +32,11 @@ A high-performance automatic differentiation library for Rust.
 | Sparse derivatives | Auto sparsity detection + graph coloring for Jacobians and Hessians |
 | Cross-country elimination | Markowitz vertex elimination for optimal Jacobian accumulation |
 | Checkpointing | Binomial, online, disk-backed, and hint-guided gradient checkpointing |
-| STDE | Stochastic Taylor Derivative Estimators -- Laplacian, Hessian diagonal, variance reduction |
-| Differential operators | `diffop::mixed_partial`, `diffop::hessian`, `JetPlan` -- arbitrary mixed partials via jet extraction |
+| STDE | Stochastic Taylor Derivative Estimators -- Laplacian, Hessian diagonal, higher-order diagonals, const-generic diagonal, dense STDE, sparse STDE, parabolic σ-transform |
+| Differential operators | `diffop::mixed_partial`, `diffop::hessian`, `JetPlan`, `DiffOp` -- arbitrary mixed partials and operator evaluation |
 | Nonsmooth AD | Branch tracking, kink detection (8 nonsmooth ops), Clarke generalized Jacobian |
 | Laurent series | `Laurent<F, K>` -- singularity analysis via Laurent expansion |
-| GPU acceleration | wgpu (Metal/Vulkan/DX12, f32) and CUDA (NVIDIA, f32+f64) batch evaluation |
+| GPU acceleration | wgpu (Metal/Vulkan/DX12, f32) and CUDA (NVIDIA, f32+f64) batch evaluation + GPU STDE |
 | Composable nesting | `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for higher-order |
 | Optimization | L-BFGS, Newton, trust-region solvers; implicit differentiation and piggyback (via `echidna-optim`) |
 
@@ -200,6 +200,8 @@ echidna = { version = "0.3", features = ["bytecode", "taylor"] }
 | `tape.ode_taylor_step::<K>(y0)` | ODE Taylor integration step |
 | `stde::laplacian(tape, x, dirs)` | Stochastic Laplacian estimate |
 | `stde::hessian_diagonal(tape, x)` | Stochastic Hessian diagonal |
+| `stde::diagonal_kth_order_const::<K>(tape, x)` | Exact k-th order diagonal (const-generic, stack-allocated) |
+| `stde::dense_stde_2nd(tape, x, cholesky, z)` | Dense STDE for positive-definite 2nd-order operators |
 | `stde::directional_derivatives(tape, x, dirs)` | Batched 1st and 2nd order directional derivatives |
 | `stde::laplacian_with_control(tape, x, dirs, ctrl)` | Laplacian with control variate variance reduction |
 | `stde::laplacian_hutchpp(tape, x, dirs_s, dirs_g)` | Hutch++ Laplacian estimator (lower variance) |
@@ -223,6 +225,10 @@ echidna = { version = "0.3", features = ["bytecode", "taylor"] }
 | `ctx.sparse_jacobian(bufs, inputs)` | Sparse Jacobian on GPU |
 | `ctx.hvp_batch(bufs, inputs, dirs)` | Batched Hessian-vector products |
 | `ctx.sparse_hessian(bufs, inputs)` | Sparse Hessian on GPU |
+| `ctx.taylor_forward_2nd_batch(bufs, primals, seeds)` | Batched 2nd-order Taylor forward (requires `stde`) |
+| `stde_gpu::laplacian_gpu(ctx, bufs, x, dirs)` | GPU-accelerated Laplacian estimator |
+| `stde_gpu::hessian_diagonal_gpu(ctx, bufs, x)` | GPU-accelerated exact Hessian diagonal |
+| `stde_gpu::laplacian_with_control_gpu(ctx, bufs, x, dirs, ctrl)` | GPU Laplacian with control variate |
 
 CUDA additionally supports `_f64` variants of all methods.
 

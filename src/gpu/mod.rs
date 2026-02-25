@@ -16,8 +16,22 @@
 //! - [`sparse_jacobian`](GpuBackend::sparse_jacobian) — GPU-accelerated sparse Jacobian
 //! - [`hvp_batch`](GpuBackend::hvp_batch) — batched Hessian-vector product
 //! - [`sparse_hessian`](GpuBackend::sparse_hessian) — GPU-accelerated sparse Hessian
+//! - `taylor_forward_2nd_batch` — batched second-order Taylor forward propagation (inherent, requires `stde`)
 //!
 //! CUDA additionally provides f64 methods as inherent methods on [`CudaContext`].
+//!
+//! # GPU-Accelerated STDE (requires `stde`)
+//!
+//! The [`stde_gpu`] module provides GPU-accelerated versions of the CPU STDE
+//! functions. These use batched second-order Taylor forward propagation to
+//! evaluate many directions in parallel:
+//!
+//! - [`stde_gpu::laplacian_gpu`] — Hutchinson trace estimator on GPU
+//! - [`stde_gpu::hessian_diagonal_gpu`] — exact Hessian diagonal via basis pushforwards
+//! - [`stde_gpu::laplacian_with_control_gpu`] — variance-reduced Laplacian with diagonal control variate
+//!
+//! The Taylor kernel propagates `(c0, c1, c2)` triples through the tape for
+//! each batch element, where c2 = v^T H v / 2. All 43 opcodes are supported.
 
 use crate::bytecode_tape::BytecodeTape;
 use crate::opcode::OpCode;
@@ -27,6 +41,9 @@ pub mod wgpu_backend;
 
 #[cfg(feature = "gpu-cuda")]
 pub mod cuda_backend;
+
+#[cfg(feature = "stde")]
+pub mod stde_gpu;
 
 #[cfg(feature = "gpu-wgpu")]
 pub use wgpu_backend::{WgpuContext, WgpuTapeBuffers};
@@ -117,6 +134,22 @@ pub trait GpuBackend {
         tape_cpu: &mut BytecodeTape<f32>,
         x: &[f32],
     ) -> Result<(f32, Vec<f32>, crate::sparse::SparsityPattern, Vec<f32>), GpuError>;
+}
+
+/// Result of a batched second-order Taylor forward propagation.
+///
+/// Each field has `batch_size * num_outputs` elements (row-major: one row per batch element).
+/// The Taylor convention is `c[k] = f^(k)(t₀) / k!`, so:
+/// - `values[i]` = f(x) (primal value)
+/// - `c1s[i]` = directional first derivative
+/// - `c2s[i]` = directional second derivative / 2
+pub struct TaylorBatchResult<F> {
+    /// Primal output values `[batch_size * num_outputs]`.
+    pub values: Vec<F>,
+    /// First-order Taylor coefficients `[batch_size * num_outputs]`.
+    pub c1s: Vec<F>,
+    /// Second-order Taylor coefficients `[batch_size * num_outputs]`.
+    pub c2s: Vec<F>,
 }
 
 /// Error type for GPU operations.
