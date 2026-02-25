@@ -28,6 +28,11 @@ use super::{GpuBackend, GpuError, GpuTapeData};
 const KERNEL_SRC: &str = include_str!("kernels/tape_eval.cu");
 const BLOCK_SIZE: u32 = 256;
 
+/// Convert any `Display` error into `GpuError::Other`.
+fn cuda_err(e: impl std::fmt::Display) -> GpuError {
+    GpuError::Other(format!("{e}"))
+}
+
 /// Uploaded tape data on CUDA device.
 pub struct CudaTapeBuffers {
     pub(crate) opcodes: CudaSlice<u32>,
@@ -183,15 +188,13 @@ impl GpuBackend for CudaContext {
 
         assert_eq!(inputs.len(), (batch_size * ni) as usize);
 
-        let d_inputs = s
-            .clone_htod(inputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_inputs = s.clone_htod(inputs).map_err(cuda_err)?;
         let mut d_values = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_outputs = s
             .alloc_zeros::<f32>((batch_size * no) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch_size),
@@ -213,13 +216,10 @@ impl GpuBackend for CudaContext {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let results = s
-            .clone_dtoh(&d_outputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let results = s.clone_dtoh(&d_outputs).map_err(cuda_err)?;
         Ok(results)
     }
 
@@ -237,15 +237,13 @@ impl GpuBackend for CudaContext {
 
         assert_eq!(inputs.len(), (batch_size * ni) as usize);
 
-        let d_inputs = s
-            .clone_htod(inputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_inputs = s.clone_htod(inputs).map_err(cuda_err)?;
         let mut d_values = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_outputs = s
             .alloc_zeros::<f32>((batch_size * no) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         // Forward pass
         let cfg = LaunchConfig {
@@ -268,15 +266,15 @@ impl GpuBackend for CudaContext {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         // Reverse pass
         let mut d_adjoints = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_grads = s
             .alloc_zeros::<f32>((batch_size * ni) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let mut builder = s.launch_builder(&self.reverse_f32);
         builder.arg(&tape.opcodes);
@@ -290,16 +288,11 @@ impl GpuBackend for CudaContext {
         builder.arg(&ni);
         builder.arg(&nv);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let output_vals = s
-            .clone_dtoh(&d_outputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let grads = s
-            .clone_dtoh(&d_grads)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let output_vals = s.clone_dtoh(&d_outputs).map_err(cuda_err)?;
+        let grads = s.clone_dtoh(&d_grads).map_err(cuda_err)?;
         Ok((output_vals, grads))
     }
 
@@ -344,21 +337,18 @@ impl GpuBackend for CudaContext {
             for _ in 0..batch {
                 replicated.extend_from_slice(x);
             }
-            s.clone_htod(&replicated)
-                .map_err(|e| GpuError::Other(format!("{e}")))?
+            s.clone_htod(&replicated).map_err(cuda_err)?
         };
-        let d_seeds = s
-            .clone_htod(&seeds)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_seeds = s.clone_htod(&seeds).map_err(cuda_err)?;
         let mut d_primals = s
             .alloc_zeros::<f32>((batch * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_tangents = s
             .alloc_zeros::<f32>((batch * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_tangent_out = s
             .alloc_zeros::<f32>((batch * tape.num_outputs) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch),
@@ -382,13 +372,10 @@ impl GpuBackend for CudaContext {
         builder.arg(&nv);
         builder.arg(&tape.num_outputs);
         builder.arg(&batch);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let tangent_outs = s
-            .clone_dtoh(&d_tangent_out)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let tangent_outs = s.clone_dtoh(&d_tangent_out).map_err(cuda_err)?;
 
         // Get output values from CPU
         tape_cpu.forward(x);
@@ -425,30 +412,26 @@ impl GpuBackend for CudaContext {
             primal_inputs.extend_from_slice(x);
         }
 
-        let d_primal_in = s
-            .clone_htod(&primal_inputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let d_seeds = s
-            .clone_htod(tangent_dirs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_primal_in = s.clone_htod(&primal_inputs).map_err(cuda_err)?;
+        let d_seeds = s.clone_htod(tangent_dirs).map_err(cuda_err)?;
         let mut d_primals = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_tans = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_adj_re = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_adj_eps = s
             .alloc_zeros::<f32>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_grads = s
             .alloc_zeros::<f32>((batch_size * ni) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_hvps = s
             .alloc_zeros::<f32>((batch_size * ni) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch_size),
@@ -474,16 +457,11 @@ impl GpuBackend for CudaContext {
         builder.arg(&ni);
         builder.arg(&nv);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let grads = s
-            .clone_dtoh(&d_grads)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let hvps = s
-            .clone_dtoh(&d_hvps)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let grads = s.clone_dtoh(&d_grads).map_err(cuda_err)?;
+        let hvps = s.clone_dtoh(&d_hvps).map_err(cuda_err)?;
         Ok((grads, hvps))
     }
 
@@ -553,15 +531,13 @@ impl CudaContext {
 
         assert_eq!(inputs.len(), (batch_size * ni) as usize);
 
-        let d_inputs = s
-            .clone_htod(inputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_inputs = s.clone_htod(inputs).map_err(cuda_err)?;
         let mut d_values = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_outputs = s
             .alloc_zeros::<f64>((batch_size * no) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch_size),
@@ -583,13 +559,10 @@ impl CudaContext {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let results = s
-            .clone_dtoh(&d_outputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let results = s.clone_dtoh(&d_outputs).map_err(cuda_err)?;
         Ok(results)
     }
 
@@ -607,15 +580,13 @@ impl CudaContext {
 
         assert_eq!(inputs.len(), (batch_size * ni) as usize);
 
-        let d_inputs = s
-            .clone_htod(inputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_inputs = s.clone_htod(inputs).map_err(cuda_err)?;
         let mut d_values = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_outputs = s
             .alloc_zeros::<f64>((batch_size * no) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch_size),
@@ -638,15 +609,15 @@ impl CudaContext {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         // Reverse
         let mut d_adjoints = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_grads = s
             .alloc_zeros::<f64>((batch_size * ni) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let mut builder = s.launch_builder(&self.reverse_f64);
         builder.arg(&tape.opcodes);
@@ -660,16 +631,11 @@ impl CudaContext {
         builder.arg(&ni);
         builder.arg(&nv);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let output_vals = s
-            .clone_dtoh(&d_outputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let grads = s
-            .clone_dtoh(&d_grads)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let output_vals = s.clone_dtoh(&d_outputs).map_err(cuda_err)?;
+        let grads = s.clone_dtoh(&d_grads).map_err(cuda_err)?;
         Ok((output_vals, grads))
     }
 
@@ -712,21 +678,18 @@ impl CudaContext {
             for _ in 0..batch {
                 replicated.extend_from_slice(x);
             }
-            s.clone_htod(&replicated)
-                .map_err(|e| GpuError::Other(format!("{e}")))?
+            s.clone_htod(&replicated).map_err(cuda_err)?
         };
-        let d_seeds = s
-            .clone_htod(&seeds)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_seeds = s.clone_htod(&seeds).map_err(cuda_err)?;
         let mut d_primals = s
             .alloc_zeros::<f64>((batch * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_tangents = s
             .alloc_zeros::<f64>((batch * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_tangent_out = s
             .alloc_zeros::<f64>((batch * tape.num_outputs) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch),
@@ -750,13 +713,10 @@ impl CudaContext {
         builder.arg(&nv);
         builder.arg(&tape.num_outputs);
         builder.arg(&batch);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let tangent_outs = s
-            .clone_dtoh(&d_tangent_out)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let tangent_outs = s.clone_dtoh(&d_tangent_out).map_err(cuda_err)?;
 
         tape_cpu.forward(x);
         let output_values = tape_cpu.output_values();
@@ -839,30 +799,26 @@ impl CudaContext {
             primal_inputs.extend_from_slice(x);
         }
 
-        let d_primal_in = s
-            .clone_htod(&primal_inputs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let d_seeds = s
-            .clone_htod(tangent_dirs)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        let d_primal_in = s.clone_htod(&primal_inputs).map_err(cuda_err)?;
+        let d_seeds = s.clone_htod(tangent_dirs).map_err(cuda_err)?;
         let mut d_primals = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_tans = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_adj_re = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_adj_eps = s
             .alloc_zeros::<f64>((batch_size * nv) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_grads = s
             .alloc_zeros::<f64>((batch_size * ni) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
         let mut d_hvps = s
             .alloc_zeros::<f64>((batch_size * ni) as usize)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+            .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
             grid_dim: Self::grid_dim(batch_size),
@@ -888,16 +844,11 @@ impl CudaContext {
         builder.arg(&ni);
         builder.arg(&nv);
         builder.arg(&batch_size);
-        unsafe { builder.launch(cfg) }.map_err(|e| GpuError::Other(format!("{e}")))?;
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
-        s.synchronize()
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let grads = s
-            .clone_dtoh(&d_grads)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        let hvps = s
-            .clone_dtoh(&d_hvps)
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
+        s.synchronize().map_err(cuda_err)?;
+        let grads = s.clone_dtoh(&d_grads).map_err(cuda_err)?;
+        let hvps = s.clone_dtoh(&d_hvps).map_err(cuda_err)?;
         Ok((grads, hvps))
     }
 }

@@ -1,6 +1,6 @@
 # echidna Roadmap
 
-**Status**: Phases 1-4 (core AD), Phase 8 partial (implicit IFT), R4a (piggyback differentiation), R4b (interleaved forward-adjoint piggyback), R4c (second-order implicit derivatives), R4d (sparse F_z exploitation), R1a+R1c+R1d+R3 (Taylor mode AD), R2a+R2c (STDE), R2b (variance reduction), R5 (cross-country elimination), R6 (nonsmooth extensions), R7 (tape serialization), R8 (benchmarking infrastructure), R9 (checkpointing improvements), R10 (integration improvements), R11 (GPU acceleration), R12 (composable mode nesting), and R13 (source-level optimizations) are complete.
+**Status**: All roadmap items (R1–R13) are complete. For deferred and rejected work, see [ADR: Deferred and Rejected Work](adr-deferred-work.md).
 
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
@@ -35,9 +35,6 @@ This roadmap synthesizes:
 | R7 | Tape serialization: `BytecodeTape` serde support (manual Serialize/Deserialize impls), `OpCode`/`SparsityPattern` serde derives, R6 types (`KinkEntry`, `NonsmoothInfo`, `ClarkeError`) serde derives, `Laurent<F, K>` manual serde impls (const-generic array handling), JSON + bincode roundtrip, f32/f64/multi-output coverage, 9 tests | Complete |
 | R8 | Benchmarking infrastructure: shared test functions (Rosenbrock, Rastrigin, nn_layer, PDE Poisson), refactored existing benches to common module, new benches for Taylor mode, STDE estimators, cross-country/sparse Jacobian/nonsmooth, comparison against num-dual, CI regression detection via criterion-compare-action | Complete |
 | R9 | Checkpointing improvements: online checkpointing (periodic thinning for unknown step count), disk-backed checkpointing (raw byte I/O with panic-safe cleanup), user-controlled checkpoint placement hints (Revolve sub-interval distribution), shared backward pass extraction, 18 new tests, online benchmarks | Complete |
-
-**Deferred from completed phases** (carried forward below):
-- Custom elemental derivatives registration (CustomOp exists but has no reverse-mode derivative hook)
 
 ---
 
@@ -176,7 +173,7 @@ Key files: `src/bytecode_tape.rs`, `src/nonsmooth.rs`, `src/laurent.rs`, `tests/
 
 Expanded from 3 Criterion bench files (forward, reverse, bytecode — Rosenbrock only) to 7 bench files covering all AD modes. Shared test functions in `benches/common/mod.rs` (Rosenbrock, Rastrigin, nn_layer, PDE Poisson residual). New bench files: `taylor.rs` (Taylor reverse, buffer reuse, higher-order), `stde.rs` (Laplacian estimator, Hessian diagonal, jet buffer reuse), `advanced.rs` (cross-country Jacobian, sparse Jacobian, nonsmooth overhead, Clarke subdifferential), `comparison.rs` (echidna vs num-dual for gradient, Jacobian, Hessian). CI regression detection via `boa-dev/criterion-compare-action` posts comparison as PR comment. ad-trait deferred (num-dual only).
 
-Key files: `benches/common/mod.rs`, `benches/taylor.rs`, `benches/stde.rs`, `benches/advanced.rs`, `benches/comparison.rs`, `.github/workflows/bench.yml`.
+Key files: `benches/common/mod.rs`, `benches/taylor.rs`, `benches/stde.rs`, `benches/advanced.rs`, `benches/comparison.rs`.
 
 ### R9. Checkpointing Improvements — **COMPLETE**
 **Deferred from Phase 2**

@@ -27,6 +27,7 @@ impl<F: Float, const N: usize> Sub for DualVec<F, N> {
     }
 }
 
+// Mul uses Add internally (product rule: (a*b)' = a'*b + a*b'), which clippy flags as suspicious
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const N: usize> Mul for DualVec<F, N> {
     type Output = Self;

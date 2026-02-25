@@ -151,12 +151,13 @@ fn roundtrip_multi_output() {
 }
 
 #[test]
-fn roundtrip_tape_bincode() {
+fn roundtrip_tape_cbor() {
     let x = [1.5_f64, 2.5];
     let (mut tape, _) = record(|v| rosenbrock(v), &x);
 
-    let bytes = bincode::serialize(&tape).unwrap();
-    let mut tape2: echidna::BytecodeTape<f64> = bincode::deserialize(&bytes).unwrap();
+    let mut bytes = Vec::new();
+    ciborium::into_writer(&tape, &mut bytes).unwrap();
+    let mut tape2: echidna::BytecodeTape<f64> = ciborium::from_reader(&bytes[..]).unwrap();
 
     let grad_orig = tape.gradient(&x);
     let grad_deser = tape2.gradient(&x);
