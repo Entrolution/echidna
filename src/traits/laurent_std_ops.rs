@@ -75,6 +75,7 @@ impl<F: Float, const K: usize> Sub for Laurent<F, K> {
     }
 }
 
+// Laurent Mul delegates to taylor_ops::taylor_mul (Cauchy product) which involves addition
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Mul for Laurent<F, K> {
     type Output = Self;
@@ -86,6 +87,7 @@ impl<F: Float, const K: usize> Mul for Laurent<F, K> {
     }
 }
 
+// Laurent Div delegates to taylor_ops::taylor_div which involves multiplication internally
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Div for Laurent<F, K> {
     type Output = Self;
@@ -206,6 +208,7 @@ macro_rules! impl_laurent_scalar_ops {
             }
         }
 
+        // Scalar Div delegates to Laurent Div (self / Laurent::constant(rhs)) to reuse pole arithmetic
         #[allow(clippy::suspicious_arithmetic_impl)]
         impl<const K: usize> Div<$f> for Laurent<$f, K> {
             type Output = Laurent<$f, K>;

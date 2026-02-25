@@ -238,6 +238,44 @@ impl WgpuContext {
             tangent_rev_io_bind_group_layout,
         })
     }
+
+    /// Create the tape bind group (group 0) shared by all dispatch methods.
+    fn create_tape_bind_group(
+        &self,
+        tape: &WgpuTapeBuffers,
+        meta_buf: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tape_bg"),
+            layout: &self.tape_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: tape.opcodes_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: tape.arg0_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: tape.arg1_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tape.constants_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: meta_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: tape.output_indices_buf.as_entire_binding(),
+                },
+            ],
+        })
+    }
 }
 
 impl GpuBackend for WgpuContext {
@@ -385,36 +423,7 @@ impl GpuBackend for WgpuContext {
         });
 
         // Tape bind group (group 0)
-        let tape_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tape_bg"),
-            layout: &self.tape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: tape.opcodes_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: tape.arg0_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: tape.arg1_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tape.constants_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: meta_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: tape.output_indices_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let tape_bg = self.create_tape_bind_group(tape, &meta_buf);
 
         // I/O bind group (group 1)
         let io_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -583,36 +592,7 @@ impl GpuBackend for WgpuContext {
         });
 
         // Tape bind group (shared between forward and reverse)
-        let tape_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tape_bg"),
-            layout: &self.tape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: tape.opcodes_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: tape.arg0_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: tape.arg1_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tape.constants_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: meta_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: tape.output_indices_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let tape_bg = self.create_tape_bind_group(tape, &meta_buf);
 
         // Forward I/O bind group
         let fwd_io_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -837,36 +817,7 @@ impl GpuBackend for WgpuContext {
             mapped_at_creation: false,
         });
 
-        let tape_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tape_bg"),
-            layout: &self.tape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: tape.opcodes_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: tape.arg0_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: tape.arg1_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tape.constants_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: meta_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: tape.output_indices_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let tape_bg = self.create_tape_bind_group(tape, &meta_buf);
 
         let io_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tfwd_io_bg"),
@@ -1063,36 +1014,7 @@ impl GpuBackend for WgpuContext {
             mapped_at_creation: false,
         });
 
-        let tape_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("tape_bg"),
-            layout: &self.tape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: tape.opcodes_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: tape.arg0_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: tape.arg1_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tape.constants_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: meta_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: tape.output_indices_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let tape_bg = self.create_tape_bind_group(tape, &meta_buf);
 
         let io_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trev_io"),

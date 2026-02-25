@@ -2042,6 +2042,7 @@ impl<F: Float> BytecodeTape<F> {
         let mut dual_input_buf: Vec<Dual<F>> = Vec::with_capacity(n);
         let mut dual_vals_buf: Vec<Dual<F>> = Vec::new();
 
+        // Indexing by `col` is clearer than enumerate here: col seeds the tangent direction
         #[allow(clippy::needless_range_loop)]
         for col in 0..n {
             dual_input_buf.clear();

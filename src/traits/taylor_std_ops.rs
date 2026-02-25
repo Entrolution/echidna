@@ -32,6 +32,7 @@ impl<F: Float, const K: usize> Sub for Taylor<F, K> {
     }
 }
 
+// Taylor Mul delegates to taylor_ops::taylor_mul (Cauchy product) which involves addition
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Mul for Taylor<F, K> {
     type Output = Self;
@@ -43,6 +44,7 @@ impl<F: Float, const K: usize> Mul for Taylor<F, K> {
     }
 }
 
+// Taylor Div delegates to taylor_ops::taylor_div which involves multiplication internally
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Div for Taylor<F, K> {
     type Output = Self;
@@ -184,6 +186,7 @@ macro_rules! impl_taylor_scalar_ops {
             }
         }
 
+        // Scalar Div uses Mul internally (multiply by reciprocal for efficiency)
         #[allow(clippy::suspicious_arithmetic_impl)]
         impl<const K: usize> Div<$f> for Taylor<$f, K> {
             type Output = Taylor<$f, K>;
@@ -265,6 +268,7 @@ impl<F: Float + TaylorArenaLocal> Sub for TaylorDyn<F> {
     }
 }
 
+// TaylorDyn Mul delegates to taylor_ops::taylor_mul (Cauchy product) which involves addition
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float + TaylorArenaLocal> Mul for TaylorDyn<F> {
     type Output = Self;
@@ -274,6 +278,7 @@ impl<F: Float + TaylorArenaLocal> Mul for TaylorDyn<F> {
     }
 }
 
+// TaylorDyn Div delegates to taylor_ops::taylor_div which involves multiplication internally
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float + TaylorArenaLocal> Div for TaylorDyn<F> {
     type Output = Self;

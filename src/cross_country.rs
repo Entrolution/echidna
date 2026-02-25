@@ -35,6 +35,7 @@ impl<F: Float> LinearizedGraph<F> {
     ///
     /// Walks the tape in topological order, computing local partial
     /// derivatives via `reverse_partials` and constructing weighted edges.
+    // All arguments are distinct tape components; bundling them into a struct would add indirection for a single call site
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_tape(
         opcodes: &[OpCode],

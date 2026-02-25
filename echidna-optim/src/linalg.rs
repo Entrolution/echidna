@@ -16,6 +16,7 @@ pub struct LuFactors<F> {
 /// Factorize an `n x n` matrix via LU decomposition with partial pivoting.
 ///
 /// Returns `None` if the matrix is singular (zero or near-zero pivot).
+// Explicit indexing is clearer for pivoted LU: row/col indices drive pivot search and elimination
 #[allow(clippy::needless_range_loop)]
 pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
     let n = a.len();
@@ -68,6 +69,7 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
 ///
 /// This avoids re-factorizing when solving multiple right-hand sides
 /// against the same matrix.
+// Explicit indexing is clearer for forward/back substitution with permuted indices
 #[allow(clippy::needless_range_loop)]
 pub fn lu_back_solve<F: Float>(factors: &LuFactors<F>, b: &[F]) -> Vec<F> {
     let n = factors.n;

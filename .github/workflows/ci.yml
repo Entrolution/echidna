@@ -52,11 +52,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel" -- -D warnings
+      - name: Clippy (all non-CUDA features)
+        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,gpu-wgpu" -- -D warnings
 
-      - name: Check gpu-wgpu compilation
-        run: cargo check --features gpu-wgpu
+      - name: Clippy (echidna-optim)
+        run: cargo clippy -p echidna-optim --all-features -- -D warnings
 
 
   docs:
@@ -96,6 +96,9 @@ jobs:
       - name: Build
         run: cargo build
 
+      - name: Test (default features)
+        run: cargo test
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -112,7 +115,7 @@ jobs:
         run: cargo install cargo-tarpaulin
 
       - name: Generate coverage
-        run: cargo tarpaulin --out xml --timeout 180
+        run: cargo tarpaulin --out xml --timeout 300 --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel"
         continue-on-error: true
 
       - name: Upload coverage

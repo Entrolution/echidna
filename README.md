@@ -170,6 +170,8 @@ echidna = { version = "0.1", features = ["bytecode", "taylor"] }
 | `stde::hessian_diagonal(tape, x)` | Stochastic Hessian diagonal |
 | `stde::directional_derivatives(tape, x, dirs)` | Batched 1st and 2nd order directional derivatives |
 | `stde::laplacian_with_control(tape, x, dirs, ctrl)` | Laplacian with control variate variance reduction |
+| `stde::laplacian_hutchpp(tape, x, dirs_s, dirs_g)` | Hutch++ Laplacian estimator (lower variance) |
+| `stde::divergence(tape, x, dirs)` | Stochastic divergence (trace of Jacobian) estimator |
 
 ### GPU (requires `gpu-wgpu` or `gpu-cuda`)
 
@@ -182,6 +184,10 @@ echidna = { version = "0.1", features = ["bytecode", "taylor"] }
 | `ctx.sparse_hessian(bufs, inputs)` | Sparse Hessian on GPU |
 
 CUDA additionally supports `_f64` variants of all methods.
+
+### Integration Wrappers (requires `faer`, `nalgebra`, or `ndarray`)
+
+The `faer_support`, `nalgebra_support`, and `ndarray_support` modules provide convenience wrappers that accept and return native matrix/vector types from each crate (e.g., `grad_nalgebra`, `hessian_nalgebra`, `sparse_hessian_faer`, `sparse_jacobian_ndarray`). The `faer_support` module also includes sparse and dense linear solvers.
 
 ## Architecture
 

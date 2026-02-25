@@ -7,7 +7,7 @@ description = "Optimization solvers and implicit differentiation for echidna"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Entrolution/echidna"
 documentation = "https://docs.rs/echidna-optim"
-readme = "../README.md"
+readme = "README.md"
 keywords = ["optimization", "differentiation", "implicit", "gradient", "scientific"]
 categories = ["mathematics", "science", "algorithms"]
 

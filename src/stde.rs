@@ -77,6 +77,46 @@ pub struct EstimatorResult<F> {
 }
 
 // ══════════════════════════════════════════════
+//  Welford online accumulator
+// ══════════════════════════════════════════════
+
+/// Welford's online algorithm for incremental mean and variance.
+struct WelfordAccumulator<F> {
+    mean: F,
+    m2: F,
+    count: usize,
+}
+
+impl<F: Float> WelfordAccumulator<F> {
+    fn new() -> Self {
+        Self {
+            mean: F::zero(),
+            m2: F::zero(),
+            count: 0,
+        }
+    }
+
+    fn update(&mut self, sample: F) {
+        self.count += 1;
+        let k1 = F::from(self.count).unwrap();
+        let delta = sample - self.mean;
+        self.mean = self.mean + delta / k1;
+        let delta2 = sample - self.mean;
+        self.m2 = self.m2 + delta * delta2;
+    }
+
+    fn finalize(&self) -> (F, F, F) {
+        let nf = F::from(self.count).unwrap();
+        if self.count > 1 {
+            let var = self.m2 / (nf - F::one());
+            (self.mean, var, (var / nf).sqrt())
+        } else {
+            (self.mean, F::zero(), F::zero())
+        }
+    }
+}
+
+// ══════════════════════════════════════════════
 //  Estimator trait + built-in estimators
 // ══════════════════════════════════════════════
 
@@ -165,38 +205,22 @@ pub fn estimate<F: Float>(
 
     let mut buf = Vec::new();
     let mut value = F::zero();
+    let mut acc = WelfordAccumulator::new();
 
-    // Welford's online algorithm
-    let mut mean = F::zero();
-    let mut m2 = F::zero();
-
-    for (k, v) in directions.iter().enumerate() {
+    for v in directions.iter() {
         let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
-        let s = estimator.sample(c0, c1, c2);
-
-        let k1 = F::from(k + 1).unwrap();
-        let delta = s - mean;
-        mean = mean + delta / k1;
-        let delta2 = s - mean;
-        m2 = m2 + delta * delta2;
+        acc.update(estimator.sample(c0, c1, c2));
     }
 
-    let n = directions.len();
-    let nf = F::from(n).unwrap();
-    let (sample_variance, standard_error) = if n > 1 {
-        let var = m2 / (nf - F::one());
-        (var, (var / nf).sqrt())
-    } else {
-        (F::zero(), F::zero())
-    };
+    let (estimate, sample_variance, standard_error) = acc.finalize();
 
     EstimatorResult {
         value,
-        estimate: mean,
+        estimate,
         sample_variance,
         standard_error,
-        num_samples: n,
+        num_samples: directions.len(),
     }
 }
 
@@ -455,12 +479,9 @@ pub fn laplacian_with_control<F: Float>(
 
     let mut buf = Vec::new();
     let mut value = F::zero();
+    let mut acc = WelfordAccumulator::new();
 
-    // Welford's online algorithm
-    let mut mean = F::zero();
-    let mut m2 = F::zero();
-
-    for (k, v) in directions.iter().enumerate() {
+    for v in directions.iter() {
         let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
 
@@ -471,30 +492,17 @@ pub fn laplacian_with_control<F: Float>(
             .iter()
             .zip(v.iter())
             .fold(F::zero(), |acc, (&d, &vi)| acc + d * vi * vi);
-        let adjusted = raw - cv + trace_control;
-
-        let k1 = F::from(k + 1).unwrap();
-        let delta = adjusted - mean;
-        mean = mean + delta / k1;
-        let delta2 = adjusted - mean;
-        m2 = m2 + delta * delta2;
+        acc.update(raw - cv + trace_control);
     }
 
-    let s = directions.len();
-    let sf = F::from(s).unwrap();
-    let (sample_variance, standard_error) = if s > 1 {
-        let var = m2 / (sf - F::one());
-        (var, (var / sf).sqrt())
-    } else {
-        (F::zero(), F::zero())
-    };
+    let (estimate, sample_variance, standard_error) = acc.finalize();
 
     EstimatorResult {
         value,
-        estimate: mean,
+        estimate,
         sample_variance,
         standard_error,
-        num_samples: s,
+        num_samples: directions.len(),
     }
 }
 
@@ -762,11 +770,10 @@ pub fn laplacian_hutchpp<F: Float>(
 
     // ── Step 4: Residual Hutchinson ──
     // For each stochastic direction g, project out Q: g' = g - Q(Q^T g)
-    let mut mean = F::zero();
-    let mut m2 = F::zero();
+    let mut acc = WelfordAccumulator::new();
     let mut projected = vec![F::zero(); n];
 
-    for (k, g) in stochastic_directions.iter().enumerate() {
+    for g in stochastic_directions.iter() {
         assert_eq!(
             g.len(),
             n,
@@ -787,31 +794,17 @@ pub fn laplacian_hutchpp<F: Float>(
 
         let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, &projected, &mut taylor_buf);
         value = c0;
-        let sample = two * c2;
-
-        // Welford
-        let k1 = F::from(k + 1).unwrap();
-        let delta = sample - mean;
-        mean = mean + delta / k1;
-        let delta2 = sample - mean;
-        m2 = m2 + delta * delta2;
+        acc.update(two * c2);
     }
 
-    let s = stochastic_directions.len();
-    let sf = F::from(s).unwrap();
-    let (sample_variance, standard_error) = if s > 1 {
-        let var = m2 / (sf - F::one());
-        (var, (var / sf).sqrt())
-    } else {
-        (F::zero(), F::zero())
-    };
+    let (residual_mean, sample_variance, standard_error) = acc.finalize();
 
     EstimatorResult {
         value,
-        estimate: exact_trace + mean,
+        estimate: exact_trace + residual_mean,
         sample_variance,
         standard_error,
-        num_samples: s,
+        num_samples: stochastic_directions.len(),
     }
 }
 
@@ -854,10 +847,7 @@ pub fn divergence<F: Float>(
     let out_indices = tape.all_output_indices();
     let mut buf: Vec<Dual<F>> = Vec::new();
     let mut values = vec![F::zero(); m];
-
-    // Welford's online algorithm
-    let mut mean = F::zero();
-    let mut m2_acc = F::zero();
+    let mut acc = WelfordAccumulator::new();
 
     for (k, v) in directions.iter().enumerate() {
         assert_eq!(v.len(), n, "direction length must match tape.num_inputs()");
@@ -884,28 +874,16 @@ pub fn divergence<F: Float>(
             .zip(out_indices.iter())
             .fold(F::zero(), |acc, (&vi, &oi)| acc + vi * buf[oi as usize].eps);
 
-        // Welford
-        let k1 = F::from(k + 1).unwrap();
-        let delta = sample - mean;
-        mean = mean + delta / k1;
-        let delta2 = sample - mean;
-        m2_acc = m2_acc + delta * delta2;
+        acc.update(sample);
     }
 
-    let s = directions.len();
-    let sf = F::from(s).unwrap();
-    let (sample_variance, standard_error) = if s > 1 {
-        let var = m2_acc / (sf - F::one());
-        (var, (var / sf).sqrt())
-    } else {
-        (F::zero(), F::zero())
-    };
+    let (estimate, sample_variance, standard_error) = acc.finalize();
 
     DivergenceResult {
         values,
-        estimate: mean,
+        estimate,
         sample_variance,
         standard_error,
-        num_samples: s,
+        num_samples: directions.len(),
     }
 }
