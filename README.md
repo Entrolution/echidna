@@ -18,6 +18,7 @@ A high-performance automatic differentiation library for Rust.
 - **Gradient checkpointing** -- binomial, online, disk-backed, and hint-guided strategies
 - **Cross-country elimination** -- Markowitz vertex elimination for optimal Jacobian accumulation
 - **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, variance reduction
+- **Arbitrary differential operators** -- any mixed partial via jet coefficients, plan-once evaluate-many
 - **Composable type nesting** -- `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for arbitrary-order differentiation
 
 ## Feature Overview
@@ -32,6 +33,7 @@ A high-performance automatic differentiation library for Rust.
 | Cross-country elimination | Markowitz vertex elimination for optimal Jacobian accumulation |
 | Checkpointing | Binomial, online, disk-backed, and hint-guided gradient checkpointing |
 | STDE | Stochastic Taylor Derivative Estimators -- Laplacian, Hessian diagonal, variance reduction |
+| Differential operators | `diffop::mixed_partial`, `diffop::hessian`, `JetPlan` -- arbitrary mixed partials via jet extraction |
 | Nonsmooth AD | Branch tracking, kink detection (8 nonsmooth ops), Clarke generalized Jacobian |
 | Laurent series | `Laurent<F, K>` -- singularity analysis via Laurent expansion |
 | GPU acceleration | wgpu (Metal/Vulkan/DX12, f32) and CUDA (NVIDIA, f32+f64) batch evaluation |
@@ -44,7 +46,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-echidna = "0.2"
+echidna = "0.3"
 ```
 
 ### Gradient via reverse mode
@@ -105,6 +107,35 @@ let (output, adjoints) = tape.taylor_grad::<4>(&[0.0, 0.0], &[1.0, 0.0]);
 // output.coeffs() gives [f(x), f'(x)*v, f''(x)*v^2/2!, ...]
 ```
 
+### Arbitrary mixed partials via jet extraction
+
+```rust,ignore
+use echidna::diffop::{JetPlan, MultiIndex};
+
+// Record f(x, y) = x²y + y³
+let (tape, _) = echidna::record(|x| x[0] * x[0] * x[1] + x[1] * x[1] * x[1], &[1.0, 2.0]);
+
+// Plan which derivatives to compute
+let indices = vec![
+    MultiIndex::partial(2, 0),     // ∂f/∂x = 2xy      = 4
+    MultiIndex::partial(2, 1),     // ∂f/∂y = x² + 3y²  = 13
+    MultiIndex::diagonal(2, 0, 2), // ∂²f/∂x² = 2y      = 4
+    MultiIndex::new(&[1, 1]),      // ∂²f/∂x∂y = 2x     = 2
+];
+let plan = JetPlan::plan(2, &indices);
+
+// Evaluate — reuse the plan at any point
+let result = echidna::diffop::eval_dyn(&plan, &tape, &[1.0, 2.0]);
+assert!((result.derivatives[0] - 4.0).abs() < 1e-6);
+assert!((result.derivatives[1] - 13.0).abs() < 1e-6);
+assert!((result.derivatives[2] - 4.0).abs() < 1e-6);
+assert!((result.derivatives[3] - 2.0).abs() < 1e-6);
+
+// Or use the convenience function for a single mixed partial
+let (val, d2_dxdy) = echidna::diffop::mixed_partial(&tape, &[1.0, 2.0], &[1, 1]);
+assert!((d2_dxdy - 2.0).abs() < 1e-6);
+```
+
 ## Feature Flags
 
 | Flag | Description | Dependencies |
@@ -116,6 +147,7 @@ let (output, adjoints) = tape.taylor_grad::<4>(&[0.0, 0.0], &[1.0, 0.0]);
 | `taylor` | Taylor-mode AD (const-generic + arena-based dynamic) | -- |
 | `laurent` | Laurent series for singularity analysis | `taylor` |
 | `stde` | Stochastic Taylor Derivative Estimators | `bytecode`, `taylor` |
+| `diffop` | Arbitrary differential operator evaluation via jet coefficients | `bytecode`, `taylor` |
 | `ndarray` | ndarray integration | `bytecode` |
 | `faer` | faer linear algebra integration | `bytecode` |
 | `nalgebra` | nalgebra integration | `bytecode` |
@@ -125,7 +157,7 @@ let (output, adjoints) = tape.taylor_grad::<4>(&[0.0, 0.0], &[1.0, 0.0]);
 Enable features in `Cargo.toml`:
 
 ```toml
-echidna = { version = "0.2", features = ["bytecode", "taylor"] }
+echidna = { version = "0.3", features = ["bytecode", "taylor"] }
 ```
 
 ## API
@@ -172,6 +204,15 @@ echidna = { version = "0.2", features = ["bytecode", "taylor"] }
 | `stde::laplacian_with_control(tape, x, dirs, ctrl)` | Laplacian with control variate variance reduction |
 | `stde::laplacian_hutchpp(tape, x, dirs_s, dirs_g)` | Hutch++ Laplacian estimator (lower variance) |
 | `stde::divergence(tape, x, dirs)` | Stochastic divergence (trace of Jacobian) estimator |
+
+### Differential Operators (requires `diffop`)
+
+| Function | Description |
+|----------|-------------|
+| `diffop::mixed_partial(tape, x, orders)` | Any mixed partial derivative (plans + evaluates in one call) |
+| `diffop::hessian(tape, x)` | Full Hessian via jet extraction |
+| `JetPlan::plan(n, indices)` | Plan once for a set of multi-indices |
+| `diffop::eval_dyn(plan, tape, x)` | Evaluate a plan at a new point (reuses precomputed slot assignments) |
 
 ### GPU (requires `gpu-wgpu` or `gpu-cuda`)
 
@@ -249,7 +290,7 @@ The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and im
 
 ```toml
 [dependencies]
-echidna-optim = "0.2"
+echidna-optim = "0.3"
 ```
 
 Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).

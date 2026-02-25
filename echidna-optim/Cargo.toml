@@ -1,6 +1,6 @@
 [package]
 name = "echidna-optim"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.93"
 description = "Optimization solvers and implicit differentiation for echidna"
@@ -12,7 +12,7 @@ keywords = ["optimization", "differentiation", "implicit", "gradient", "scientif
 categories = ["mathematics", "science", "algorithms"]
 
 [dependencies]
-echidna = { version = "0.2.0", path = "..", features = ["bytecode"] }
+echidna = { version = "0.3.0", path = "..", features = ["bytecode"] }
 num-traits = "0.2"
 faer = { version = "0.24", optional = true }
 
