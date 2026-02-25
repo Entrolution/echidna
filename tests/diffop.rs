@@ -366,3 +366,176 @@ fn mismatched_num_vars_panics() {
     let mi = MultiIndex::new(&[1, 0, 0]);
     let _ = JetPlan::<f64>::plan(2, &[mi]);
 }
+
+// ══════════════════════════════════════════════
+//  DiffOp type
+// ══════════════════════════════════════════════
+
+use echidna::diffop::DiffOp;
+
+#[test]
+fn diffop_type_construction() {
+    let lap = DiffOp::<f64>::laplacian(3);
+    assert_eq!(lap.terms().len(), 3);
+    assert_eq!(lap.num_vars(), 3);
+    assert_eq!(lap.order(), 2);
+
+    let bih = DiffOp::<f64>::biharmonic(2);
+    assert_eq!(bih.terms().len(), 2);
+    assert_eq!(bih.order(), 4);
+
+    let diag3 = DiffOp::<f64>::diagonal(4, 3);
+    assert_eq!(diag3.terms().len(), 4);
+    assert_eq!(diag3.order(), 3);
+
+    let custom = DiffOp::from_orders(2, &[(1.0, &[2, 0]), (2.0, &[0, 2])]);
+    assert_eq!(custom.terms().len(), 2);
+}
+
+#[test]
+fn diffop_is_diagonal() {
+    let lap = DiffOp::<f64>::laplacian(3);
+    assert!(lap.is_diagonal());
+
+    // Mixed operator: ∂²/∂x∂y is NOT diagonal
+    let mixed = DiffOp::from_orders(2, &[(1.0, &[1, 1])]);
+    assert!(!mixed.is_diagonal());
+
+    // Operator with both diagonal and mixed: not diagonal
+    let combo = DiffOp::from_orders(2, &[(1.0, &[2, 0]), (1.0, &[1, 1])]);
+    assert!(!combo.is_diagonal());
+}
+
+#[test]
+fn diffop_split_by_order() {
+    // Inhomogeneous operator: ∂/∂x + ∂²/∂x² + ∂²/∂y²
+    let op = DiffOp::from_orders(
+        2,
+        &[
+            (1.0, &[1, 0]), // order 1
+            (1.0, &[2, 0]), // order 2
+            (1.0, &[0, 2]), // order 2
+        ],
+    );
+    let groups = op.split_by_order();
+    assert_eq!(groups.len(), 2);
+    assert_eq!(groups[0].order(), 1);
+    assert_eq!(groups[0].terms().len(), 1);
+    assert_eq!(groups[1].order(), 2);
+    assert_eq!(groups[1].terms().len(), 2);
+}
+
+#[test]
+fn diffop_eval_matches_jetplan() {
+    // DiffOp::eval should match manual JetPlan evaluation
+    let tape = record_fn(|x| x[0] * x[0] * x[1] + x[1] * x[1] * x[1], &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    // Laplacian: d²/dx² + d²/dy²
+    let op = DiffOp::<f64>::laplacian(2);
+    let (val_op, lap_op) = op.eval(&tape, &x);
+
+    // Manual: d²f/dx² = 2y = 4, d²f/dy² = 6y = 12, lap = 16
+    assert_relative_eq!(val_op, 10.0, epsilon = 1e-10);
+    assert_relative_eq!(lap_op, 16.0, epsilon = 1e-6);
+}
+
+#[test]
+fn diffop_eval_laplacian() {
+    // DiffOp::laplacian.eval matches tape.hessian trace
+    let tape = record_fn(f_exp_plus_sq, &[1.0, 2.0]);
+    let x = [1.0, 2.0];
+
+    let (_, _, hess) = tape.hessian(&x);
+    let trace: f64 = (0..x.len()).map(|i| hess[i][i]).sum();
+
+    let op = DiffOp::<f64>::laplacian(2);
+    let (_, lap) = op.eval(&tape, &x);
+
+    assert_relative_eq!(lap, trace, epsilon = 1e-6);
+}
+
+#[test]
+fn diffop_eval_biharmonic() {
+    // Biharmonic on x^4 + y^4: ∂⁴/∂x⁴ = 24, ∂⁴/∂y⁴ = 24, sum = 48
+    let tape = record_fn(
+        |x| {
+            let a = x[0] * x[0] * x[0] * x[0];
+            let b = x[1] * x[1] * x[1] * x[1];
+            a + b
+        },
+        &[2.0, 3.0],
+    );
+    let x = [2.0, 3.0];
+
+    let op = DiffOp::<f64>::biharmonic(2);
+    let (_, bih) = op.eval(&tape, &x);
+    assert_relative_eq!(bih, 48.0, epsilon = 1e-4);
+}
+
+// ══════════════════════════════════════════════
+//  SparseSamplingDistribution
+// ══════════════════════════════════════════════
+
+#[test]
+fn sparse_distribution_weights() {
+    // Laplacian: all coefficients = 1, so Z = n
+    let op = DiffOp::<f64>::laplacian(3);
+    let dist = op.sparse_distribution();
+
+    assert_eq!(dist.len(), 3);
+    assert_relative_eq!(dist.normalization(), 3.0, epsilon = 1e-12);
+}
+
+#[test]
+fn sparse_distribution_inverse_cdf() {
+    // Laplacian(3): uniform weights, each entry has weight 1/3 of total
+    let op = DiffOp::<f64>::laplacian(3);
+    let dist = op.sparse_distribution();
+
+    // u=0.0 should give first entry
+    assert_eq!(dist.sample_index(0.0), 0);
+    // u=0.99 should give last entry
+    assert_eq!(dist.sample_index(0.99), 2);
+    // u=0.5 should give middle entry
+    assert_eq!(dist.sample_index(0.5), 1);
+}
+
+#[test]
+fn sparse_distribution_diagonal_uniform() {
+    // Diagonal operator with unit coefficients → uniform distribution
+    let op = DiffOp::<f64>::laplacian(4);
+    let dist = op.sparse_distribution();
+
+    assert_eq!(dist.len(), 4);
+    assert_relative_eq!(dist.normalization(), 4.0, epsilon = 1e-12);
+
+    // Each entry should have equal weight (1.0 each)
+    // So sample_index at 0.125 should give 0, at 0.375 should give 1, etc.
+    assert_eq!(dist.sample_index(0.1), 0);
+    assert_eq!(dist.sample_index(0.3), 1);
+    assert_eq!(dist.sample_index(0.6), 2);
+    assert_eq!(dist.sample_index(0.9), 3);
+}
+
+#[test]
+fn sparse_distribution_nonuniform_weights() {
+    // Operator with different coefficients
+    let op = DiffOp::from_orders(
+        2,
+        &[
+            (3.0, &[2, 0]), // |C_0| = 3
+            (1.0, &[0, 2]), // |C_1| = 1
+        ],
+    );
+    let dist = op.sparse_distribution();
+
+    assert_eq!(dist.len(), 2);
+    assert_relative_eq!(dist.normalization(), 4.0, epsilon = 1e-12);
+
+    // First entry has weight 3/4, second 1/4
+    assert_eq!(dist.sample_index(0.0), 0);
+    assert_eq!(dist.sample_index(0.7), 0); // 0.7 * 4 = 2.8 < 3
+    assert_eq!(dist.sample_index(0.8), 1); // 0.8 * 4 = 3.2 > 3
+    assert_eq!(dist.sample_index(0.99), 1);
+}

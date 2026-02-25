@@ -53,6 +53,16 @@
 //!   active variables get separate pushforwards to avoid slot contamination.
 //! - **Panics on misuse**: dimension mismatches panic, following existing API
 //!   conventions.
+//!
+//! # Differential Operators
+//!
+//! [`DiffOp`] represents a linear differential operator `L = Σ C_α D^α`.
+//! It supports exact evaluation via [`DiffOp::eval`] (delegates to `JetPlan`)
+//! and construction of a [`SparseSamplingDistribution`] for stochastic
+//! estimation via [`stde::stde_sparse`](crate::stde::stde_sparse) (requires
+//! `stde` feature). Convenience constructors are provided for common operators:
+//! [`DiffOp::laplacian`], [`DiffOp::biharmonic`], [`DiffOp::diagonal`].
+//! Inhomogeneous operators can be decomposed with [`DiffOp::split_by_order`].
 
 use crate::bytecode_tape::BytecodeTape;
 use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
@@ -615,4 +625,315 @@ pub fn hessian<F: Float + TaylorArenaLocal>(
     }
 
     (result.value, gradient, hess)
+}
+
+// ══════════════════════════════════════════════
+//  DiffOp: differential operator type
+// ══════════════════════════════════════════════
+
+/// A linear differential operator `L = Σ C_α D^α`.
+///
+/// Each term is a `(coefficient, multi-index)` pair. The operator can be
+/// evaluated exactly via [`DiffOp::eval`] using [`JetPlan`], or used to build
+/// a [`SparseSamplingDistribution`] for stochastic estimation.
+///
+/// # Examples
+///
+/// ```ignore
+/// use echidna::diffop::DiffOp;
+///
+/// // Laplacian in 3 variables: ∂²/∂x₀² + ∂²/∂x₁² + ∂²/∂x₂²
+/// let lap = DiffOp::laplacian(3);
+///
+/// // Biharmonic: ∂⁴/∂x₀⁴ + ∂⁴/∂x₁⁴ + ∂⁴/∂x₂⁴
+/// let bih = DiffOp::biharmonic(3);
+/// ```
+#[derive(Clone, Debug)]
+pub struct DiffOp<F> {
+    terms: Vec<(F, MultiIndex)>,
+    num_vars: usize,
+}
+
+impl<F: Float> DiffOp<F> {
+    /// Create a differential operator from explicit `(coefficient, multi-index)` pairs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `terms` is empty or any multi-index has wrong `num_vars`.
+    pub fn new(num_vars: usize, terms: Vec<(F, MultiIndex)>) -> Self {
+        assert!(!terms.is_empty(), "DiffOp must have at least one term");
+        for (_, mi) in &terms {
+            assert_eq!(
+                mi.num_vars(),
+                num_vars,
+                "multi-index num_vars ({}) != expected ({})",
+                mi.num_vars(),
+                num_vars
+            );
+        }
+        DiffOp { terms, num_vars }
+    }
+
+    /// Create a differential operator from raw order slices.
+    ///
+    /// Each entry is `(coefficient, orders_slice)`.
+    pub fn from_orders(num_vars: usize, terms: &[(F, &[u8])]) -> Self {
+        let terms: Vec<(F, MultiIndex)> = terms
+            .iter()
+            .map(|&(c, orders)| (c, MultiIndex::new(orders)))
+            .collect();
+        Self::new(num_vars, terms)
+    }
+
+    /// Laplacian: `Σ_j ∂²/∂x_j²`.
+    pub fn laplacian(n: usize) -> Self {
+        let terms = (0..n)
+            .map(|j| (F::one(), MultiIndex::diagonal(n, j, 2)))
+            .collect();
+        DiffOp { terms, num_vars: n }
+    }
+
+    /// Biharmonic: `Σ_j ∂⁴/∂x_j⁴`.
+    pub fn biharmonic(n: usize) -> Self {
+        let terms = (0..n)
+            .map(|j| (F::one(), MultiIndex::diagonal(n, j, 4)))
+            .collect();
+        DiffOp { terms, num_vars: n }
+    }
+
+    /// k-th order diagonal: `Σ_j ∂^k/∂x_j^k`.
+    pub fn diagonal(n: usize, k: u8) -> Self {
+        assert!(k >= 1, "diagonal order must be >= 1");
+        let terms = (0..n)
+            .map(|j| (F::one(), MultiIndex::diagonal(n, j, k)))
+            .collect();
+        DiffOp { terms, num_vars: n }
+    }
+
+    /// The terms of the operator.
+    pub fn terms(&self) -> &[(F, MultiIndex)] {
+        &self.terms
+    }
+
+    /// Number of variables.
+    pub fn num_vars(&self) -> usize {
+        self.num_vars
+    }
+
+    /// Maximum total order across all terms.
+    pub fn order(&self) -> usize {
+        self.terms
+            .iter()
+            .map(|(_, mi)| mi.total_order())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// True if every term has exactly one active variable (no mixed partials).
+    pub fn is_diagonal(&self) -> bool {
+        self.terms.iter().all(|(_, mi)| mi.active_vars().len() <= 1)
+    }
+
+    /// Split an inhomogeneous operator into groups of the same total order.
+    ///
+    /// Returns a vector of `DiffOp`, each containing terms with the same
+    /// total order, sorted by increasing order.
+    pub fn split_by_order(&self) -> Vec<DiffOp<F>> {
+        let mut order_map: Vec<(usize, Vec<(F, MultiIndex)>)> = Vec::new();
+        for (c, mi) in &self.terms {
+            let ord = mi.total_order();
+            if let Some(entry) = order_map.iter_mut().find(|(o, _)| *o == ord) {
+                entry.1.push((*c, mi.clone()));
+            } else {
+                order_map.push((ord, vec![(*c, mi.clone())]));
+            }
+        }
+        order_map.sort_by_key(|(o, _)| *o);
+        order_map
+            .into_iter()
+            .map(|(_, terms)| DiffOp {
+                terms,
+                num_vars: self.num_vars,
+            })
+            .collect()
+    }
+}
+
+impl<F: Float + TaylorArenaLocal> DiffOp<F> {
+    /// Exact evaluation: compute `Lu(x)` via [`JetPlan`].
+    ///
+    /// Returns `(value, operator_value)`.
+    pub fn eval(&self, tape: &BytecodeTape<F>, x: &[F]) -> (F, F) {
+        let multi_indices: Vec<MultiIndex> = self.terms.iter().map(|(_, mi)| mi.clone()).collect();
+        let plan = JetPlan::plan(self.num_vars, &multi_indices);
+        let result = eval_dyn(&plan, tape, x);
+
+        let mut op_value = F::zero();
+        for (i, (c, _)) in self.terms.iter().enumerate() {
+            op_value = op_value + *c * result.derivatives[i];
+        }
+
+        (result.value, op_value)
+    }
+
+    /// Build a [`SparseSamplingDistribution`] for stochastic estimation.
+    ///
+    /// Requires all terms to have the same total order k (homogeneous operator).
+    /// Use [`split_by_order`](DiffOp::split_by_order) to decompose inhomogeneous
+    /// operators first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operator is not homogeneous (mixed total orders).
+    pub fn sparse_distribution(&self) -> SparseSamplingDistribution<F> {
+        let k = self.terms[0].1.total_order();
+        for (_, mi) in &self.terms {
+            assert_eq!(
+                mi.total_order(),
+                k,
+                "sparse_distribution requires homogeneous operator: \
+                 found order {} and order {}",
+                k,
+                mi.total_order()
+            );
+        }
+
+        let mut entries = Vec::with_capacity(self.terms.len());
+        let mut cumulative = F::zero();
+
+        for (coeff, mi) in &self.terms {
+            let abs_c = coeff.abs();
+            cumulative = cumulative + abs_c;
+
+            // Use plan_group to get collision-free slot assignments
+            let active_set = mi.active_vars().iter().map(|&(v, _)| v).collect::<Vec<_>>();
+            let group = plan_group::<F>(&active_set, &[(0, mi)]);
+
+            // There should be exactly one extraction
+            let extraction = &group.extractions[0];
+
+            entries.push(SparseJetEntry {
+                cumulative_weight: cumulative,
+                input_coeffs: group.input_coeffs.clone(),
+                output_coeff_index: extraction.output_coeff_index,
+                extraction_prefactor: extraction.prefactor,
+                sign: coeff.signum(),
+            });
+        }
+
+        SparseSamplingDistribution {
+            jet_order: entries
+                .iter()
+                .map(|e| e.output_coeff_index)
+                .max()
+                .unwrap_or(1),
+            entries,
+            total_weight: cumulative,
+        }
+    }
+}
+
+// ══════════════════════════════════════════════
+//  SparseSamplingDistribution
+// ══════════════════════════════════════════════
+
+/// Pre-computed discrete distribution over sparse k-jets for STDE.
+///
+/// Built from a homogeneous-order [`DiffOp`] via [`DiffOp::sparse_distribution`].
+/// The normalization constant `Z = Σ|C_α|` quantifies estimator quality —
+/// larger Z means more samples needed for a given accuracy.
+#[derive(Clone, Debug)]
+pub struct SparseSamplingDistribution<F> {
+    jet_order: usize,
+    entries: Vec<SparseJetEntry<F>>,
+    total_weight: F,
+}
+
+/// A single entry in the sparse sampling distribution.
+#[derive(Clone, Debug)]
+struct SparseJetEntry<F> {
+    cumulative_weight: F,
+    /// Slot assignments: `(var_index, slot, 1/slot!)`.
+    input_coeffs: Vec<(usize, usize, F)>,
+    /// Which output coefficient to read.
+    output_coeff_index: usize,
+    /// Multiply `coeffs[output_coeff_index]` by this to get the derivative.
+    extraction_prefactor: F,
+    /// `sign(C_α)` — the sign of the operator coefficient.
+    sign: F,
+}
+
+/// Read-only view of a [`SparseJetEntry`] for use by [`stde_sparse`](crate::stde::stde_sparse).
+pub struct SparseJetEntryRef<'a, F> {
+    entry: &'a SparseJetEntry<F>,
+}
+
+impl<'a, F: Float> SparseJetEntryRef<'a, F> {
+    /// Slot assignments: `(var_index, slot, 1/slot!)`.
+    pub fn input_coeffs(&self) -> &[(usize, usize, F)] {
+        &self.entry.input_coeffs
+    }
+
+    /// Which output coefficient to read.
+    pub fn output_coeff_index(&self) -> usize {
+        self.entry.output_coeff_index
+    }
+
+    /// Extraction prefactor from the Faà di Bruno formula.
+    pub fn extraction_prefactor(&self) -> F {
+        self.entry.extraction_prefactor
+    }
+
+    /// Sign of the operator coefficient `C_α`.
+    pub fn sign(&self) -> F {
+        self.entry.sign
+    }
+}
+
+impl<F: Float> SparseSamplingDistribution<F> {
+    /// Inverse-CDF sampling: given `u ~ Uniform(0, 1)`, return entry index.
+    ///
+    /// Caller generates the uniform variate (no `rand` dependency).
+    pub fn sample_index(&self, uniform_01: F) -> usize {
+        let target = uniform_01 * self.total_weight;
+        // Binary search on cumulative weights
+        let mut lo = 0;
+        let mut hi = self.entries.len();
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.entries[mid].cumulative_weight <= target {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo.min(self.entries.len() - 1)
+    }
+
+    /// The normalization constant `Z = Σ|C_α|`.
+    pub fn normalization(&self) -> F {
+        self.total_weight
+    }
+
+    /// Number of entries in the distribution.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the distribution has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Maximum jet order needed (the output coefficient index to read).
+    pub fn jet_order(&self) -> usize {
+        self.jet_order
+    }
+
+    /// Access entry by index (for use by [`stde_sparse`](crate::stde::stde_sparse)).
+    pub fn entry(&self, index: usize) -> SparseJetEntryRef<'_, F> {
+        SparseJetEntryRef {
+            entry: &self.entries[index],
+        }
+    }
 }

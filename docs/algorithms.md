@@ -278,8 +278,31 @@ variance to match Rademacher performance even when using Gaussian vectors.
 `laplacian_with_stats` uses Welford's online algorithm to track sample
 variance and standard error alongside the running estimate.
 
-**References:** Schatz et al. (2024), "Stochastic Taylor Derivative
-Estimators for stiff SDEs and non-smooth functions", NeurIPS;
+**Higher-order diagonal estimation.** The coordinate-basis approach
+generalises beyond k=2. `diagonal_kth_order` pushes basis vectors through
+order-(k+1) `TaylorDyn` jets to extract exact `[∂^k u/∂x_j^k]` for all
+coordinates. The output coefficient at index k stores `∂^k u/∂x_j^k / k!`,
+so the derivative is `k! * coeffs[k]`. The stochastic variant subsamples
+coordinate indices for an unbiased estimate of the diagonal sum.
+
+**Parabolic PDE σ-transform.** For parabolic PDEs with diffusion matrix σ,
+the operator `½ tr(σσ^T · H)` can be rewritten as `½ Σ_i (σ·e_i)^T H (σ·e_i)`
+where each term is a directional second derivative along σ's columns. This
+avoids forming off-diagonal Hessian entries and reduces to d second-order
+Taylor pushforwards (d = number of columns of σ).
+
+**Sparse STDE.** For general differential operators `L = Σ C_α D^α`, the
+coefficient tensor C(L) defines a discrete distribution over sparse k-jets.
+Each term α is sampled with probability `|C_α| / Z` where `Z = Σ|C_α|`, and
+the per-sample estimator `sign(C_α) · Z · D^α u` is unbiased for `Lu`. The
+derivative `D^α u` is extracted from a single forward pushforward via the
+jet extraction formula from Section 10. This implements the core contribution
+of Shi et al. (2024): it reduces the cost of estimating arbitrary k-th order
+operators from O(n^k) (exact computation) to O(S) (S random samples), where
+each sample costs one forward pushforward.
+
+**References:** Shi et al. (2024), "Stochastic Taylor Derivative
+Estimators", NeurIPS 2024 Best Paper;
 Hutchinson (1990), "A stochastic estimator of the trace of the influence
 matrix for Laplacian smoothing splines".
 
@@ -330,7 +353,16 @@ plan-once-evaluate-many design mirrors the `BytecodeTape` philosophy and is
 well suited to PDE solvers that evaluate the same differential operator at
 many grid points.
 
-**References:** Schatz et al. (2024), "Stochastic Taylor Derivative
+The `DiffOp` type represents a linear differential operator `L = Σ C_α D^α`
+as an explicit list of `(coefficient, multi-index)` pairs. It provides exact
+evaluation via `DiffOp::eval` (delegating to `JetPlan` internally) and can
+build a `SparseSamplingDistribution` for stochastic estimation. Convenience
+constructors cover common operators: `laplacian(n)`, `biharmonic(n)`,
+`diagonal(n, k)`. Inhomogeneous operators (e.g., `u_t + ∇²u`) can be
+decomposed into homogeneous groups via `split_by_order()`, since the sparse
+sampling distribution requires all terms to share the same total order.
+
+**References:** Shi et al. (2024), "Stochastic Taylor Derivative
 Estimators", NeurIPS (Section 3, jet extraction formula);
 Griewank & Walther, *Evaluating Derivatives*, Chapter 13 (Taylor propagation).
 
@@ -476,7 +508,7 @@ The wgpu backend (feature `gpu-wgpu`) provides cross-platform GPU access via
 Metal, Vulkan, and DX12. It implements four WGSL compute shaders: `forward`
 (batched forward evaluation), `reverse` (batched adjoint sweep),
 `tangent_forward` (forward tangent for JVP and sparse Jacobian), and
-`tangent_reverse` (forward-over-reverse for HVP and sparse Hessian). All 38
+`tangent_reverse` (forward-over-reverse for HVP and sparse Hessian). All 43
 opcodes are implemented in each shader. The backend is limited to f32 due to
 WGSL's lack of native f64 support. The CUDA backend (feature `gpu-cuda`)
 targets NVIDIA GPUs and supports both f32 and f64. It uses a single templated
@@ -485,12 +517,40 @@ and `double`. The `WgpuContext` and `CudaContext` types provide matching API
 surfaces: `forward_batch`, `gradient_batch`, `sparse_jacobian`, `hvp_batch`,
 and `sparse_hessian`.
 
+### GPU-Accelerated STDE
+
+When the `stde` feature is enabled alongside a GPU backend, a fifth compute
+shader `taylor_forward_2nd` provides batched second-order Taylor forward
+propagation. Each thread processes one batch element, propagating a `(c0, c1,
+c2)` triple through the tape where `c0` is the primal value, `c1` is the
+directional first derivative, and `c2 = v^T H v / 2`. The memory layout is
+interleaved per variable per thread: `[c0_i, c1_i, c2_i]` contiguous per
+variable, optimizing per-thread locality. All 43 opcodes implement full
+second-order Taylor propagation rules: arithmetic via Cauchy products,
+transcendentals via logarithmic derivative recurrences, and coupled
+recurrences for sin/cos, sinh/cosh, and tan/tanh.
+
+The high-level functions in `stde_gpu` flatten directions into batch format,
+dispatch the Taylor kernel, and perform CPU-side Welford aggregation:
+
+- `laplacian_gpu` — Hutchinson trace estimator: pushes S random directions
+  through the kernel, computes `mean(2 * c2)` as the Laplacian estimate.
+- `hessian_diagonal_gpu` — exact diagonal: uses n standard basis vectors as
+  directions, extracts `diag(H)[j] = 2 * c2[j]`.
+- `laplacian_with_control_gpu` — subtracts the exact diagonal contribution
+  (control variate) to reduce estimator variance.
+
+Buffer constraint: the working buffer requires `3 * num_variables *
+batch_size * 4` bytes. For WebGPU's default 128 MB storage buffer limit,
+max `num_variables * batch_size ≤ ~10M`.
+
 **References:** General GPU computing literature; the tape evaluation model
 follows the graph-mode execution paradigm common in ML frameworks, adapted
-for AD-specific operations.
+for AD-specific operations. The Taylor propagation rules follow the same
+recurrences as the CPU implementation in `taylor_ops.rs`.
 
 **Module:** `echidna::gpu` (`echidna::gpu::wgpu_backend`,
-`echidna::gpu::cuda_backend`)
+`echidna::gpu::cuda_backend`, `echidna::gpu::stde_gpu`)
 
 ---
 
