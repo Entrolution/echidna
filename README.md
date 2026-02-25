@@ -220,7 +220,20 @@ cargo bench                                         # Forward + reverse
 cargo bench --features bytecode --bench bytecode    # Bytecode tape
 cargo bench --features stde --bench taylor          # Taylor mode
 cargo bench --features gpu-wgpu --bench gpu         # GPU
+cargo bench --features "bytecode,nalgebra" --bench comparison  # vs other libraries
 ```
+
+### Gradient benchmark (Rosenbrock, lower is better)
+
+| n | echidna (reverse) | echidna (bytecode) | num-dual | ad-trait (fwd) | ad-trait (rev) |
+|---|---|---|---|---|---|
+| 2 | **184 ns** | 353 ns | 601 ns | 171 ns | 320 ns |
+| 10 | **1.1 µs** | 1.7 µs | 5.7 µs | 2.1 µs | 2.0 µs |
+| 100 | **11 µs** | 18 µs | 149 µs | 103 µs | 20 µs |
+
+echidna's reverse mode achieves O(n) gradient scaling (Baur-Strassen bound). At 100 inputs it is 13x faster than num-dual and 9x faster than ad-trait forward mode. The bytecode tape adds opcode dispatch overhead but enables re-evaluation, Hessians, sparsity detection, and GPU offload.
+
+Results from `cargo bench --bench comparison` on Apple M4 Pro. See `benches/comparison.rs` for methodology.
 
 ## echidna-optim
 
