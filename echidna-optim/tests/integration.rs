@@ -17,7 +17,7 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
 }
 
 fn make_tape() -> echidna::BytecodeTape<f64> {
-    let (tape, _) = echidna::record(|x| rosenbrock(x), &[0.0_f64, 0.0]);
+    let (tape, _) = echidna::record(rosenbrock, &[0.0_f64, 0.0]);
     tape
 }
 
@@ -97,7 +97,7 @@ fn newton_fewer_iters_than_lbfgs() {
 
 #[test]
 fn optimized_tape_still_works() {
-    let (mut tape, _) = echidna::record(|x| rosenbrock(x), &[0.0_f64, 0.0]);
+    let (mut tape, _) = echidna::record(rosenbrock, &[0.0_f64, 0.0]);
     tape.optimize();
 
     let mut obj = TapeObjective::new(tape);

@@ -46,7 +46,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-echidna = "0.3"
+echidna = "0.4"
 ```
 
 ### Gradient via reverse mode
@@ -157,7 +157,7 @@ assert!((d2_dxdy - 2.0).abs() < 1e-6);
 Enable features in `Cargo.toml`:
 
 ```toml
-echidna = { version = "0.3", features = ["bytecode", "taylor"] }
+echidna = { version = "0.4", features = ["bytecode", "taylor"] }
 ```
 
 ## API
@@ -200,12 +200,18 @@ echidna = { version = "0.3", features = ["bytecode", "taylor"] }
 | `tape.ode_taylor_step::<K>(y0)` | ODE Taylor integration step |
 | `stde::laplacian(tape, x, dirs)` | Stochastic Laplacian estimate |
 | `stde::hessian_diagonal(tape, x)` | Stochastic Hessian diagonal |
+| `stde::diagonal_kth_order(tape, x, k)` | Exact k-th order diagonal (dynamic, arena-based) |
 | `stde::diagonal_kth_order_const::<K>(tape, x)` | Exact k-th order diagonal (const-generic, stack-allocated) |
+| `stde::diagonal_kth_order_stochastic(tape, x, k, indices)` | Stochastic k-th order diagonal via subsampling |
 | `stde::dense_stde_2nd(tape, x, cholesky, z)` | Dense STDE for positive-definite 2nd-order operators |
+| `stde::stde_sparse(tape, x, dist, indices)` | Sparse STDE for arbitrary differential operators |
+| `stde::parabolic_diffusion(tape, x, sigma)` | Parabolic PDE σ-transform diffusion operator |
 | `stde::directional_derivatives(tape, x, dirs)` | Batched 1st and 2nd order directional derivatives |
 | `stde::laplacian_with_control(tape, x, dirs, ctrl)` | Laplacian with control variate variance reduction |
 | `stde::laplacian_hutchpp(tape, x, dirs_s, dirs_g)` | Hutch++ Laplacian estimator (lower variance) |
 | `stde::divergence(tape, x, dirs)` | Stochastic divergence (trace of Jacobian) estimator |
+| `stde::estimate(estimator, tape, x, dirs)` | Run an `Estimator` with Welford statistics |
+| `stde::estimate_weighted(estimator, tape, x, dirs, weights)` | Importance-weighted estimator (West's algorithm) |
 
 ### Differential Operators (requires `diffop`)
 
@@ -215,6 +221,10 @@ echidna = { version = "0.3", features = ["bytecode", "taylor"] }
 | `diffop::hessian(tape, x)` | Full Hessian via jet extraction |
 | `JetPlan::plan(n, indices)` | Plan once for a set of multi-indices |
 | `diffop::eval_dyn(plan, tape, x)` | Evaluate a plan at a new point (reuses precomputed slot assignments) |
+| `DiffOp::new(n, terms)` | Differential operator from `(coefficient, MultiIndex)` pairs |
+| `DiffOp::laplacian(n)` / `biharmonic(n)` / `diagonal(n, k)` | Common operator constructors |
+| `diffop.eval(tape, x)` | Evaluate operator at a point via `JetPlan` |
+| `diffop.sparse_distribution()` | Build `SparseSamplingDistribution` for stochastic estimation |
 
 ### GPU (requires `gpu-wgpu` or `gpu-cuda`)
 
@@ -229,6 +239,8 @@ echidna = { version = "0.3", features = ["bytecode", "taylor"] }
 | `stde_gpu::laplacian_gpu(ctx, bufs, x, dirs)` | GPU-accelerated Laplacian estimator |
 | `stde_gpu::hessian_diagonal_gpu(ctx, bufs, x)` | GPU-accelerated exact Hessian diagonal |
 | `stde_gpu::laplacian_with_control_gpu(ctx, bufs, x, dirs, ctrl)` | GPU Laplacian with control variate |
+| `stde_gpu::laplacian_gpu_cuda(ctx, bufs, x, dirs)` | CUDA-accelerated Laplacian estimator |
+| `stde_gpu::hessian_diagonal_gpu_cuda(ctx, bufs, x)` | CUDA-accelerated exact Hessian diagonal |
 
 CUDA additionally supports `_f64` variants of all methods.
 
@@ -267,7 +279,7 @@ cargo bench                                         # Forward + reverse
 cargo bench --features bytecode --bench bytecode    # Bytecode tape
 cargo bench --features stde --bench taylor          # Taylor mode
 cargo bench --features gpu-wgpu --bench gpu         # GPU
-cargo bench --features "bytecode,nalgebra" --bench comparison  # vs other libraries
+cargo bench --features bytecode --bench comparison             # vs other libraries
 ```
 
 ### Gradient benchmark (Rosenbrock, lower is better)
@@ -296,7 +308,7 @@ The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and im
 
 ```toml
 [dependencies]
-echidna-optim = "0.3"
+echidna-optim = "0.4"
 ```
 
 Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).

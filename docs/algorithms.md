@@ -72,7 +72,7 @@ inputs. The tape uses a Structure-of-Arrays (SoA) layout: separate contiguous
 arrays for opcodes, operand indices, and constant values. This layout improves
 cache utilization — the opcode stream is compact enough to fit in L1 cache for
 moderate-sized tapes, and the separation allows independent vectorization of
-forward and reverse sweeps. The tape currently defines 38 opcodes covering all
+forward and reverse sweeps. The tape currently defines 44 opcodes covering all
 standard elemental operations (arithmetic, transcendental, power, comparison).
 
 A key advantage of the graph representation is that it enables optimization
@@ -505,11 +505,12 @@ numerically intensive phase. Custom operations are rejected at tape upload
 time since they cannot be compiled to GPU code.
 
 The wgpu backend (feature `gpu-wgpu`) provides cross-platform GPU access via
-Metal, Vulkan, and DX12. It implements four WGSL compute shaders: `forward`
+Metal, Vulkan, and DX12. It implements five WGSL compute shaders: `forward`
 (batched forward evaluation), `reverse` (batched adjoint sweep),
-`tangent_forward` (forward tangent for JVP and sparse Jacobian), and
-`tangent_reverse` (forward-over-reverse for HVP and sparse Hessian). All 43
-opcodes are implemented in each shader. The backend is limited to f32 due to
+`tangent_forward` (forward tangent for JVP and sparse Jacobian),
+`tangent_reverse` (forward-over-reverse for HVP and sparse Hessian), and
+`taylor_forward_2nd` (batched second-order Taylor forward propagation for STDE).
+All 44 opcodes are implemented in each shader. The backend is limited to f32 due to
 WGSL's lack of native f64 support. The CUDA backend (feature `gpu-cuda`)
 targets NVIDIA GPUs and supports both f32 and f64. It uses a single templated
 CUDA kernel file compiled via NVRTC at runtime, instantiated for both `float`

@@ -31,7 +31,7 @@
 //! - [`stde_gpu::laplacian_with_control_gpu`] — variance-reduced Laplacian with diagonal control variate
 //!
 //! The Taylor kernel propagates `(c0, c1, c2)` triples through the tape for
-//! each batch element, where c2 = v^T H v / 2. All 43 opcodes are supported.
+//! each batch element, where c2 = v^T H v / 2. All 44 opcodes are supported.
 
 use crate::bytecode_tape::BytecodeTape;
 use crate::opcode::OpCode;

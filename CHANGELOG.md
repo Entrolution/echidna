@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-02-26
+
+### Changed
+
+#### Internal Architecture
+- **BytecodeTape decomposition**: split 2,689-line monolithic `bytecode_tape.rs` into a directory module with 10 focused submodules (`forward.rs`, `reverse.rs`, `tangent.rs`, `jacobian.rs`, `sparse.rs`, `optimize.rs`, `taylor.rs`, `parallel.rs`, `serde_support.rs`, `thread_local.rs`). Zero public API changes; benchmarks confirm no performance impact.
+- Deduplicated reverse sweep in `gradient_with_buf()` and `sparse_jacobian_par()` — both now call shared `reverse_sweep_core()` instead of inlining the loop. `gradient_with_buf` gains the zero-adjoint skip optimization it was previously missing.
+- Bumped `nalgebra` dependency from 0.33 to 0.34
+
+### Fixed
+- Corrected opcode variant count in documentation (44 variants, not 38/43)
+- Fixed CONTRIBUTING.md MSRV reference (1.93, not 1.80)
+
 ## [0.3.0] - 2026-02-25
 
 ### Added
@@ -162,7 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Entrolution/echidna/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Entrolution/echidna/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Entrolution/echidna/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Entrolution/echidna/releases/tag/v0.1.0
