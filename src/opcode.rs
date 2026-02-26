@@ -10,7 +10,7 @@ pub const UNUSED: u32 = u32::MAX;
 
 /// Elementary operation codes for the bytecode tape.
 ///
-/// Fits in a `u8` (~38 variants). Binary ops use both `arg_indices` slots;
+/// Fits in a `u8` (44 variants). Binary ops use both `arg_indices` slots;
 /// unary ops use slot 0 only (slot 1 = [`UNUSED`], except for [`OpCode::Powi`]
 /// which stores the `i32` exponent reinterpreted as `u32` in slot 1).
 #[repr(u8)]

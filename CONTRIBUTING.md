@@ -21,7 +21,7 @@ This project is governed by the [Contributor Covenant Code of Conduct](CODE_OF_C
 
 ### Prerequisites
 
-- Rust 1.80 or later (install via [rustup](https://rustup.rs/))
+- Rust 1.93 or later (install via [rustup](https://rustup.rs/))
 - Cargo (included with Rust)
 
 ### Building
@@ -37,8 +37,18 @@ cargo build --release
 ### Testing
 
 ```bash
-# Run all tests
+# Run core tests (no feature flags)
 cargo test
+
+# Run with all CPU features
+cargo test --features "bytecode,taylor,laurent,stde,diffop,serde,faer,nalgebra,ndarray"
+
+# Run GPU tests (requires hardware)
+cargo test --features "bytecode,gpu-wgpu"
+cargo test --features "bytecode,gpu-cuda"
+
+# Run echidna-optim tests
+cargo test -p echidna-optim
 
 # Run tests with output
 cargo test -- --nocapture
@@ -65,12 +75,29 @@ cargo doc --no-deps
 ### Benchmarks
 
 ```bash
-# Run all benchmarks
+# Run core benchmarks (forward + reverse)
 cargo bench
 
-# Run a specific benchmark
-cargo bench --bench forward
-cargo bench --bench reverse
+# Bytecode tape
+cargo bench --features bytecode --bench bytecode
+
+# Taylor mode
+cargo bench --features stde --bench taylor
+
+# STDE estimators
+cargo bench --features stde --bench stde
+
+# Differential operators
+cargo bench --features diffop --bench diffop
+
+# Cross-country, sparse, nonsmooth
+cargo bench --features bytecode --bench advanced
+
+# GPU
+cargo bench --features gpu-wgpu --bench gpu
+
+# Comparison vs other libraries
+cargo bench --features bytecode --bench comparison
 ```
 
 ### Security Audits
@@ -136,7 +163,7 @@ src/
 ├── api.rs                 # Public API: grad, jvp, vjp, jacobian, hessian, ...
 ├── breverse.rs            # BReverse<F> bytecode-tape reverse variable [bytecode]
 ├── bytecode_tape.rs       # BytecodeTape SoA representation [bytecode]
-├── opcode.rs              # Opcode definitions and dispatch [bytecode]
+├── opcode.rs              # Opcode definitions and dispatch (44 opcodes) [bytecode]
 ├── sparse.rs              # Sparsity detection and graph coloring [bytecode]
 ├── cross_country.rs       # Markowitz vertex elimination [bytecode]
 ├── nonsmooth.rs           # Branch tracking, Clarke Jacobian [bytecode]
@@ -146,7 +173,14 @@ src/
 ├── taylor_ops.rs          # Shared Taylor propagation rules [taylor]
 ├── laurent.rs             # Laurent<F, K> singularity analysis [laurent]
 ├── stde.rs                # Stochastic derivative estimators [stde]
-├── gpu/                   # GPU acceleration [gpu-wgpu, gpu-cuda]
+├── diffop.rs              # Arbitrary differential operators via jets [diffop]
+├── gpu/
+│   ├── mod.rs             # GpuBackend trait, GpuTapeData, GpuError
+│   ├── wgpu_backend.rs    # WgpuContext (Metal/Vulkan/DX12, f32) [gpu-wgpu]
+│   ├── cuda_backend.rs    # CudaContext (NVIDIA, f32+f64) [gpu-cuda]
+│   ├── stde_gpu.rs        # GPU-accelerated STDE functions [stde]
+│   ├── shaders/           # 5 WGSL compute shaders [gpu-wgpu]
+│   └── kernels/           # CUDA kernels (tape_eval.cu, taylor_eval.cu) [gpu-cuda]
 ├── faer_support.rs        # faer integration [faer]
 ├── nalgebra_support.rs    # nalgebra integration [nalgebra]
 ├── ndarray_support.rs     # ndarray integration [ndarray]

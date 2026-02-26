@@ -5,7 +5,7 @@
 This roadmap synthesizes:
 - Deferred items from all implementation phases to date
 - Remaining phases from the [book breakdown](book-breakdown.md)
-- Taylor mode AD and stochastic estimators from the STDE paper (Schatz et al., NeurIPS 2024)
+- Taylor mode AD and stochastic estimators from the STDE paper (Shi et al., NeurIPS 2024)
 - Organic improvements identified during implementation
 
 ---
@@ -70,7 +70,7 @@ Given `y' = f(y)`, computes the Taylor expansion of `y(t)` to order K via coeffi
 Key file: `src/bytecode_tape.rs`.
 
 ### R2. Stochastic Taylor Derivative Estimators (STDE)
-**STDE paper (Schatz et al., NeurIPS 2024)**
+**STDE paper (Shi et al., NeurIPS 2024)**
 
 Builds on R1. Uses random jets to estimate differential operators without computing full derivative tensors.
 
@@ -219,7 +219,7 @@ Two GPU backends for batched tape evaluation:
 
 **CUDA backend** (`gpu-cuda` feature) — NVIDIA only, f32 + f64. Single templated CUDA kernel file `tape_eval.cu` with four kernels (`forward_eval`, `reverse_sweep`, `tangent_forward`, `tangent_reverse`), compiled via NVRTC at runtime for both float and double. `CudaContext` mirrors the wgpu API surface plus f64 variants: `forward_batch_f64`, `gradient_batch_f64`, `sparse_jacobian_f64`, `sparse_hessian_f64`, `hvp_batch_f64`. 6 CUDA tests (f32 + f64).
 
-CPU-side sparsity detection and graph coloring drive the GPU tangent sweeps. Custom ops are rejected at upload time (`GpuTapeData::from_tape`). All 38 opcodes implemented in all four shader/kernel variants.
+CPU-side sparsity detection and graph coloring drive the GPU tangent sweeps. Custom ops are rejected at upload time (`GpuTapeData::from_tape`). All 44 opcodes implemented in all five shader/kernel variants.
 
 Key files: `src/gpu/mod.rs`, `src/gpu/wgpu_backend.rs`, `src/gpu/cuda_backend.rs`, `src/gpu/shaders/forward.wgsl`, `src/gpu/shaders/reverse.wgsl`, `src/gpu/shaders/tangent_forward.wgsl`, `src/gpu/shaders/tangent_reverse.wgsl`, `src/gpu/kernels/tape_eval.cu`, `tests/gpu_wgpu_tests.rs`, `tests/gpu_cuda_tests.rs`.
 

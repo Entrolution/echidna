@@ -3,7 +3,7 @@ members = [".", "echidna-optim"]
 
 [package]
 name = "echidna"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.93"
 description = "A high-performance automatic differentiation library for Rust"
@@ -26,7 +26,7 @@ rayon = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 ndarray = { version = "0.17", optional = true }
 faer = { version = "0.24", optional = true }
-nalgebra = { version = "0.33", optional = true }
+nalgebra = { version = "0.34", optional = true }
 wgpu = { version = "28", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
 pollster = { version = "0.4", optional = true }
@@ -37,7 +37,7 @@ criterion = { version = "0.8", features = ["html_reports"] }
 approx = "0.5"
 serde_json = "1"
 ciborium = "0.2"
-nalgebra = "0.33"
+nalgebra = "0.34"
 num-dual = "0.11"
 ad_trait = "0.2.2"
 tempfile = "3"
