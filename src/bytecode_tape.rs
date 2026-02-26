@@ -898,50 +898,7 @@ impl<F: Float> BytecodeTape<F> {
         adjoint_buf.resize(n, F::zero());
         adjoint_buf[self.output_index as usize] = F::one();
 
-        for i in (0..self.opcodes.len()).rev() {
-            let adj = adjoint_buf[i];
-            if adj == F::zero() {
-                continue;
-            }
-
-            match self.opcodes[i] {
-                OpCode::Input | OpCode::Const => continue,
-                OpCode::Custom => {
-                    adjoint_buf[i] = F::zero();
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt
-                        .map(|bi| self.values[bi as usize])
-                        .unwrap_or(F::zero());
-                    let r = self.values[i];
-                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                    adjoint_buf[a_idx as usize] = adjoint_buf[a_idx as usize] + da * adj;
-                    if let Some(bi) = b_idx_opt {
-                        adjoint_buf[bi as usize] = adjoint_buf[bi as usize] + db * adj;
-                    }
-                }
-                op => {
-                    adjoint_buf[i] = F::zero();
-                    let [a_idx, b_idx] = self.arg_indices[i];
-                    let a = self.values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
-                        self.values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
-                    } else {
-                        F::zero()
-                    };
-                    let r = self.values[i];
-                    let (da, db) = opcode::reverse_partials(op, a, b, r);
-
-                    adjoint_buf[a_idx as usize] = adjoint_buf[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
-                        adjoint_buf[b_idx as usize] = adjoint_buf[b_idx as usize] + db * adj;
-                    }
-                }
-            }
-        }
+        self.reverse_sweep_core(adjoint_buf, &self.values, None);
         adjoint_buf[..self.num_inputs as usize].to_vec()
     }
 
@@ -2410,48 +2367,7 @@ impl<F: Float> BytecodeTape<F> {
                         }
                     }
 
-                    for idx in (0..self.opcodes.len()).rev() {
-                        let adj = adjoints[idx];
-                        if adj == F::zero() {
-                            continue;
-                        }
-                        match self.opcodes[idx] {
-                            OpCode::Input | OpCode::Const => continue,
-                            OpCode::Custom => {
-                                adjoints[idx] = F::zero();
-                                let [a_idx, cb_idx] = self.arg_indices[idx];
-                                let a = values_buf[a_idx as usize];
-                                let b_idx_opt = self.custom_second_args.get(&(idx as u32)).copied();
-                                let b = b_idx_opt
-                                    .map(|bi| values_buf[bi as usize])
-                                    .unwrap_or(F::zero());
-                                let r = values_buf[idx];
-                                let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                                adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                                if let Some(bi) = b_idx_opt {
-                                    adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
-                                }
-                            }
-                            op => {
-                                adjoints[idx] = F::zero();
-                                let [a_idx, b_idx] = self.arg_indices[idx];
-                                let a = values_buf[a_idx as usize];
-                                let b = if b_idx != UNUSED && op != OpCode::Powi {
-                                    values_buf[b_idx as usize]
-                                } else if op == OpCode::Powi {
-                                    F::from(b_idx).unwrap_or_else(|| F::zero())
-                                } else {
-                                    F::zero()
-                                };
-                                let r = values_buf[idx];
-                                let (da, db) = opcode::reverse_partials(op, a, b, r);
-                                adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                                if b_idx != UNUSED && op != OpCode::Powi {
-                                    adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
-                                }
-                            }
-                        }
-                    }
+                    self.reverse_sweep_core(&mut adjoints, &values_buf, None);
                     adjoints[..ni].to_vec()
                 })
                 .collect();
