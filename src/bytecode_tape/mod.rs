@@ -26,12 +26,12 @@ mod reverse;
 mod sparse;
 mod tangent;
 
-#[cfg(feature = "taylor")]
-mod taylor;
 #[cfg(feature = "parallel")]
 mod parallel;
 #[cfg(feature = "serde")]
 mod serde_support;
+#[cfg(feature = "taylor")]
+mod taylor;
 
 mod thread_local;
 pub use self::thread_local::{with_active_btape, BtapeGuard, BtapeThreadLocal};

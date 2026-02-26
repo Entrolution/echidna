@@ -585,7 +585,15 @@ impl GpuBackend for CudaContext {
         inputs: &[f32],
         batch_size: u32,
     ) -> Result<Vec<f32>, GpuError> {
-        cuda_forward_batch_body!(self, tape, inputs, batch_size, f32, constants_f32, forward_f32)
+        cuda_forward_batch_body!(
+            self,
+            tape,
+            inputs,
+            batch_size,
+            f32,
+            constants_f32,
+            forward_f32
+        )
     }
 
     fn gradient_batch(
@@ -594,7 +602,16 @@ impl GpuBackend for CudaContext {
         inputs: &[f32],
         batch_size: u32,
     ) -> Result<(Vec<f32>, Vec<f32>), GpuError> {
-        cuda_gradient_batch_body!(self, tape, inputs, batch_size, f32, constants_f32, forward_f32, reverse_f32)
+        cuda_gradient_batch_body!(
+            self,
+            tape,
+            inputs,
+            batch_size,
+            f32,
+            constants_f32,
+            forward_f32,
+            reverse_f32
+        )
     }
 
     fn sparse_jacobian(
@@ -613,7 +630,16 @@ impl GpuBackend for CudaContext {
         tangent_dirs: &[f32],
         batch_size: u32,
     ) -> Result<(Vec<f32>, Vec<f32>), GpuError> {
-        cuda_hvp_batch_body!(self, tape, x, tangent_dirs, batch_size, f32, constants_f32, tangent_rev_f32)
+        cuda_hvp_batch_body!(
+            self,
+            tape,
+            x,
+            tangent_dirs,
+            batch_size,
+            f32,
+            constants_f32,
+            tangent_rev_f32
+        )
     }
 
     fn sparse_hessian(
@@ -639,7 +665,16 @@ impl CudaContext {
         direction_seeds: &[f32],
         batch_size: u32,
     ) -> Result<super::TaylorBatchResult<f32>, GpuError> {
-        cuda_taylor_fwd_2nd_body!(self, tape, primal_inputs, direction_seeds, batch_size, f32, constants_f32, taylor_fwd_2nd_f32)
+        cuda_taylor_fwd_2nd_body!(
+            self,
+            tape,
+            primal_inputs,
+            direction_seeds,
+            batch_size,
+            f32,
+            constants_f32,
+            taylor_fwd_2nd_f32
+        )
     }
 
     /// Batched second-order Taylor forward propagation (f64, CUDA only).
@@ -650,7 +685,16 @@ impl CudaContext {
         direction_seeds: &[f64],
         batch_size: u32,
     ) -> Result<super::TaylorBatchResult<f64>, GpuError> {
-        cuda_taylor_fwd_2nd_body!(self, tape, primal_inputs, direction_seeds, batch_size, f64, constants_f64, taylor_fwd_2nd_f64)
+        cuda_taylor_fwd_2nd_body!(
+            self,
+            tape,
+            primal_inputs,
+            direction_seeds,
+            batch_size,
+            f64,
+            constants_f64,
+            taylor_fwd_2nd_f64
+        )
     }
 
     // ── f64 operations ──
@@ -662,7 +706,15 @@ impl CudaContext {
         inputs: &[f64],
         batch_size: u32,
     ) -> Result<Vec<f64>, GpuError> {
-        cuda_forward_batch_body!(self, tape, inputs, batch_size, f64, constants_f64, forward_f64)
+        cuda_forward_batch_body!(
+            self,
+            tape,
+            inputs,
+            batch_size,
+            f64,
+            constants_f64,
+            forward_f64
+        )
     }
 
     /// Batched gradient (f64, CUDA only).
@@ -672,7 +724,16 @@ impl CudaContext {
         inputs: &[f64],
         batch_size: u32,
     ) -> Result<(Vec<f64>, Vec<f64>), GpuError> {
-        cuda_gradient_batch_body!(self, tape, inputs, batch_size, f64, constants_f64, forward_f64, reverse_f64)
+        cuda_gradient_batch_body!(
+            self,
+            tape,
+            inputs,
+            batch_size,
+            f64,
+            constants_f64,
+            forward_f64,
+            reverse_f64
+        )
     }
 
     /// Sparse Jacobian (f64, CUDA only).
@@ -703,6 +764,15 @@ impl CudaContext {
         tangent_dirs: &[f64],
         batch_size: u32,
     ) -> Result<(Vec<f64>, Vec<f64>), GpuError> {
-        cuda_hvp_batch_body!(self, tape, x, tangent_dirs, batch_size, f64, constants_f64, tangent_rev_f64)
+        cuda_hvp_batch_body!(
+            self,
+            tape,
+            x,
+            tangent_dirs,
+            batch_size,
+            f64,
+            constants_f64,
+            tangent_rev_f64
+        )
     }
 }

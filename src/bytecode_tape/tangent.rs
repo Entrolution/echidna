@@ -96,7 +96,11 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Reverse sweep with tangent-carrying adjoints. Uses values from
     /// [`forward_tangent`](Self::forward_tangent). Uses [`IsAllZero`] to
     /// safely skip zero adjoints without dropping tangent contributions.
-    pub(super) fn reverse_tangent<T: NumFloat + IsAllZero>(&self, tangent_vals: &[T], buf: &mut Vec<T>) {
+    pub(super) fn reverse_tangent<T: NumFloat + IsAllZero>(
+        &self,
+        tangent_vals: &[T],
+        buf: &mut Vec<T>,
+    ) {
         self.reverse_tangent_inner(tangent_vals, buf, |i| {
             // First-order: convert primal-float partials to T.
             let [a_idx, cb_idx] = self.arg_indices[i];

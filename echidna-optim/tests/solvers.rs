@@ -119,12 +119,7 @@ impl Objective<f64> for Rosenbrock2D {
 
 fn assert_near_origin(result: &OptimResult<f64>, tol: f64) {
     for (i, &xi) in result.x.iter().enumerate() {
-        assert!(
-            xi.abs() < tol,
-            "x[{}] = {}, expected ~0",
-            i,
-            xi
-        );
+        assert!(xi.abs() < tol, "x[{}] = {}, expected ~0", i, xi);
     }
     assert!(result.value < tol, "f = {}, expected ~0", result.value);
 }
@@ -141,7 +136,10 @@ fn newton_quadratic_2d() {
 
     assert_eq!(result.termination, TerminationReason::GradientNorm);
     // Newton on a quadratic converges in 1 iteration
-    assert_eq!(result.iterations, 1, "Newton should solve quadratic in 1 step");
+    assert_eq!(
+        result.iterations, 1,
+        "Newton should solve quadratic in 1 step"
+    );
     assert_near_origin(&result, 1e-10);
 }
 
@@ -212,7 +210,11 @@ fn lbfgs_quadratic_2d() {
 fn lbfgs_quadratic_8d() {
     let mut obj = Quadratic { dim: 8 };
     let config = LbfgsConfig::default();
-    let result = lbfgs(&mut obj, &[1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0], &config);
+    let result = lbfgs(
+        &mut obj,
+        &[1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0],
+        &config,
+    );
 
     assert_eq!(result.termination, TerminationReason::GradientNorm);
     assert_near_origin(&result, 1e-6);
