@@ -11,7 +11,7 @@ env:
 jobs:
   ci:
     name: CI
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
 
@@ -52,7 +52,7 @@ jobs:
   publish-echidna:
     name: Publish echidna
     needs: [ci]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: release
     permissions:
       id-token: write
@@ -92,7 +92,7 @@ jobs:
   publish-optim:
     name: Publish echidna-optim
     needs: [publish-echidna]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: release
     permissions:
       id-token: write
@@ -121,7 +121,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [publish-echidna]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
