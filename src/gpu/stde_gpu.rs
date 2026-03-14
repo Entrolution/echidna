@@ -4,12 +4,10 @@
 //! These use batched second-order Taylor forward propagation on the GPU to evaluate
 //! many directions in parallel.
 //!
-//! # Supported backends
-//!
-//! - **wgpu** (`gpu-wgpu`): cross-platform, f32 only
-//! - **CUDA** (`gpu-cuda`): NVIDIA, f32 (f64 via inherent methods on `CudaContext`)
+//! All functions are generic over `B: GpuBackend`, working with any backend
+//! (wgpu, CUDA, or future backends).
 
-use super::{GpuError, TaylorBatchResult};
+use super::{GpuBackend, GpuError, TaylorBatchResult};
 use crate::stde::EstimatorResult;
 
 /// GPU-accelerated Laplacian estimation via Hutchinson + Taylor-mode.
@@ -20,11 +18,10 @@ use crate::stde::EstimatorResult;
 /// `directions` is `&[&[f32]]` with S direction vectors, each of length n.
 /// The primal point `x` is replicated for each batch element.
 ///
-/// Works with any backend that provides `taylor_forward_2nd_batch`.
-#[cfg(feature = "gpu-wgpu")]
-pub fn laplacian_gpu(
-    backend: &super::WgpuContext,
-    tape: &super::WgpuTapeBuffers,
+/// Works with any backend that implements `GpuBackend`.
+pub fn laplacian_gpu<B: GpuBackend>(
+    backend: &B,
+    tape: &B::TapeBuffers,
     x: &[f32],
     directions: &[&[f32]],
 ) -> Result<EstimatorResult<f32>, GpuError> {
@@ -35,32 +32,6 @@ pub fn laplacian_gpu(
     }
 
     // Flatten primals and seeds
-    let mut primals = Vec::with_capacity(s * n);
-    let mut seeds = Vec::with_capacity(s * n);
-    for dir in directions {
-        assert_eq!(dir.len(), n, "direction length must match x");
-        primals.extend_from_slice(x);
-        seeds.extend_from_slice(dir);
-    }
-
-    let result = backend.taylor_forward_2nd_batch(tape, &primals, &seeds, s as u32)?;
-    Ok(aggregate_laplacian(&result, s))
-}
-
-/// GPU-accelerated Laplacian estimation (CUDA f32).
-#[cfg(feature = "gpu-cuda")]
-pub fn laplacian_gpu_cuda(
-    backend: &super::CudaContext,
-    tape: &super::CudaTapeBuffers,
-    x: &[f32],
-    directions: &[&[f32]],
-) -> Result<EstimatorResult<f32>, GpuError> {
-    let n = x.len();
-    let s = directions.len();
-    if s == 0 {
-        return Err(GpuError::Other("no directions provided".into()));
-    }
-
     let mut primals = Vec::with_capacity(s * n);
     let mut seeds = Vec::with_capacity(s * n);
     for dir in directions {
@@ -110,10 +81,9 @@ fn aggregate_laplacian(result: &TaylorBatchResult<f32>, s: usize) -> EstimatorRe
 ///
 /// Uses one batch element per input dimension, with each direction being a
 /// standard basis vector e_j. Returns `(f(x), diag(H))`.
-#[cfg(feature = "gpu-wgpu")]
-pub fn hessian_diagonal_gpu(
-    backend: &super::WgpuContext,
-    tape: &super::WgpuTapeBuffers,
+pub fn hessian_diagonal_gpu<B: GpuBackend>(
+    backend: &B,
+    tape: &B::TapeBuffers,
     x: &[f32],
 ) -> Result<(f32, Vec<f32>), GpuError> {
     let n = x.len();
@@ -135,38 +105,13 @@ pub fn hessian_diagonal_gpu(
     Ok((value, diag))
 }
 
-/// GPU-accelerated exact Hessian diagonal (CUDA f32).
-#[cfg(feature = "gpu-cuda")]
-pub fn hessian_diagonal_gpu_cuda(
-    backend: &super::CudaContext,
-    tape: &super::CudaTapeBuffers,
-    x: &[f32],
-) -> Result<(f32, Vec<f32>), GpuError> {
-    let n = x.len();
-
-    let mut primals = Vec::with_capacity(n * n);
-    let mut seeds = vec![0.0f32; n * n];
-    for j in 0..n {
-        primals.extend_from_slice(x);
-        seeds[j * n + j] = 1.0;
-    }
-
-    let result = backend.taylor_forward_2nd_batch(tape, &primals, &seeds, n as u32)?;
-
-    let value = result.values[0];
-    let diag: Vec<f32> = result.c2s.iter().map(|&c2| 2.0 * c2).collect();
-
-    Ok((value, diag))
-}
-
 /// GPU-accelerated Laplacian with diagonal control variate.
 ///
 /// Uses a precomputed Hessian diagonal to reduce estimator variance.
 /// The control variate estimate is: `tr(H_diag) + mean(v^T H v - v^T diag(H) v)`.
-#[cfg(feature = "gpu-wgpu")]
-pub fn laplacian_with_control_gpu(
-    backend: &super::WgpuContext,
-    tape: &super::WgpuTapeBuffers,
+pub fn laplacian_with_control_gpu<B: GpuBackend>(
+    backend: &B,
+    tape: &B::TapeBuffers,
     x: &[f32],
     directions: &[&[f32]],
     control_diagonal: &[f32],
@@ -229,4 +174,35 @@ pub fn laplacian_with_control_gpu(
         standard_error,
         num_samples: s,
     })
+}
+
+// ── Deprecated backend-specific wrappers ──
+
+/// Deprecated: Use [`laplacian_gpu`] instead (now generic over any `GpuBackend`).
+#[cfg(feature = "gpu-cuda")]
+#[deprecated(
+    since = "0.5.0",
+    note = "use laplacian_gpu() which is now generic over GpuBackend"
+)]
+pub fn laplacian_gpu_cuda(
+    backend: &super::CudaContext,
+    tape: &super::CudaTapeBuffers,
+    x: &[f32],
+    directions: &[&[f32]],
+) -> Result<EstimatorResult<f32>, GpuError> {
+    laplacian_gpu(backend, tape, x, directions)
+}
+
+/// Deprecated: Use [`hessian_diagonal_gpu`] instead (now generic over any `GpuBackend`).
+#[cfg(feature = "gpu-cuda")]
+#[deprecated(
+    since = "0.5.0",
+    note = "use hessian_diagonal_gpu() which is now generic over GpuBackend"
+)]
+pub fn hessian_diagonal_gpu_cuda(
+    backend: &super::CudaContext,
+    tape: &super::CudaTapeBuffers,
+    x: &[f32],
+) -> Result<(f32, Vec<f32>), GpuError> {
+    hessian_diagonal_gpu(backend, tape, x)
 }

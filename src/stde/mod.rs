@@ -71,6 +71,12 @@
 //! `v = L · z` is computed, then pushed through a second-order Taylor jet. When
 //! `L = I`, this reduces to the Hutchinson Laplacian estimator.
 //!
+//! # Dense STDE for Indefinite Operators (requires `nalgebra`)
+//!
+//! [`dense_stde_2nd_indefinite`] handles arbitrary symmetric C matrices by
+//! eigendecomposing into positive and negative parts. Near-zero eigenvalues are
+//! clamped to prevent sign-flipping from floating-point noise.
+//!
 //! # Parabolic PDE σ-Transform
 //!
 //! [`parabolic_diffusion`] computes `½ tr(σσ^T · Hess u)` for parabolic PDEs
@@ -107,6 +113,8 @@ pub use laplacian::{
     hessian_diagonal, hessian_diagonal_with_buf, laplacian, laplacian_hutchpp,
     laplacian_with_control, laplacian_with_stats,
 };
+#[cfg(feature = "nalgebra")]
+pub use pde::dense_stde_2nd_indefinite;
 pub use pde::{dense_stde_2nd, divergence, parabolic_diffusion, parabolic_diffusion_stochastic};
 pub use pipeline::{estimate, estimate_weighted};
 pub use types::{DivergenceResult, EstimatorResult};

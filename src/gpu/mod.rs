@@ -16,7 +16,7 @@
 //! - [`sparse_jacobian`](GpuBackend::sparse_jacobian) — GPU-accelerated sparse Jacobian
 //! - [`hvp_batch`](GpuBackend::hvp_batch) — batched Hessian-vector product
 //! - [`sparse_hessian`](GpuBackend::sparse_hessian) — GPU-accelerated sparse Hessian
-//! - `taylor_forward_2nd_batch` — batched second-order Taylor forward propagation (inherent, requires `stde`)
+//! - [`taylor_forward_2nd_batch`](GpuBackend::taylor_forward_2nd_batch) — batched second-order Taylor forward propagation (requires `stde`)
 //!
 //! CUDA additionally provides f64 methods as inherent methods on [`CudaContext`].
 //!
@@ -44,6 +44,9 @@ pub mod cuda_backend;
 
 #[cfg(feature = "stde")]
 pub mod stde_gpu;
+
+#[cfg(feature = "stde")]
+pub mod taylor_codegen;
 
 #[cfg(feature = "gpu-wgpu")]
 pub use wgpu_backend::{WgpuContext, WgpuTapeBuffers};
@@ -134,6 +137,26 @@ pub trait GpuBackend {
         tape_cpu: &mut BytecodeTape<f32>,
         x: &[f32],
     ) -> Result<(f32, Vec<f32>, crate::sparse::SparsityPattern, Vec<f32>), GpuError>;
+
+    /// Batched second-order Taylor forward propagation.
+    ///
+    /// Each batch element pushes one direction through the tape, producing
+    /// a Taylor jet with 3 coefficients (c0=value, c1=first derivative,
+    /// c2=second derivative / 2).
+    ///
+    /// `primal_inputs` is `[f32; batch_size * num_inputs]` — primals for each element.
+    /// `direction_seeds` is `[f32; batch_size * num_inputs]` — c1 seeds for each element.
+    ///
+    /// Returns `TaylorBatchResult` with `values`, `c1s`, `c2s` each of size
+    /// `[f32; batch_size * num_outputs]`.
+    #[cfg(feature = "stde")]
+    fn taylor_forward_2nd_batch(
+        &self,
+        tape: &Self::TapeBuffers,
+        primal_inputs: &[f32],
+        direction_seeds: &[f32],
+        batch_size: u32,
+    ) -> Result<TaylorBatchResult<f32>, GpuError>;
 }
 
 /// Result of a batched second-order Taylor forward propagation.
@@ -150,6 +173,19 @@ pub struct TaylorBatchResult<F> {
     pub c1s: Vec<F>,
     /// Second-order Taylor coefficients `[batch_size * num_outputs]`.
     pub c2s: Vec<F>,
+}
+
+/// Result of a batched K-th order Taylor forward propagation.
+///
+/// `coefficients[k]` has `batch_size * num_outputs` elements for coefficient index k.
+/// The Taylor convention is `c[k] = f^(k)(t₀) / k!`.
+#[cfg(feature = "stde")]
+pub struct TaylorKthBatchResult<F> {
+    /// Taylor coefficients: `coefficients[k]` is the k-th order coefficient vector
+    /// with `batch_size * num_outputs` elements.
+    pub coefficients: Vec<Vec<F>>,
+    /// The Taylor order (number of coefficients per output).
+    pub order: usize,
 }
 
 /// Error type for GPU operations.
@@ -282,4 +318,117 @@ pub struct TapeMeta {
 #[inline]
 pub fn opcode_to_gpu(op: OpCode) -> u32 {
     op as u32
+}
+
+/// Default maximum buffer size for WebGPU (128 MiB).
+///
+/// WebGPU's `maxBufferSize` limit is 256 MiB, but we use 128 MiB as a
+/// conservative default to avoid hitting device-specific limits.
+#[cfg(feature = "stde")]
+pub const WGPU_MAX_BUFFER_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Maximum workgroup dispatches per dimension in WebGPU (65535).
+#[cfg(feature = "stde")]
+const MAX_WORKGROUPS_PER_DIM: u64 = 65535;
+
+/// Workgroup size used by the Taylor forward shader.
+#[cfg(feature = "stde")]
+const TAYLOR_WORKGROUP_SIZE: u64 = 256;
+
+/// Chunked batched second-order Taylor forward propagation.
+///
+/// Splits a large batch into chunks that fit within GPU buffer size limits,
+/// dispatches each chunk, and concatenates results. This avoids hitting WebGPU's
+/// 128 MiB buffer limit or workgroup dispatch limits.
+///
+/// # Arguments
+///
+/// - `backend`: any `GpuBackend` implementation
+/// - `tape`: uploaded tape buffers
+/// - `primal_inputs`: `[f32; batch_size * num_inputs]` — primals for each element
+/// - `direction_seeds`: `[f32; batch_size * num_inputs]` — c1 seeds for each element
+/// - `batch_size`: total number of batch elements
+/// - `num_inputs`: number of input variables per element
+/// - `num_variables`: total tape variable slots (inputs + constants + intermediates)
+/// - `max_buffer_bytes`: maximum GPU buffer size in bytes (use [`WGPU_MAX_BUFFER_BYTES`])
+///
+/// # Errors
+///
+/// Returns `GpuError::Other` if `max_buffer_bytes` is too small for even a single element.
+#[cfg(feature = "stde")]
+#[allow(clippy::too_many_arguments)]
+pub fn taylor_forward_2nd_batch_chunked<B: GpuBackend>(
+    backend: &B,
+    tape: &B::TapeBuffers,
+    primal_inputs: &[f32],
+    direction_seeds: &[f32],
+    batch_size: u32,
+    num_inputs: u32,
+    num_variables: u32,
+    max_buffer_bytes: u64,
+) -> Result<TaylorBatchResult<f32>, GpuError> {
+    if batch_size == 0 {
+        return Ok(TaylorBatchResult {
+            values: vec![],
+            c1s: vec![],
+            c2s: vec![],
+        });
+    }
+
+    // The largest buffer is the jets working buffer: batch_size * num_variables * 3 * 4 bytes
+    let bytes_per_element = (num_variables as u64) * 3 * 4;
+    if bytes_per_element == 0 {
+        return Err(GpuError::Other("num_variables is zero".into()));
+    }
+
+    let mut chunk_size = max_buffer_bytes / bytes_per_element;
+    if chunk_size == 0 {
+        return Err(GpuError::Other(format!(
+            "max_buffer_bytes ({max_buffer_bytes}) too small for a single element \
+             ({bytes_per_element} bytes per element)"
+        )));
+    }
+
+    // Also cap at workgroup dispatch limit: 65535 workgroups * 256 threads
+    let dispatch_limit = MAX_WORKGROUPS_PER_DIM * TAYLOR_WORKGROUP_SIZE;
+    chunk_size = chunk_size.min(dispatch_limit);
+
+    let chunk_size = chunk_size as u32;
+
+    // If everything fits in one chunk, dispatch directly
+    if batch_size <= chunk_size {
+        return backend.taylor_forward_2nd_batch(tape, primal_inputs, direction_seeds, batch_size);
+    }
+
+    // Multi-chunk dispatch
+    let ni = num_inputs as usize;
+    let mut all_values = Vec::new();
+    let mut all_c1s = Vec::new();
+    let mut all_c2s = Vec::new();
+
+    let mut offset = 0u32;
+    while offset < batch_size {
+        let this_chunk = chunk_size.min(batch_size - offset);
+        let start = (offset as usize) * ni;
+        let end = start + (this_chunk as usize) * ni;
+
+        let chunk_result = backend.taylor_forward_2nd_batch(
+            tape,
+            &primal_inputs[start..end],
+            &direction_seeds[start..end],
+            this_chunk,
+        )?;
+
+        all_values.extend(chunk_result.values);
+        all_c1s.extend(chunk_result.c1s);
+        all_c2s.extend(chunk_result.c2s);
+
+        offset += this_chunk;
+    }
+
+    Ok(TaylorBatchResult {
+        values: all_values,
+        c1s: all_c1s,
+        c2s: all_c2s,
+    })
 }

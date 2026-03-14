@@ -6,7 +6,7 @@
 //! # Usage
 //!
 //! ```no_run
-//! use echidna::gpu::{CudaContext, GpuTapeData};
+//! use echidna::gpu::{CudaContext, GpuBackend, GpuTapeData};
 //! use echidna::{record, Scalar};
 //!
 //! let ctx = CudaContext::new().expect("CUDA device required");
@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use cudarc::driver::{
-    CudaContext as CudarContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig,
+    CudaContext as CudarContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
 };
 use cudarc::nvrtc::compile_ptx;
 
@@ -670,15 +670,9 @@ impl GpuBackend for CudaContext {
     ) -> Result<(f32, Vec<f32>, crate::sparse::SparsityPattern, Vec<f32>), GpuError> {
         cuda_sparse_hessian_body!(self, tape, tape_cpu, x, f32, hvp_batch)
     }
-}
 
-impl CudaContext {
-    /// Batched second-order Taylor forward propagation (f32).
-    ///
-    /// Each batch element pushes one direction through the tape, producing
-    /// a Taylor jet with 3 coefficients (c0=value, c1=first derivative,
-    /// c2=second derivative / 2).
-    pub fn taylor_forward_2nd_batch(
+    #[cfg(feature = "stde")]
+    fn taylor_forward_2nd_batch(
         &self,
         tape: &CudaTapeBuffers,
         primal_inputs: &[f32],
@@ -694,6 +688,33 @@ impl CudaContext {
             f32,
             constants_f32,
             taylor_fwd_2nd_f32
+        )
+    }
+}
+
+impl CudaContext {
+    /// Batched second-order Taylor forward propagation (f32).
+    ///
+    /// Deprecated: this inherent method delegates to the `GpuBackend` trait method.
+    /// Import `GpuBackend` and call `taylor_forward_2nd_batch` directly.
+    #[cfg(feature = "stde")]
+    #[deprecated(
+        since = "0.5.0",
+        note = "import GpuBackend trait and call taylor_forward_2nd_batch() directly"
+    )]
+    pub fn taylor_forward_2nd_batch(
+        &self,
+        tape: &CudaTapeBuffers,
+        primal_inputs: &[f32],
+        direction_seeds: &[f32],
+        batch_size: u32,
+    ) -> Result<super::TaylorBatchResult<f32>, GpuError> {
+        <Self as GpuBackend>::taylor_forward_2nd_batch(
+            self,
+            tape,
+            primal_inputs,
+            direction_seeds,
+            batch_size,
         )
     }
 
