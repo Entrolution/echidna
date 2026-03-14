@@ -16,11 +16,18 @@ All core roadmap items (R1–R13), Phases 1–5, and the STDE deferred items pla
 
 ---
 
+## Done (previously deferred, now completed)
+
+| Item | Completed In | Notes |
+|------|-------------|-------|
+| nalgebra 0.33 → 0.34 | v0.4.0 | MSRV blocker resolved (1.93 ≥ 1.87+). Upgrade completed with no API breakage. |
+
+---
+
 ## Deferred (valuable, not yet needed)
 
 | Item | Reasoning | Revisit When |
 |------|-----------|--------------|
-| nalgebra 0.33 → 0.34 | MSRV blocker resolved (now 1.93, nalgebra 0.34 requires 1.87+). May have API changes in `NalgebraVec` and sparse matrix types. | When convenient; test thoroughly for API changes. |
 | Indefinite dense STDE | Eigendecomposition-based approach for indefinite coefficient matrices C (6 parameters, sign-splitting into C⁺ - C⁻) adds significant API complexity. The positive-definite Cholesky case (`dense_stde_2nd`) covers most PDE use cases (Fokker-Planck, Black-Scholes, HJB). Users with indefinite C can manually split into C⁺ - C⁻, compute Cholesky factors for each, and call `dense_stde_2nd` twice. | A concrete user need for indefinite C arises |
 | General-K GPU Taylor kernels | GPU Taylor kernel is hardcoded to K=3 (second-order). Hardcoding allows complete loop unrolling — critical for GPU performance. General K would need dynamic loops or a family of K-specialized kernels. | Need for GPU-accelerated 3rd+ order derivatives |
 | Chunked GPU Taylor dispatch | Working buffer is `3 * num_variables * batch_size * 4` bytes. WebGPU's 128 MB limit caps `num_variables * batch_size ≤ ~10M`. For larger problems, the dispatch function should chunk the batch and accumulate results. | Users hit the buffer limit in practice |

@@ -120,6 +120,7 @@ pub struct BytecodeTape<F: Float> {
 
 impl<F: Float> BytecodeTape<F> {
     /// Create an empty bytecode tape.
+    #[must_use]
     pub fn new() -> Self {
         BytecodeTape {
             opcodes: Vec::new(),
@@ -135,6 +136,7 @@ impl<F: Float> BytecodeTape<F> {
     }
 
     /// Create a bytecode tape with pre-allocated capacity.
+    #[must_use]
     pub fn with_capacity(est_ops: usize) -> Self {
         BytecodeTape {
             opcodes: Vec::with_capacity(est_ops),
@@ -366,6 +368,7 @@ impl<F: Float> BytecodeTape<F> {
 
     /// Get the output value (available after `forward()` or initial recording).
     #[inline]
+    #[must_use]
     pub fn output_value(&self) -> F {
         self.values[self.output_index as usize]
     }
@@ -375,18 +378,21 @@ impl<F: Float> BytecodeTape<F> {
     /// Use this with the buffer produced by [`forward_tangent`](Self::forward_tangent)
     /// to read the output: `buf[tape.output_index()]`.
     #[inline]
+    #[must_use]
     pub fn output_index(&self) -> usize {
         self.output_index as usize
     }
 
     /// Number of input variables.
     #[inline]
+    #[must_use]
     pub fn num_inputs(&self) -> usize {
         self.num_inputs as usize
     }
 
     /// Number of operations (including inputs and constants).
     #[inline]
+    #[must_use]
     pub fn num_ops(&self) -> usize {
         self.opcodes.len()
     }
@@ -407,6 +413,7 @@ impl<F: Float> BytecodeTape<F> {
     }
 
     /// Number of output variables. Returns 1 in single-output mode.
+    #[must_use]
     pub fn num_outputs(&self) -> usize {
         if self.output_indices.is_empty() {
             1
@@ -418,6 +425,7 @@ impl<F: Float> BytecodeTape<F> {
     /// Get all output values (available after `forward()` or initial recording).
     ///
     /// In single-output mode, returns a single-element vector.
+    #[must_use]
     pub fn output_values(&self) -> Vec<F> {
         if self.output_indices.is_empty() {
             vec![self.values[self.output_index as usize]]
@@ -433,6 +441,7 @@ impl<F: Float> BytecodeTape<F> {
     ///
     /// For multi-output tapes, returns all registered output indices.
     /// For single-output tapes, returns a single-element slice.
+    #[must_use]
     pub fn all_output_indices(&self) -> &[u32] {
         if self.output_indices.is_empty() {
             std::slice::from_ref(&self.output_index)
@@ -445,30 +454,35 @@ impl<F: Float> BytecodeTape<F> {
 
     /// Slice view of all opcodes in the tape.
     #[inline]
+    #[must_use]
     pub fn opcodes_slice(&self) -> &[OpCode] {
         &self.opcodes
     }
 
     /// Slice view of all argument index pairs `[arg0, arg1]`.
     #[inline]
+    #[must_use]
     pub fn arg_indices_slice(&self) -> &[[u32; 2]] {
         &self.arg_indices
     }
 
     /// Slice view of all primal values in the tape.
     #[inline]
+    #[must_use]
     pub fn values_slice(&self) -> &[F] {
         &self.values
     }
 
     /// Total number of tape entries (inputs + constants + operations).
     #[inline]
+    #[must_use]
     pub fn num_variables_count(&self) -> usize {
         self.num_variables as usize
     }
 
     /// Returns `true` if the tape contains any custom operations.
     #[inline]
+    #[must_use]
     pub fn has_custom_ops(&self) -> bool {
         !self.custom_ops.is_empty()
     }

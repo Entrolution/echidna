@@ -21,16 +21,19 @@ pub struct SparsityPattern {
 
 impl SparsityPattern {
     /// Number of non-zero entries in the pattern.
+    #[must_use]
     pub fn nnz(&self) -> usize {
         self.rows.len()
     }
 
     /// Whether the pattern is empty (all zeros).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
     /// Check if position (i, j) is in the pattern (checks both (i,j) and (j,i)).
+    #[must_use]
     pub fn contains(&self, i: usize, j: usize) -> bool {
         let (r, c) = if i >= j { (i, j) } else { (j, i) };
         self.rows
@@ -269,6 +272,7 @@ pub(crate) fn extract_bits(bitset: &[u64], max_bits: usize) -> Vec<u32> {
 ///
 /// Returns `(colors, num_colors)` where `colors[i]` is the color assigned to input `i`.
 /// Vertices are visited in decreasing-degree order for better results.
+#[must_use]
 pub fn greedy_coloring(pattern: &SparsityPattern) -> (Vec<u32>, u32) {
     let n = pattern.dim;
     if n == 0 {
@@ -309,64 +313,7 @@ pub fn greedy_coloring(pattern: &SparsityPattern) -> (Vec<u32>, u32) {
         adj2[v].dedup();
     }
 
-    // Sort vertices by decreasing degree in G^2
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| adj2[b].len().cmp(&adj2[a].len()));
-
-    let mut colors = vec![u32::MAX; n];
-    let mut num_colors = 0u32;
-
-    for &v in &order {
-        // Find smallest available color using u64 bitset (supports up to 64 colors).
-        // For virtually all practical sparse Hessians, 64 colors is sufficient.
-        // Falls back to linear scan if > 64 colors are needed.
-        let mut used_bits: u64 = 0;
-        let mut needs_fallback = false;
-        for &neighbor in &adj2[v] {
-            let c = colors[neighbor as usize];
-            if c != u32::MAX {
-                if c < 64 {
-                    used_bits |= 1u64 << c;
-                } else {
-                    needs_fallback = true;
-                }
-            }
-        }
-
-        let color = if !needs_fallback {
-            (!used_bits).trailing_zeros()
-        } else {
-            // Fallback: collect all used colors and find first gap
-            let mut used_vec: Vec<u32> = adj2[v]
-                .iter()
-                .filter_map(|&neighbor| {
-                    let c = colors[neighbor as usize];
-                    if c != u32::MAX {
-                        Some(c)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            used_vec.sort_unstable();
-            used_vec.dedup();
-            let mut c = 0u32;
-            for &u in &used_vec {
-                if u != c {
-                    break;
-                }
-                c += 1;
-            }
-            c
-        };
-
-        colors[v] = color;
-        if color + 1 > num_colors {
-            num_colors = color + 1;
-        }
-    }
-
-    (colors, num_colors)
+    greedy_distance1_coloring(&adj2, n)
 }
 
 /// Compressed Sparse Row (CSR) format for sparse matrices.
@@ -382,6 +329,7 @@ pub struct CsrPattern {
 
 impl CsrPattern {
     /// Number of stored entries.
+    #[must_use]
     pub fn nnz(&self) -> usize {
         self.col_ind.len()
     }
@@ -418,6 +366,7 @@ impl CsrPattern {
 
 impl SparsityPattern {
     /// Convert to CSR format preserving the lower triangle (matching COO storage).
+    #[must_use]
     pub fn to_csr_lower(&self) -> CsrPattern {
         let n = self.dim;
         let mut row_ptr = vec![0u32; n + 1];
@@ -453,6 +402,7 @@ impl SparsityPattern {
     ///
     /// For every off-diagonal entry (r, c) in the lower triangle, also stores
     /// the mirrored entry (c, r). Diagonal entries appear once.
+    #[must_use]
     pub fn to_csr(&self) -> CsrPattern {
         let n = self.dim;
         let mut row_ptr = vec![0u32; n + 1];
@@ -524,16 +474,19 @@ pub struct JacobianSparsityPattern {
 
 impl JacobianSparsityPattern {
     /// Number of structural non-zeros in the pattern.
+    #[must_use]
     pub fn nnz(&self) -> usize {
         self.rows.len()
     }
 
     /// Whether the pattern is empty (all zeros).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
     /// Check if position (output_idx, input_idx) is in the pattern.
+    #[must_use]
     pub fn contains(&self, output_idx: usize, input_idx: usize) -> bool {
         self.rows
             .iter()
@@ -612,37 +565,14 @@ pub(crate) fn detect_jacobian_sparsity_impl(
 /// applies greedy distance-1 coloring with degree ordering.
 ///
 /// Returns `(colors, num_colors)` where `colors[j]` is the color of column j.
+#[must_use]
 pub fn column_coloring(pattern: &JacobianSparsityPattern) -> (Vec<u32>, u32) {
-    let n = pattern.num_inputs;
-    if n == 0 {
-        return (Vec::new(), 0);
-    }
-
-    // Build row -> columns map
-    let mut row_to_cols: Vec<Vec<u32>> = vec![Vec::new(); pattern.num_outputs];
-    for (&r, &c) in pattern.rows.iter().zip(pattern.cols.iter()) {
-        row_to_cols[r as usize].push(c);
-    }
-
-    // Build column adjacency: columns sharing a row are adjacent
-    let mut adj: Vec<Vec<u32>> = vec![Vec::new(); n];
-    for cols_in_row in &row_to_cols {
-        for i in 0..cols_in_row.len() {
-            for j in (i + 1)..cols_in_row.len() {
-                let c1 = cols_in_row[i] as usize;
-                let c2 = cols_in_row[j] as usize;
-                adj[c1].push(c2 as u32);
-                adj[c2].push(c1 as u32);
-            }
-        }
-    }
-    // Deduplicate adjacency lists
-    for list in &mut adj {
-        list.sort_unstable();
-        list.dedup();
-    }
-
-    greedy_distance1_coloring(&adj, n)
+    intersection_graph_coloring(
+        &pattern.rows,
+        &pattern.cols,
+        pattern.num_outputs,
+        pattern.num_inputs,
+    )
 }
 
 /// Row coloring for reverse-mode Jacobian compression.
@@ -652,37 +582,53 @@ pub fn column_coloring(pattern: &JacobianSparsityPattern) -> (Vec<u32>, u32) {
 /// greedy distance-1 coloring with degree ordering.
 ///
 /// Returns `(colors, num_colors)` where `colors[i]` is the color of row i.
+#[must_use]
 pub fn row_coloring(pattern: &JacobianSparsityPattern) -> (Vec<u32>, u32) {
-    let n = pattern.num_outputs;
-    if n == 0 {
+    intersection_graph_coloring(
+        &pattern.cols,
+        &pattern.rows,
+        pattern.num_inputs,
+        pattern.num_outputs,
+    )
+}
+
+/// Build an intersection graph and color it greedily.
+///
+/// Groups entries by `group_keys` (dimension `group_dim`), then colors `color_keys`
+/// (dimension `color_dim`). Two color-keys that appear in the same group need
+/// different colors.
+fn intersection_graph_coloring(
+    group_keys: &[u32],
+    color_keys: &[u32],
+    group_dim: usize,
+    color_dim: usize,
+) -> (Vec<u32>, u32) {
+    if color_dim == 0 {
         return (Vec::new(), 0);
     }
 
-    // Build column -> rows map
-    let mut col_to_rows: Vec<Vec<u32>> = vec![Vec::new(); pattern.num_inputs];
-    for (&r, &c) in pattern.rows.iter().zip(pattern.cols.iter()) {
-        col_to_rows[c as usize].push(r);
+    let mut groups: Vec<Vec<u32>> = vec![Vec::new(); group_dim];
+    for (&g, &c) in group_keys.iter().zip(color_keys.iter()) {
+        groups[g as usize].push(c);
     }
 
-    // Build row adjacency: rows sharing a column are adjacent
-    let mut adj: Vec<Vec<u32>> = vec![Vec::new(); n];
-    for rows_in_col in &col_to_rows {
-        for i in 0..rows_in_col.len() {
-            for j in (i + 1)..rows_in_col.len() {
-                let r1 = rows_in_col[i] as usize;
-                let r2 = rows_in_col[j] as usize;
-                adj[r1].push(r2 as u32);
-                adj[r2].push(r1 as u32);
+    let mut adj: Vec<Vec<u32>> = vec![Vec::new(); color_dim];
+    for members in &groups {
+        for i in 0..members.len() {
+            for j in (i + 1)..members.len() {
+                let a = members[i] as usize;
+                let b = members[j] as usize;
+                adj[a].push(b as u32);
+                adj[b].push(a as u32);
             }
         }
     }
-    // Deduplicate adjacency lists
     for list in &mut adj {
         list.sort_unstable();
         list.dedup();
     }
 
-    greedy_distance1_coloring(&adj, n)
+    greedy_distance1_coloring(&adj, color_dim)
 }
 
 /// Greedy distance-1 coloring with degree ordering and u64 bitset fast path.

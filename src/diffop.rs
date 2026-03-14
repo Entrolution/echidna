@@ -91,6 +91,7 @@ impl MultiIndex {
     /// # Panics
     ///
     /// Panics if `orders` is empty.
+    #[must_use]
     pub fn new(orders: &[u8]) -> Self {
         assert!(
             !orders.is_empty(),
@@ -106,6 +107,7 @@ impl MultiIndex {
     /// # Panics
     ///
     /// Panics if `var >= num_vars` or `order == 0`.
+    #[must_use]
     pub fn diagonal(num_vars: usize, var: usize, order: u8) -> Self {
         assert!(var < num_vars, "var ({}) >= num_vars ({})", var, num_vars);
         assert!(order > 0, "order must be > 0");
@@ -119,16 +121,19 @@ impl MultiIndex {
     /// # Panics
     ///
     /// Panics if `var >= num_vars`.
+    #[must_use]
     pub fn partial(num_vars: usize, var: usize) -> Self {
         Self::diagonal(num_vars, var, 1)
     }
 
     /// Total differentiation order: `Σ orders[i]`.
+    #[must_use]
     pub fn total_order(&self) -> usize {
         self.orders.iter().map(|&o| o as usize).sum()
     }
 
     /// Active variables: indices where `orders[i] > 0`, paired with their order.
+    #[must_use]
     pub fn active_vars(&self) -> Vec<(usize, u8)> {
         self.orders
             .iter()
@@ -139,11 +144,13 @@ impl MultiIndex {
     }
 
     /// Number of variables in this multi-index.
+    #[must_use]
     pub fn num_vars(&self) -> usize {
         self.orders.len()
     }
 
     /// The per-variable differentiation orders.
+    #[must_use]
     pub fn orders(&self) -> &[u8] {
         &self.orders
     }
@@ -404,6 +411,7 @@ impl<F: Float> JetPlan<F> {
     ///
     /// Panics if `multi_indices` is empty, if any multi-index has wrong `num_vars`,
     /// or if slot assignment fails.
+    #[must_use]
     pub fn plan(num_vars: usize, multi_indices: &[MultiIndex]) -> Self {
         assert!(
             !multi_indices.is_empty(),
@@ -450,11 +458,13 @@ impl<F: Float> JetPlan<F> {
     }
 
     /// The maximum jet order across all groups.
+    #[must_use]
     pub fn jet_order(&self) -> usize {
         self.max_jet_order
     }
 
     /// The multi-indices this plan computes, in order.
+    #[must_use]
     pub fn multi_indices(&self) -> Vec<MultiIndex> {
         self.multi_indices.clone()
     }
@@ -579,6 +589,9 @@ pub fn mixed_partial<F: Float + TaylorArenaLocal>(
 /// # Panics
 ///
 /// Panics if `x.len()` does not match `tape.num_inputs()`.
+// Index variables i, j are used to construct MultiIndex values, index into `orders`,
+// and fill both triangles of the symmetric Hessian matrix — iterators would obscure the
+// mathematical indexing logic.
 #[allow(clippy::needless_range_loop)]
 pub fn hessian<F: Float + TaylorArenaLocal>(
     tape: &BytecodeTape<F>,
@@ -660,6 +673,7 @@ impl<F: Float> DiffOp<F> {
     /// # Panics
     ///
     /// Panics if `terms` is empty or any multi-index has wrong `num_vars`.
+    #[must_use]
     pub fn new(num_vars: usize, terms: Vec<(F, MultiIndex)>) -> Self {
         assert!(!terms.is_empty(), "DiffOp must have at least one term");
         for (_, mi) in &terms {
@@ -686,6 +700,7 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// Laplacian: `Σ_j ∂²/∂x_j²`.
+    #[must_use]
     pub fn laplacian(n: usize) -> Self {
         let terms = (0..n)
             .map(|j| (F::one(), MultiIndex::diagonal(n, j, 2)))
@@ -694,6 +709,7 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// Biharmonic: `Σ_j ∂⁴/∂x_j⁴`.
+    #[must_use]
     pub fn biharmonic(n: usize) -> Self {
         let terms = (0..n)
             .map(|j| (F::one(), MultiIndex::diagonal(n, j, 4)))
@@ -702,6 +718,7 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// k-th order diagonal: `Σ_j ∂^k/∂x_j^k`.
+    #[must_use]
     pub fn diagonal(n: usize, k: u8) -> Self {
         assert!(k >= 1, "diagonal order must be >= 1");
         let terms = (0..n)
@@ -711,16 +728,19 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// The terms of the operator.
+    #[must_use]
     pub fn terms(&self) -> &[(F, MultiIndex)] {
         &self.terms
     }
 
     /// Number of variables.
+    #[must_use]
     pub fn num_vars(&self) -> usize {
         self.num_vars
     }
 
     /// Maximum total order across all terms.
+    #[must_use]
     pub fn order(&self) -> usize {
         self.terms
             .iter()
@@ -730,6 +750,7 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// True if every term has exactly one active variable (no mixed partials).
+    #[must_use]
     pub fn is_diagonal(&self) -> bool {
         self.terms.iter().all(|(_, mi)| mi.active_vars().len() <= 1)
     }
@@ -738,6 +759,7 @@ impl<F: Float> DiffOp<F> {
     ///
     /// Returns a vector of `DiffOp`, each containing terms with the same
     /// total order, sorted by increasing order.
+    #[must_use]
     pub fn split_by_order(&self) -> Vec<DiffOp<F>> {
         let mut order_map: Vec<(usize, Vec<(F, MultiIndex)>)> = Vec::new();
         for (c, mi) in &self.terms {
@@ -785,6 +807,7 @@ impl<F: Float + TaylorArenaLocal> DiffOp<F> {
     /// # Panics
     ///
     /// Panics if the operator is not homogeneous (mixed total orders).
+    #[must_use]
     pub fn sparse_distribution(&self) -> SparseSamplingDistribution<F> {
         let k = self.terms[0].1.total_order();
         for (_, mi) in &self.terms {
@@ -870,21 +893,25 @@ pub struct SparseJetEntryRef<'a, F> {
 
 impl<'a, F: Float> SparseJetEntryRef<'a, F> {
     /// Slot assignments: `(var_index, slot, 1/slot!)`.
+    #[must_use]
     pub fn input_coeffs(&self) -> &[(usize, usize, F)] {
         &self.entry.input_coeffs
     }
 
     /// Which output coefficient to read.
+    #[must_use]
     pub fn output_coeff_index(&self) -> usize {
         self.entry.output_coeff_index
     }
 
     /// Extraction prefactor from the Faà di Bruno formula.
+    #[must_use]
     pub fn extraction_prefactor(&self) -> F {
         self.entry.extraction_prefactor
     }
 
     /// Sign of the operator coefficient `C_α`.
+    #[must_use]
     pub fn sign(&self) -> F {
         self.entry.sign
     }

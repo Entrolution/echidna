@@ -453,6 +453,9 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 }
 
 fn write_checkpoint<F: Float>(state: &[F], path: &std::path::Path) {
+    // SAFETY: `F: Float` is `Copy + Sized` with no padding or pointers, so its
+    // raw byte representation is well-defined. The pointer comes from a valid
+    // slice, and the length is exactly `size_of_val(state)` bytes.
     let bytes: &[u8] = unsafe {
         std::slice::from_raw_parts(state.as_ptr().cast::<u8>(), std::mem::size_of_val(state))
     };
@@ -469,6 +472,9 @@ fn read_checkpoint<F: Float>(path: &std::path::Path, dim: usize) -> Vec<F> {
         bytes.len()
     );
     let mut state = vec![F::zero(); dim];
+    // SAFETY: `F: Float` is `Copy + Sized` with no padding or pointers. The
+    // byte length was validated by the assert above to equal `dim * size_of::<F>()`,
+    // so the copy stays within bounds of both the source and destination buffers.
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), state.as_mut_ptr().cast::<u8>(), bytes.len());
     }

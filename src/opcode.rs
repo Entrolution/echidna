@@ -100,6 +100,7 @@ pub enum OpCode {
 /// Use [`has_nontrivial_subdifferential`] to distinguish the subset that
 /// contributes distinct limiting Jacobians for Clarke enumeration.
 #[inline]
+#[must_use]
 pub fn is_nonsmooth(op: OpCode) -> bool {
     matches!(
         op,
@@ -122,6 +123,7 @@ pub fn is_nonsmooth(op: OpCode) -> bool {
 /// identical partials, so enumerating them in Clarke Jacobian adds cost with no
 /// information.
 #[inline]
+#[must_use]
 pub fn has_nontrivial_subdifferential(op: OpCode) -> bool {
     matches!(op, OpCode::Abs | OpCode::Min | OpCode::Max)
 }
@@ -382,6 +384,7 @@ fn powi_exp_decode<T: Float>(b: T) -> i32 {
 
 /// Encode a `powi` exponent as a value that can be stored in `arg_indices[1]`.
 #[inline]
+#[must_use]
 pub fn powi_exp_encode(exp: i32) -> u32 {
     exp as u32
 }

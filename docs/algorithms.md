@@ -526,7 +526,7 @@ propagation. Each thread processes one batch element, propagating a `(c0, c1,
 c2)` triple through the tape where `c0` is the primal value, `c1` is the
 directional first derivative, and `c2 = v^T H v / 2`. The memory layout is
 interleaved per variable per thread: `[c0_i, c1_i, c2_i]` contiguous per
-variable, optimizing per-thread locality. All 43 opcodes implement full
+variable, optimizing per-thread locality. All 44 opcodes implement full
 second-order Taylor propagation rules: arithmetic via Cauchy products,
 transcendentals via logarithmic derivative recurrences, and coupled
 recurrences for sin/cos, sinh/cosh, and tan/tanh.

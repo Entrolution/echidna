@@ -85,6 +85,7 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Reverse sweep: compute adjoints seeded at the output.
     ///
     /// Returns the full adjoint vector (length = `num_variables`).
+    #[must_use]
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let n = self.num_variables as usize;
         let mut adjoints = vec![F::zero(); n];

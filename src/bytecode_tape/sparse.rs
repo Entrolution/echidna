@@ -7,6 +7,7 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Walks the tape forward propagating input-dependency bitsets.
     /// At nonlinear operations, marks cross-pairs as potential Hessian interactions.
+    #[must_use]
     pub fn detect_sparsity(&self) -> crate::sparse::SparsityPattern {
         crate::sparse::detect_sparsity_impl(
             &self.opcodes,
@@ -20,6 +21,7 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Walks the tape forward propagating input-dependency bitsets (first-order).
     /// For each output, determines which inputs it depends on.
+    #[must_use]
     pub fn detect_jacobian_sparsity(&self) -> crate::sparse::JacobianSparsityPattern {
         let out_indices = self.all_output_indices();
         crate::sparse::detect_jacobian_sparsity_impl(
@@ -45,49 +47,8 @@ impl<F: Float> super::BytecodeTape<F> {
 
         let pattern = self.detect_sparsity();
         let (colors, num_colors) = crate::sparse::greedy_coloring(&pattern);
-
-        let mut hessian_values = vec![F::zero(); pattern.nnz()];
-        let mut gradient = vec![F::zero(); n];
-        let mut value = F::zero();
-
-        let mut dual_input_buf: Vec<Dual<F>> = Vec::with_capacity(n);
-        let mut dual_vals_buf = Vec::new();
-        let mut adjoint_buf = Vec::new();
-        let mut v = vec![F::zero(); n];
-
-        for color in 0..num_colors {
-            // Form direction vector: v[i] = 1 if colors[i] == color, else 0
-            for i in 0..n {
-                v[i] = if colors[i] == color {
-                    F::one()
-                } else {
-                    F::zero()
-                };
-            }
-
-            self.hvp_with_all_bufs(
-                x,
-                &v,
-                &mut dual_input_buf,
-                &mut dual_vals_buf,
-                &mut adjoint_buf,
-            );
-
-            if color == 0 {
-                value = dual_vals_buf[self.output_index as usize].re;
-                for i in 0..n {
-                    gradient[i] = adjoint_buf[i].re;
-                }
-            }
-
-            // Extract Hessian entries for this color.
-            for (k, (&row, &col)) in pattern.rows.iter().zip(pattern.cols.iter()).enumerate() {
-                if colors[col as usize] == color {
-                    hessian_values[k] = adjoint_buf[row as usize].eps;
-                }
-            }
-        }
-
+        let (value, gradient, hessian_values) =
+            self.sparse_hessian_with_pattern(x, &pattern, &colors, num_colors);
         (value, gradient, pattern, hessian_values)
     }
 

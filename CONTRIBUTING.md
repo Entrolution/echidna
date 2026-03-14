@@ -162,7 +162,18 @@ src/
 ├── reverse.rs             # Reverse<F> reverse-mode type
 ├── api.rs                 # Public API: grad, jvp, vjp, jacobian, hessian, ...
 ├── breverse.rs            # BReverse<F> bytecode-tape reverse variable [bytecode]
-├── bytecode_tape.rs       # BytecodeTape SoA representation [bytecode]
+├── bytecode_tape/
+│   ├── mod.rs             # BytecodeTape SoA representation, core API [bytecode]
+│   ├── forward.rs         # Forward evaluation and tangent sweeps [bytecode]
+│   ├── jacobian.rs        # Jacobian computation (forward/reverse/cross-country) [bytecode]
+│   ├── optimize.rs        # Tape optimization passes (CSE, DCE, simplification) [bytecode]
+│   ├── parallel.rs        # Parallel/batched evaluation [bytecode]
+│   ├── reverse.rs         # Reverse sweeps and adjoint computation [bytecode]
+│   ├── serde_support.rs   # Serde serialization/deserialization [bytecode, serde]
+│   ├── sparse.rs          # Sparse derivative support [bytecode]
+│   ├── tangent.rs         # Tangent-mode evaluation (Taylor, nonsmooth) [bytecode]
+│   ├── taylor.rs          # Taylor-specific tape operations (ODE, grad) [bytecode, taylor]
+│   └── thread_local.rs    # Thread-local tape storage [bytecode]
 ├── opcode.rs              # Opcode definitions and dispatch (44 opcodes) [bytecode]
 ├── sparse.rs              # Sparsity detection and graph coloring [bytecode]
 ├── cross_country.rs       # Markowitz vertex elimination [bytecode]

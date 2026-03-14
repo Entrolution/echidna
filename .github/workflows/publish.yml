@@ -27,19 +27,19 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Build (all features)
-        run: cargo build -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
+        run: cargo build -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel"
 
       - name: Test echidna
-        run: cargo test -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
+        run: cargo test -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel"
 
       - name: Test echidna-optim
         run: cargo test -p echidna-optim
 
       - name: Clippy
-        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray" -- -D warnings
+        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel" -- -D warnings
 
       - name: Build docs
-        run: cargo doc --no-deps --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
+        run: cargo doc --no-deps --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel"
         env:
           RUSTDOCFLAGS: -D warnings
 

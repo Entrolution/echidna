@@ -61,13 +61,13 @@ Key files: `src/taylor.rs`, `src/taylor_dyn.rs`, `src/taylor_ops.rs`, `src/trait
 
 Reverse-over-Taylor: `taylor_grad` builds Taylor inputs `x_i(t) = x_i + v_i·t`, runs `forward_tangent`, then `reverse_tangent` to get Taylor-valued adjoints. `adjoint[i].coeff(0)` = gradient, `adjoint[i].coeff(1)` = HVP, `adjoint[i].derivative(k)` = k-th order directional adjoint. For K=2 equivalent to `hvp()`; for K≥3 yields third-order and higher. Feature-gated behind `taylor`. `taylor_grad_with_buf` variant reuses buffers. 11 tests cross-validating against `hvp`, `gradient`, `hessian`, and `third_order_hvvp`.
 
-Key file: `src/bytecode_tape.rs`.
+Key file: `src/bytecode_tape/taylor.rs`.
 
 **R1d. ODE Taylor series integration** — **COMPLETE**
 
 Given `y' = f(y)`, computes the Taylor expansion of `y(t)` to order K via coefficient bootstrapping: `y_{k+1} = coeff_k(f(y(t))) / (k+1)`. Uses K-1 forward passes through the tape, building up Taylor inputs incrementally. Returns `Vec<Taylor<F, K>>` so users get `eval_at(h)` for stepping, `coeff(k)` for error estimation, and `derivative(k)` for the solution derivatives. Feature-gated behind `taylor`. Follows the `taylor_grad` / `hvp` dual-method pattern (allocating + buffer-reusing). 8 tests covering exponential growth/decay, quadratic blowup, 2D rotation, step evaluation, minimal K=2, buffer reuse, and standalone `eval_at`.
 
-Key file: `src/bytecode_tape.rs`.
+Key file: `src/bytecode_tape/taylor.rs`.
 
 ### R2. Stochastic Taylor Derivative Estimators (STDE)
 **STDE paper (Shi et al., NeurIPS 2024)**
@@ -135,7 +135,7 @@ Vertex elimination on the linearized computational graph with Markowitz-based or
 
 Public API: `BytecodeTape::jacobian_cross_country(&mut self, inputs: &[F]) -> Vec<Vec<F>>`. Handles identity/passthrough (output-is-input), custom ops, constant nodes, and all standard opcodes. Generic over `F: Float`. 10 tests cross-validating against `jacobian()` (reverse mode) and `jacobian_forward()`.
 
-Key files: `src/cross_country.rs`, `src/bytecode_tape.rs`.
+Key files: `src/cross_country.rs`, `src/bytecode_tape/jacobian.rs`.
 
 ### R6. Nonsmooth Extensions — **COMPLETE**
 **Book Phase 7 (Ch 14)**
@@ -144,13 +144,13 @@ Key files: `src/cross_country.rs`, `src/bytecode_tape.rs`.
 
 `BytecodeTape::forward_nonsmooth` detects abs/min/max kinks during forward evaluation, records `KinkEntry` with tape index, opcode, switching value, and branch taken. `NonsmoothInfo` provides `active_kinks(tol)`, `is_smooth(tol)`, and `signature()`. Feature-gated behind `bytecode`. 8 tests.
 
-Key files: `src/nonsmooth.rs`, `src/bytecode_tape.rs`.
+Key files: `src/nonsmooth.rs`, `src/bytecode_tape/forward.rs`.
 
 **R6b. Clarke generalized Jacobian** — **COMPLETE**
 
 `BytecodeTape::clarke_jacobian` enumerates all 2^k sign combinations for k active kinks, computing limiting Jacobians via `reverse_with_forced_signs`. `jacobian_limiting` allows explicit forced branch choices. `forced_reverse_partials` in `opcode.rs` overrides nonsmooth op partials. Configurable kink limit (default 20) returns `ClarkeError::TooManyKinks`. 8 tests.
 
-Key files: `src/opcode.rs`, `src/bytecode_tape.rs`.
+Key files: `src/opcode.rs`, `src/bytecode_tape/jacobian.rs`.
 
 **R6c. Laurent numbers** — **COMPLETE**
 
@@ -167,7 +167,7 @@ Key files: `src/laurent.rs`, `src/traits/laurent_std_ops.rs`, `src/traits/lauren
 
 `serde` support for `BytecodeTape` with manual Serialize/Deserialize implementations. Custom ops are rejected at serialization time (must be re-registered after deserialization). R6 types (`KinkEntry`, `NonsmoothInfo`, `ClarkeError`) and `Laurent<F, K>` also support serde (Laurent uses manual impls due to const-generic array limitations in serde's derive). Feature-gated behind `serde` flag. JSON and bincode roundtrip verified. 9 tests covering f32/f64, single/multi-output tapes, binary format, custom-op rejection, sparsity patterns, and nonsmooth info.
 
-Key files: `src/bytecode_tape.rs`, `src/nonsmooth.rs`, `src/laurent.rs`, `tests/serde.rs`.
+Key files: `src/bytecode_tape/serde_support.rs`, `src/nonsmooth.rs`, `src/laurent.rs`, `tests/serde.rs`.
 
 ### R8. Benchmarking Infrastructure — **COMPLETE**
 
@@ -253,7 +253,7 @@ Recording-time algebraic simplification and targeted multi-output DCE.
 - Constant deduplication: `FloatBits` trait can't be implemented for `Dual<F>`; CSE handles ops over duplicate constants
 - Cross-checkpoint DCE: too complex for this milestone
 
-Key file: `src/bytecode_tape.rs`. 22 new tests in `tests/tape_optimization.rs`.
+Key file: `src/bytecode_tape/optimize.rs`. 22 new tests in `tests/tape_optimization.rs`.
 
 ---
 

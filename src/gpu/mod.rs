@@ -211,6 +211,30 @@ pub struct GpuTapeData {
 }
 
 impl GpuTapeData {
+    /// Build `GpuTapeData` from a tape's structural data and pre-converted constants.
+    fn build_from_tape<F: crate::float::Float>(
+        tape: &BytecodeTape<F>,
+        constants: Vec<f32>,
+    ) -> Self {
+        let opcodes_raw = tape.opcodes_slice();
+        let args = tape.arg_indices_slice();
+        let n = opcodes_raw.len();
+
+        GpuTapeData {
+            opcodes: opcodes_raw.iter().map(|op| *op as u32).collect(),
+            arg0: args.iter().map(|a| a[0]).collect(),
+            arg1: args.iter().map(|a| a[1]).collect(),
+            constants,
+            // SAFETY(u32 cast): n is the number of tape opcodes. Exceeding u32::MAX (~4.3B)
+            // would require ~17 GB of opcode storage alone, which is impractical.
+            num_ops: n as u32,
+            num_inputs: tape.num_inputs() as u32,
+            num_variables: tape.num_variables_count() as u32,
+            output_index: tape.output_index() as u32,
+            output_indices: tape.all_output_indices().to_vec(),
+        }
+    }
+
     /// Convert a `BytecodeTape<f32>` to GPU-uploadable format.
     ///
     /// Returns `Err(CustomOpsNotSupported)` if the tape contains custom ops,
@@ -219,28 +243,7 @@ impl GpuTapeData {
         if tape.has_custom_ops() {
             return Err(GpuError::CustomOpsNotSupported);
         }
-
-        let opcodes_raw = tape.opcodes_slice();
-        let args = tape.arg_indices_slice();
-        let vals = tape.values_slice();
-        let n = opcodes_raw.len();
-
-        let opcodes: Vec<u32> = opcodes_raw.iter().map(|op| *op as u32).collect();
-        let arg0: Vec<u32> = args.iter().map(|a| a[0]).collect();
-        let arg1: Vec<u32> = args.iter().map(|a| a[1]).collect();
-        let constants: Vec<f32> = vals.to_vec();
-
-        Ok(GpuTapeData {
-            opcodes,
-            arg0,
-            arg1,
-            constants,
-            num_ops: n as u32,
-            num_inputs: tape.num_inputs() as u32,
-            num_variables: tape.num_variables_count() as u32,
-            output_index: tape.output_index() as u32,
-            output_indices: tape.all_output_indices().to_vec(),
-        })
+        Ok(Self::build_from_tape(tape, tape.values_slice().to_vec()))
     }
 
     /// Convert a `BytecodeTape<f64>` to GPU-uploadable f32 format.
@@ -253,28 +256,8 @@ impl GpuTapeData {
         if tape.has_custom_ops() {
             return Err(GpuError::CustomOpsNotSupported);
         }
-
-        let opcodes_raw = tape.opcodes_slice();
-        let args = tape.arg_indices_slice();
-        let vals = tape.values_slice();
-        let n = opcodes_raw.len();
-
-        let opcodes: Vec<u32> = opcodes_raw.iter().map(|op| *op as u32).collect();
-        let arg0: Vec<u32> = args.iter().map(|a| a[0]).collect();
-        let arg1: Vec<u32> = args.iter().map(|a| a[1]).collect();
-        let constants: Vec<f32> = vals.iter().map(|&v| v as f32).collect();
-
-        Ok(GpuTapeData {
-            opcodes,
-            arg0,
-            arg1,
-            constants,
-            num_ops: n as u32,
-            num_inputs: tape.num_inputs() as u32,
-            num_variables: tape.num_variables_count() as u32,
-            output_index: tape.output_index() as u32,
-            output_indices: tape.all_output_indices().to_vec(),
-        })
+        let constants = tape.values_slice().iter().map(|&v| v as f32).collect();
+        Ok(Self::build_from_tape(tape, constants))
     }
 }
 

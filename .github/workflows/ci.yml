@@ -24,10 +24,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel"
+        run: cargo build --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop"
 
       - name: Run tests (echidna with all features)
-        run: cargo test -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel"
+        run: cargo test -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop"
 
       - name: Run tests (echidna-optim)
         run: cargo test -p echidna-optim
@@ -53,7 +53,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (all non-CUDA features)
-        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,gpu-wgpu" -- -D warnings
+        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu" -- -D warnings
 
       - name: Clippy (echidna-optim)
         run: cargo clippy -p echidna-optim --all-features -- -D warnings
@@ -93,11 +93,29 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
+      - name: Build (default features)
         run: cargo build
 
       - name: Test (default features)
         run: cargo test
+
+      - name: Build (bytecode)
+        run: cargo build --features bytecode
+
+      - name: Test (bytecode)
+        run: cargo test --features bytecode
+
+      - name: Build (taylor)
+        run: cargo build --features taylor
+
+      - name: Test (taylor)
+        run: cargo test --features taylor
+
+      - name: Build (stde)
+        run: cargo build --features stde
+
+      - name: Test (stde)
+        run: cargo test --features stde
 
   coverage:
     name: Coverage

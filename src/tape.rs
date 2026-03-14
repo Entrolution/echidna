@@ -39,6 +39,7 @@ impl<F: Float> Default for Tape<F> {
 
 impl<F: Float> Tape<F> {
     /// Create an empty tape.
+    #[must_use]
     pub fn new() -> Self {
         let mut tape = Tape {
             statements: Vec::new(),
@@ -56,6 +57,7 @@ impl<F: Float> Tape<F> {
     }
 
     /// Create a tape with pre-allocated capacity.
+    #[must_use]
     pub fn with_capacity(est_ops: usize) -> Self {
         let mut tape = Tape {
             statements: Vec::with_capacity(est_ops + 1),
@@ -135,6 +137,7 @@ impl<F: Float> Tape<F> {
 
     /// Run the reverse sweep, seeding the adjoint of `seed_index` with 1.
     /// Returns the full adjoint vector.
+    #[must_use]
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let mut adjoints = vec![F::zero(); self.num_variables as usize];
         adjoints[seed_index as usize] = F::one();
