@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| >= 0.4.1 | Yes       |
-| < 0.4.1  | No        |
+| >= 0.5.0 | Yes       |
+| < 0.5.0  | No        |
 
-Only the latest patch release receives security updates. Versions prior to 0.4.1 have known correctness bugs (silent wrong results from `powi` on f32 tapes, NaN from `Taylor::powi` with negative base).
+Only the latest patch release receives security updates. Versions prior to 0.5.0 have known correctness bugs (silent wrong results from `powi` on f32 tapes, NaN from `Taylor::powi` with negative base) and lack GPU cast safety auditing.
 
 ## Reporting a Vulnerability
 

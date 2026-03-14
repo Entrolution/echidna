@@ -2,7 +2,7 @@
 
 **Generated**: 2026-03-13 | **Project**: echidna v0.4.0 | **LOC**: ~23,400 source, ~15,700 tests
 
-> **Status (2026-03-14)**: Phases 0–3 are complete. All safety comments, lint suppression comments, CI gaps, documentation fixes, and test coverage gaps have been addressed. Remaining work is in Phases 4+ (deferred features and aspirational improvements). See ROADMAP.md for the current state.
+> **Status (2026-03-14)**: All phases (0–5) are complete. All safety comments, lint suppression comments, CI gaps, documentation fixes, test coverage gaps, deferred features, and code hygiene items have been addressed.
 
 ## Executive Summary
 

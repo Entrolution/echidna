@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-14
+
+### Added
+
+- **GPU cast safety audit**: SAFETY comments on all `as u32` casts in GPU paths (`mod.rs`, `cuda_backend.rs`, `wgpu_backend.rs`, `stde_gpu.rs`). Added `debug_assert!` guards on user-provided direction/batch counts in `stde_gpu.rs`.
+- **`#[must_use]` annotations**: 19 pure functions now carry `#[must_use]` (support module helpers, GPU codegen, solver wrappers, `Laurent::zero`/`one`).
+- **`#![warn(missing_docs)]`**: enabled crate-wide. All public items — 35 `OpCode` variants, ~190 elemental methods across `Dual`, `DualVec`, `Taylor`, `TaylorDyn`, `Laurent`, struct fields, and trait methods — now have doc comments.
+
+### Changed
+
+- **Test decomposition**: split `tests/stde.rs` (1630 lines, 76 tests) into 5 focused files: `stde_core`, `stde_stats`, `stde_pipeline`, `stde_higher_order`, `stde_dense`. All 76 tests preserved.
+- Removed `ROADMAP.md` — all phases (0–5) complete.
+
 ## [0.4.1] - 2026-03-14
 
 ### Fixed
@@ -184,7 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Entrolution/echidna/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Entrolution/echidna/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Entrolution/echidna/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Entrolution/echidna/compare/v0.2.0...v0.3.0
