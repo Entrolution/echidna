@@ -69,17 +69,17 @@ Documentation fixes and test coverage gaps. **Complete**.
 
 ---
 
-## Phase 4: Deferred Features
+## Phase 4: Deferred Features ✅
 
-Valuable features without current demand. Revisit when a concrete use case arises.
+Valuable features that were deferred until concrete use cases arose. **Complete**.
 
-| # | Item | Effort | Revisit when | Source |
-|---|------|--------|--------------|--------|
-| 4.1 | Indefinite dense STDE (eigendecomposition for indefinite C matrices) | medium | A user needs indefinite C support | [ADR](docs/adr-deferred-work.md) |
-| 4.2 | General-K GPU Taylor kernels (beyond K=3) | medium | Need for GPU-accelerated 3rd+ order derivatives | [ADR](docs/adr-deferred-work.md) |
-| 4.3 | Chunked GPU Taylor dispatch (exceed 128 MB WebGPU limit) | small | Users hit the buffer limit in practice | [ADR](docs/adr-deferred-work.md) |
-| 4.4 | CUDA `laplacian_with_control_gpu_cuda` | small | CUDA users need variance-reduced Laplacian | [ADR](docs/adr-deferred-work.md) |
-| 4.5 | `taylor_forward_2nd_batch` in `GpuBackend` trait | small | Multiple backends need to be used generically | [ADR](docs/adr-deferred-work.md) |
+| # | Item | Status |
+|---|------|--------|
+| 4.1 | Indefinite dense STDE (`dense_stde_2nd_indefinite`, eigendecomposition + sign-splitting) | ✅ Done |
+| 4.2 | General-K GPU Taylor kernels (K=1..5 via runtime codegen, `taylor_forward_kth_batch`) | ✅ Done |
+| 4.3 | Chunked GPU Taylor dispatch (`taylor_forward_2nd_batch_chunked`, buffer + dispatch limits) | ✅ Done |
+| 4.4 | Generic `laplacian_with_control_gpu` (works with any `GpuBackend`, replaces CUDA-specific fn) | ✅ Done |
+| 4.5 | `taylor_forward_2nd_batch` in `GpuBackend` trait (all stde_gpu fns now generic over backend) | ✅ Done |
 
 ---
 
@@ -110,7 +110,7 @@ Nice-to-haves with no urgency. Pursue opportunistically or if the relevant area 
 
 | Item | Current | Latest | Effort | Notes |
 |------|---------|--------|--------|-------|
-| cudarc | 0.17 | 0.19 | medium | Breaking API changes in 0.18. Defer until GPU backend is actively developed. |
+| cudarc | 0.19 | 0.19 | — | ✅ Up to date |
 
 ---
 
@@ -132,7 +132,6 @@ These items were evaluated and explicitly rejected. Rationale is in [docs/adr-de
 ## Dependencies Between Phases
 
 ```
-Phase 0–3  (complete)        — all done as of 2026-03-14
-Phase 4  (deferred features)  — each item independent; all require active use of base feature
+Phase 0–4  (complete)        — all done as of 2026-03-14
 Phase 5  (aspirational)       — independent nice-to-haves
 ```

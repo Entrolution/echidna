@@ -546,6 +546,429 @@ fn gpu_polynomial_exact_hessian_diagonal() {
     assert!((diag[1] - 2.0).abs() < 1e-3, "diag[1]: {}", diag[1]);
 }
 
+// ══════════════════════════════════════════════
+//  Section 4: Chunked GPU Taylor dispatch tests
+// ══════════════════════════════════════════════
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_chunked_single_chunk() {
+    // When batch fits in one chunk, results match direct call
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [3.0_f64, 4.0];
+    let (tape, _) = record(|v| polynomial(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let batch_size = 4u32;
+    let mut primals = Vec::new();
+    let mut seeds = Vec::new();
+    for b in 0..batch_size {
+        primals.extend_from_slice(&[3.0f32, 4.0]);
+        if b % 2 == 0 {
+            seeds.extend_from_slice(&[1.0f32, 0.0]);
+        } else {
+            seeds.extend_from_slice(&[0.0f32, 1.0]);
+        }
+    }
+
+    let direct = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &primals, &seeds, batch_size)
+        .unwrap();
+
+    // Use very large max_buffer_bytes so everything fits in one chunk
+    let chunked = echidna::gpu::taylor_forward_2nd_batch_chunked(
+        &ctx,
+        &tape_buf,
+        &primals,
+        &seeds,
+        batch_size,
+        gpu_data.num_inputs,
+        gpu_data.num_variables,
+        1024 * 1024 * 1024, // 1 GiB
+    )
+    .unwrap();
+
+    assert_eq!(direct.values.len(), chunked.values.len());
+    for i in 0..direct.values.len() {
+        assert!(
+            (direct.values[i] - chunked.values[i]).abs() < 1e-6,
+            "values[{}] mismatch",
+            i
+        );
+        assert!(
+            (direct.c1s[i] - chunked.c1s[i]).abs() < 1e-6,
+            "c1s[{}] mismatch",
+            i
+        );
+        assert!(
+            (direct.c2s[i] - chunked.c2s[i]).abs() < 1e-6,
+            "c2s[{}] mismatch",
+            i
+        );
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_chunked_multi_chunk() {
+    // Force multi-chunk by setting a tiny max_buffer_bytes
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [3.0_f64, 4.0];
+    let (tape, _) = record(|v| polynomial(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let batch_size = 8u32;
+    let mut primals = Vec::new();
+    let mut seeds = Vec::new();
+    for b in 0..batch_size {
+        primals.extend_from_slice(&[3.0f32, 4.0]);
+        if b % 2 == 0 {
+            seeds.extend_from_slice(&[1.0f32, 0.0]);
+        } else {
+            seeds.extend_from_slice(&[0.0f32, 1.0]);
+        }
+    }
+
+    let direct = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &primals, &seeds, batch_size)
+        .unwrap();
+
+    // bytes_per_element = num_variables * 3 * 4
+    // With a tiny limit, each chunk gets only ~2 elements
+    let bytes_per_element = (gpu_data.num_variables as u64) * 3 * 4;
+    let max_bytes = bytes_per_element * 2; // force chunks of 2
+
+    let chunked = echidna::gpu::taylor_forward_2nd_batch_chunked(
+        &ctx,
+        &tape_buf,
+        &primals,
+        &seeds,
+        batch_size,
+        gpu_data.num_inputs,
+        gpu_data.num_variables,
+        max_bytes,
+    )
+    .unwrap();
+
+    assert_eq!(direct.values.len(), chunked.values.len());
+    for i in 0..direct.values.len() {
+        assert!(
+            (direct.values[i] - chunked.values[i]).abs() < 1e-5,
+            "values[{}]: {} vs {}",
+            i,
+            direct.values[i],
+            chunked.values[i]
+        );
+        assert!(
+            (direct.c1s[i] - chunked.c1s[i]).abs() < 1e-5,
+            "c1s[{}]: {} vs {}",
+            i,
+            direct.c1s[i],
+            chunked.c1s[i]
+        );
+        assert!(
+            (direct.c2s[i] - chunked.c2s[i]).abs() < 1e-5,
+            "c2s[{}]: {} vs {}",
+            i,
+            direct.c2s[i],
+            chunked.c2s[i]
+        );
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_chunked_exact_boundary() {
+    // Batch exactly fills one chunk (boundary condition)
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [2.0_f64, 3.0];
+    let (tape, _) = record(|v| polynomial(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let batch_size = 4u32;
+    let mut primals = Vec::new();
+    let mut seeds = Vec::new();
+    for _ in 0..batch_size {
+        primals.extend_from_slice(&[2.0f32, 3.0]);
+        seeds.extend_from_slice(&[1.0f32, 0.0]);
+    }
+
+    let bytes_per_element = (gpu_data.num_variables as u64) * 3 * 4;
+    let max_bytes = bytes_per_element * (batch_size as u64); // exact fit
+
+    let result = echidna::gpu::taylor_forward_2nd_batch_chunked(
+        &ctx,
+        &tape_buf,
+        &primals,
+        &seeds,
+        batch_size,
+        gpu_data.num_inputs,
+        gpu_data.num_variables,
+        max_bytes,
+    )
+    .unwrap();
+
+    assert_eq!(result.values.len(), batch_size as usize);
+    for v in &result.values {
+        assert!((v - 13.0).abs() < 1e-4, "value: {}", v);
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_chunked_zero_batch() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [1.0_f64, 2.0];
+    let (tape, _) = record(|v| polynomial(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let result = echidna::gpu::taylor_forward_2nd_batch_chunked(
+        &ctx,
+        &tape_buf,
+        &[],
+        &[],
+        0,
+        gpu_data.num_inputs,
+        gpu_data.num_variables,
+        1024,
+    )
+    .unwrap();
+
+    assert!(result.values.is_empty());
+    assert!(result.c1s.is_empty());
+    assert!(result.c2s.is_empty());
+}
+
+// ══════════════════════════════════════════════
+//  Section 5: General-K Taylor forward tests
+// ══════════════════════════════════════════════
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_taylor_kth_polynomial_all_orders() {
+    // f(x,y) = x² + y², at (3,4), direction (1,0)
+    // c0 = 25, c1 = 6, c2 = 1, c3+ = 0 (polynomial of degree 2)
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [3.0_f64, 4.0];
+    let (tape, _) = record(|v| polynomial(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    for order in 1..=5 {
+        let result = ctx
+            .taylor_forward_kth_batch(&tape_buf, &[3.0f32, 4.0], &[1.0f32, 0.0], 1, order)
+            .unwrap();
+
+        assert_eq!(result.order, order);
+        assert_eq!(result.coefficients.len(), order);
+        assert_eq!(result.coefficients[0].len(), 1);
+
+        // c0 = 25
+        assert!(
+            (result.coefficients[0][0] - 25.0).abs() < 1e-3,
+            "K={order} c0: {}",
+            result.coefficients[0][0]
+        );
+
+        if order >= 2 {
+            // c1 = 6
+            assert!(
+                (result.coefficients[1][0] - 6.0).abs() < 1e-3,
+                "K={order} c1: {}",
+                result.coefficients[1][0]
+            );
+        }
+        if order >= 3 {
+            // c2 = 1 (since d²/dt² (3+t)² = 2, and c2 = f''/2! = 1)
+            assert!(
+                (result.coefficients[2][0] - 1.0).abs() < 1e-3,
+                "K={order} c2: {}",
+                result.coefficients[2][0]
+            );
+        }
+        if order >= 4 {
+            // c3 = 0 (polynomial degree 2)
+            assert!(
+                result.coefficients[3][0].abs() < 1e-3,
+                "K={order} c3: {}",
+                result.coefficients[3][0]
+            );
+        }
+        if order >= 5 {
+            assert!(
+                result.coefficients[4][0].abs() < 1e-3,
+                "K={order} c4: {}",
+                result.coefficients[4][0]
+            );
+        }
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_taylor_kth_k3_matches_2nd() {
+    // K=3 should match taylor_forward_2nd_batch exactly
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [1.5_f64, 2.5];
+    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let primals = [1.5f32, 2.5];
+    let seeds = [0.6f32, 0.8];
+
+    let result_2nd = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &primals, &seeds, 1)
+        .unwrap();
+
+    let result_kth = ctx
+        .taylor_forward_kth_batch(&tape_buf, &primals, &seeds, 1, 3)
+        .unwrap();
+
+    assert_eq!(result_kth.order, 3);
+    assert!(
+        (result_2nd.values[0] - result_kth.coefficients[0][0]).abs() < 1e-4,
+        "c0: {} vs {}",
+        result_2nd.values[0],
+        result_kth.coefficients[0][0]
+    );
+    assert!(
+        (result_2nd.c1s[0] - result_kth.coefficients[1][0]).abs() < 1e-4,
+        "c1: {} vs {}",
+        result_2nd.c1s[0],
+        result_kth.coefficients[1][0]
+    );
+    assert!(
+        (result_2nd.c2s[0] - result_kth.coefficients[2][0]).abs() < 1e-3,
+        "c2: {} vs {}",
+        result_2nd.c2s[0],
+        result_kth.coefficients[2][0]
+    );
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_taylor_kth_exp_higher_order() {
+    // f(x) = exp(x) at x=1, direction 1
+    // c_k = exp(1) / k! for all k (since exp^(k) = exp)
+    // c0 = e, c1 = e, c2 = e/2, c3 = e/6, c4 = e/24
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    fn f_exp<T: Scalar>(x: &[T]) -> T {
+        x[0].exp()
+    }
+
+    let x = [1.0_f64];
+    let (tape, _) = record(f_exp, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    // Also compute CPU reference
+    let cpu_coeffs = echidna::stde::taylor_jet_dyn(&tape, &x, &[1.0], 5);
+
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &[1.0f32], &[1.0f32], 1, 5)
+        .unwrap();
+
+    let e = std::f64::consts::E;
+    let expected = [e, e, e / 2.0, e / 6.0, e / 24.0];
+
+    for (k, exp_val) in expected.iter().enumerate() {
+        let gpu_val = result.coefficients[k][0] as f64;
+        let tol = 0.05 * exp_val.abs();
+        assert!(
+            (gpu_val - exp_val).abs() < tol.max(1e-2),
+            "K=5 c{k}: gpu={gpu_val} expected={exp_val} cpu={:.6}",
+            cpu_coeffs[k]
+        );
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_taylor_kth_unsupported_order() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [1.0_f64];
+    let (tape, _) = record(|v: &[echidna::BReverse<f64>]| v[0] * v[0], &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let result = ctx.taylor_forward_kth_batch(&tape_buf, &[1.0f32], &[1.0f32], 1, 6);
+    assert!(result.is_err());
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_taylor_kth_multi_batch() {
+    // Verify deinterleaving is correct with batch_size > 1
+    // f(x,y) = x² + y², directions (1,0) and (0,1)
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let x = [3.0_f64, 4.0];
+    let (tape, _) = record(|v| polynomial(v), &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let primals = [3.0f32, 4.0, 3.0, 4.0];
+    let seeds = [1.0f32, 0.0, 0.0, 1.0];
+
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &primals, &seeds, 2, 4)
+        .unwrap();
+
+    assert_eq!(result.order, 4);
+    // Both batch elements: c0 = 25
+    assert!((result.coefficients[0][0] - 25.0).abs() < 1e-3);
+    assert!((result.coefficients[0][1] - 25.0).abs() < 1e-3);
+    // Batch 0 dir (1,0): c1 = 2*3 = 6, c2 = 1
+    assert!((result.coefficients[1][0] - 6.0).abs() < 1e-3);
+    assert!((result.coefficients[2][0] - 1.0).abs() < 1e-3);
+    // Batch 1 dir (0,1): c1 = 2*4 = 8, c2 = 1
+    assert!((result.coefficients[1][1] - 8.0).abs() < 1e-3);
+    assert!((result.coefficients[2][1] - 1.0).abs() < 1e-3);
+    // c3 = 0 for both (polynomial degree 2)
+    assert!(result.coefficients[3][0].abs() < 1e-3);
+    assert!(result.coefficients[3][1].abs() < 1e-3);
+}
+
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
 #[test]
 fn gpu_trig_taylor_2nd() {

@@ -1472,3 +1472,159 @@ mod sparse_stde_tests {
         assert_relative_eq!(result.estimate, expected, epsilon = 1e-6);
     }
 }
+
+// ══════════════════════════════════════════════
+//  22. Indefinite Dense STDE (requires stde + nalgebra)
+// ══════════════════════════════════════════════
+
+#[cfg(feature = "nalgebra")]
+mod indefinite_stde_tests {
+    use super::*;
+
+    /// PD matrix: verify result matches dense_stde_2nd with same z-vectors.
+    #[test]
+    fn indefinite_stde_matches_positive_definite() {
+        // C = [[4, 1], [1, 3]] (positive definite)
+        // Cholesky: L = [[2, 0], [0.5, sqrt(2.75)]]
+        let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let c = nalgebra::DMatrix::from_row_slice(2, 2, &[4.0, 1.0, 1.0, 3.0]);
+
+        // Cholesky factor for comparison
+        let l00 = 2.0;
+        let l10 = 0.5;
+        let l11 = (3.0 - 0.25_f64).sqrt(); // sqrt(2.75)
+        let row0 = vec![l00, 0.0];
+        let row1 = vec![l10, l11];
+        let cholesky: Vec<&[f64]> = vec![&row0, &row1];
+
+        // Use Rademacher-like z-vectors
+        let z0 = vec![1.0, 1.0];
+        let z1 = vec![1.0, -1.0];
+        let z2 = vec![-1.0, 1.0];
+        let z3 = vec![-1.0, -1.0];
+        let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+        let chol_result = echidna::stde::dense_stde_2nd(&tape, &x, &cholesky, &z_vecs);
+        let indef_result = echidna::stde::dense_stde_2nd_indefinite(&tape, &x, &c, &z_vecs, 1e-12);
+
+        // H = diag(2, 2), tr(C·H) = 4*2 + 3*2 = 14
+        assert_relative_eq!(chol_result.estimate, 14.0, epsilon = 1e-8);
+        assert_relative_eq!(indef_result.estimate, 14.0, epsilon = 1e-8);
+    }
+
+    /// Diagonal indefinite C = diag(2, -3): verify tr(C·H) against analytical 2·H₀₀ - 3·H₁₁.
+    #[test]
+    fn indefinite_stde_diagonal_indefinite() {
+        // f(x,y) = x² + y², H = diag(2, 2)
+        // C = diag(2, -3), tr(C·H) = 2·2 + (-3)·2 = 4 - 6 = -2
+        let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let c = nalgebra::DMatrix::from_row_slice(2, 2, &[2.0, 0.0, 0.0, -3.0]);
+
+        let z0 = vec![1.0, 1.0];
+        let z1 = vec![1.0, -1.0];
+        let z2 = vec![-1.0, 1.0];
+        let z3 = vec![-1.0, -1.0];
+        let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+        let result = echidna::stde::dense_stde_2nd_indefinite(&tape, &x, &c, &z_vecs, 1e-12);
+        assert_relative_eq!(result.estimate, -2.0, epsilon = 1e-8);
+    }
+
+    /// Full symmetric indefinite C, verify against tr(C·H) computed from dense Hessian.
+    #[test]
+    fn indefinite_stde_full_indefinite() {
+        // f(x,y,z) = x²y + y³, H at (1,2,3):
+        // H = [[2y, 2x, 0], [2x, 6y, 0], [0, 0, 0]] = [[4, 2, 0], [2, 12, 0], [0, 0, 0]]
+        let tape = record_fn(cubic_mix, &[1.0, 2.0, 3.0]);
+        let x = [1.0, 2.0, 3.0];
+
+        // C = [[1, 0, -1], [0, -2, 0], [-1, 0, 3]] — indefinite
+        let c = nalgebra::DMatrix::from_row_slice(
+            3,
+            3,
+            &[1.0, 0.0, -1.0, 0.0, -2.0, 0.0, -1.0, 0.0, 3.0],
+        );
+
+        // tr(C·H) = Σ_{ij} C_{ij} H_{ij}
+        // = 1·4 + 0·2 + (-1)·0 + 0·2 + (-2)·12 + 0·0 + (-1)·0 + 0·0 + 3·0
+        // = 4 - 24 = -20
+        let expected = -20.0;
+
+        // Use many z-vectors for convergence (Rademacher-like from all sign combos)
+        let signs: Vec<Vec<f64>> = vec![
+            vec![1.0, 1.0, 1.0],
+            vec![1.0, 1.0, -1.0],
+            vec![1.0, -1.0, 1.0],
+            vec![1.0, -1.0, -1.0],
+            vec![-1.0, 1.0, 1.0],
+            vec![-1.0, 1.0, -1.0],
+            vec![-1.0, -1.0, 1.0],
+            vec![-1.0, -1.0, -1.0],
+        ];
+        let z_vecs: Vec<&[f64]> = signs.iter().map(|v| v.as_slice()).collect();
+
+        let result = echidna::stde::dense_stde_2nd_indefinite(&tape, &x, &c, &z_vecs, 1e-12);
+        assert_relative_eq!(result.estimate, expected, epsilon = 1e-6);
+    }
+
+    /// All-negative eigenvalues: C = diag(-2, -3), H = diag(2, 2).
+    /// tr(C·H) = -2·2 + (-3)·2 = -10.
+    #[test]
+    fn indefinite_stde_all_negative() {
+        let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let c = nalgebra::DMatrix::from_row_slice(2, 2, &[-2.0, 0.0, 0.0, -3.0]);
+
+        let z0 = vec![1.0, 1.0];
+        let z1 = vec![1.0, -1.0];
+        let z2 = vec![-1.0, 1.0];
+        let z3 = vec![-1.0, -1.0];
+        let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+        let result = echidna::stde::dense_stde_2nd_indefinite(&tape, &x, &c, &z_vecs, 1e-12);
+        assert_relative_eq!(result.estimate, -10.0, epsilon = 1e-8);
+    }
+
+    /// C = 0: result should be 0.
+    #[test]
+    fn indefinite_stde_zero_matrix() {
+        let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let c = nalgebra::DMatrix::zeros(2, 2);
+
+        let z0 = vec![1.0, 1.0];
+        let z1 = vec![1.0, -1.0];
+        let z_vecs: Vec<&[f64]> = vec![&z0, &z1];
+
+        let result = echidna::stde::dense_stde_2nd_indefinite(&tape, &x, &c, &z_vecs, 1e-12);
+        assert_relative_eq!(result.estimate, 0.0, epsilon = 1e-10);
+    }
+
+    /// C with eigenvalue ~1e-15: verify epsilon clamping prevents sign-flip.
+    #[test]
+    fn indefinite_stde_near_zero_eigenvalue() {
+        // C = [[1, 0], [0, 1e-15]] — the tiny eigenvalue should be clamped to zero
+        let tape = record_fn(sum_of_squares, &[1.0, 2.0]);
+        let x = [1.0, 2.0];
+
+        let c = nalgebra::DMatrix::from_row_slice(2, 2, &[1.0, 0.0, 0.0, 1e-15]);
+
+        let z0 = vec![1.0, 1.0];
+        let z1 = vec![1.0, -1.0];
+        let z2 = vec![-1.0, 1.0];
+        let z3 = vec![-1.0, -1.0];
+        let z_vecs: Vec<&[f64]> = vec![&z0, &z1, &z2, &z3];
+
+        // With eps_factor=1e-12, threshold = 1e-12 * 1.0 = 1e-12.
+        // The eigenvalue 1e-15 < 1e-12, so it's clamped to zero.
+        // Result should be tr(diag(1,0) · diag(2,2)) = 1·2 + 0·2 = 2
+        let result = echidna::stde::dense_stde_2nd_indefinite(&tape, &x, &c, &z_vecs, 1e-12);
+        assert_relative_eq!(result.estimate, 2.0, epsilon = 1e-8);
+    }
+}
