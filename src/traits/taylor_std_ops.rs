@@ -73,13 +73,15 @@ impl<F: Float, const K: usize> Neg for Taylor<F, K> {
 impl<F: Float, const K: usize> Rem for Taylor<F, K> {
     type Output = Self;
     #[inline]
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn rem(self, rhs: Self) -> Self {
+        let q = (self.coeffs[0] / rhs.coeffs[0]).trunc();
         Taylor {
             coeffs: std::array::from_fn(|k| {
                 if k == 0 {
                     self.coeffs[0] % rhs.coeffs[0]
                 } else {
-                    self.coeffs[k]
+                    self.coeffs[k] - rhs.coeffs[k] * q
                 }
             }),
         }
@@ -311,7 +313,10 @@ impl<F: Float + TaylorArenaLocal> Rem for TaylorDyn<F> {
     fn rem(self, rhs: Self) -> Self {
         TaylorDyn::binary_op(&self, &rhs, |a, b, c| {
             c[0] = a[0] % b[0];
-            c[1..].copy_from_slice(&a[1..]);
+            let q = (a[0] / b[0]).trunc();
+            for k in 1..c.len() {
+                c[k] = a[k] - b[k] * q;
+            }
         })
     }
 }

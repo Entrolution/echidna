@@ -106,7 +106,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn powi(self, n: i32) -> Self {
         let val = self.re.powi(n);
-        let deriv = F::from(n).unwrap() * self.re.powi(n - 1);
+        let deriv = F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap());
         self.chain(val, deriv)
     }
 
@@ -335,7 +335,11 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         let h = self.re.hypot(other.re);
         DualVec {
             re: h,
-            eps: std::array::from_fn(|k| (self.re * self.eps[k] + other.re * other.eps[k]) / h),
+            eps: if h == F::zero() {
+                [F::zero(); N]
+            } else {
+                std::array::from_fn(|k| (self.re * self.eps[k] + other.re * other.eps[k]) / h)
+            },
         }
     }
 

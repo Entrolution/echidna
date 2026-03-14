@@ -120,6 +120,33 @@ pub(crate) fn detect_sparsity_impl(
                                 interactions.push((r, c));
                             }
                         }
+                        // For non-Mul binary ops (Div, Powf, Atan2, Hypot, Custom),
+                        // within-operand second derivatives are nonzero.
+                        // E.g. d^2(a/b)/db^2 = 2a/b^3, so variables flowing into
+                        // the same operand interact.
+                        // Mul is excluded: d^2(a*b)/da^2 = 0 (bilinear).
+                        if op != OpCode::Mul {
+                            for ii in 0..bits_a.len() {
+                                for jj in 0..=ii {
+                                    let (r, c) = if bits_a[ii] >= bits_a[jj] {
+                                        (bits_a[ii], bits_a[jj])
+                                    } else {
+                                        (bits_a[jj], bits_a[ii])
+                                    };
+                                    interactions.push((r, c));
+                                }
+                            }
+                            for ii in 0..bits_b.len() {
+                                for jj in 0..=ii {
+                                    let (r, c) = if bits_b[ii] >= bits_b[jj] {
+                                        (bits_b[ii], bits_b[jj])
+                                    } else {
+                                        (bits_b[jj], bits_b[ii])
+                                    };
+                                    interactions.push((r, c));
+                                }
+                            }
+                        }
                     }
                     OpClass::ZeroDerivative => {
                         // Propagate dependencies for downstream ops

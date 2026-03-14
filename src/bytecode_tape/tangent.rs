@@ -80,10 +80,13 @@ impl<F: Float> super::BytecodeTape<F> {
                 op => {
                     let [a_idx, b_idx] = self.arg_indices[i];
                     let a = buf[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                    if op == OpCode::Powi {
+                        let exp = opcode::powi_exp_decode_raw(b_idx);
+                        buf[i] = a.powi(exp);
+                        continue;
+                    }
+                    let b = if b_idx != UNUSED {
                         buf[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        T::from(b_idx).unwrap_or_else(|| T::zero())
                     } else {
                         T::zero()
                     };
@@ -170,10 +173,15 @@ impl<F: Float> super::BytecodeTape<F> {
 
                     let [a_idx, b_idx] = self.arg_indices[i];
                     let a = tangent_vals[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                    if op == OpCode::Powi {
+                        let exp = opcode::powi_exp_decode_raw(b_idx);
+                        let n = T::from(exp).unwrap();
+                        let da = n * a.powi(exp - 1);
+                        buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                        continue;
+                    }
+                    let b = if b_idx != UNUSED {
                         tangent_vals[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        T::from(b_idx).unwrap_or_else(|| T::zero())
                     } else {
                         T::zero()
                     };
@@ -181,7 +189,7 @@ impl<F: Float> super::BytecodeTape<F> {
                     let (da, db) = opcode::reverse_partials(op, a, b, r);
 
                     buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
+                    if b_idx != UNUSED {
                         buf[b_idx as usize] = buf[b_idx as usize] + db * adj;
                     }
                 }

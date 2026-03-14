@@ -276,7 +276,7 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let inv = one / b;
             (inv, -a * inv * inv)
         }
-        OpCode::Rem => (one, zero),
+        OpCode::Rem => (one, -(a / b).trunc()),
         OpCode::Powf => {
             // d/da a^b = b * a^(b-1)
             // d/db a^b = a^b * ln(a)
@@ -380,6 +380,16 @@ fn powi_exp_decode<T: Float>(b: T) -> i32 {
     // b holds the bits of the u32 reinterpreted from i32.
     // We round-trip through u32 to recover it.
     b.to_u32().unwrap_or(0) as i32
+}
+
+/// Decode a `powi` exponent directly from the raw `u32` in `arg_indices[1]`.
+///
+/// Avoids the float round-trip of [`powi_exp_decode`], which silently fails
+/// for f32 when the u32 encoding exceeds 2^24 (any negative exponent).
+#[inline]
+#[must_use]
+pub fn powi_exp_decode_raw(b_idx: u32) -> i32 {
+    b_idx as i32
 }
 
 /// Encode a `powi` exponent as a value that can be stored in `arg_indices[1]`.

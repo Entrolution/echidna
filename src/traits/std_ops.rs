@@ -5,7 +5,7 @@ use std::ops::{
 use crate::dual::Dual;
 use crate::float::Float;
 use crate::reverse::Reverse;
-use crate::tape::{self, TapeThreadLocal, CONSTANT};
+use crate::tape::{self, TapeThreadLocal};
 
 // ──────────────────────────────────────────────
 //  Dual<F> operators
@@ -73,7 +73,7 @@ impl<F: Float> Rem for Dual<F> {
     fn rem(self, rhs: Self) -> Self {
         Dual {
             re: self.re % rhs.re,
-            eps: self.eps,
+            eps: self.eps - rhs.eps * (self.re / rhs.re).trunc(),
         }
     }
 }
@@ -222,9 +222,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn rem(self, rhs: Dual<$f>) -> Dual<$f> {
+                let q = (self / rhs.re).trunc();
                 Dual {
                     re: self % rhs.re,
-                    eps: <$f>::from(0.0),
+                    eps: -rhs.eps * q,
                 }
             }
         }
@@ -313,8 +314,9 @@ impl<F: Float + TapeThreadLocal> Rem for Reverse<F> {
     #[inline]
     fn rem(self, rhs: Self) -> Self {
         let value = self.value % rhs.value;
+        let q = (self.value / rhs.value).trunc();
         let index =
-            tape::with_active_tape(|t| t.push_binary(self.index, F::one(), rhs.index, F::zero()));
+            tape::with_active_tape(|t| t.push_binary(self.index, F::one(), rhs.index, -q));
         Reverse { value, index }
     }
 }
@@ -454,11 +456,9 @@ macro_rules! impl_reverse_scalar_ops {
             #[inline]
             fn rem(self, rhs: Reverse<$f>) -> Reverse<$f> {
                 let value = self % rhs.value;
-                // Constant remainder w.r.t. denominator has zero derivative.
-                Reverse {
-                    value,
-                    index: CONSTANT,
-                }
+                let q = (self / rhs.value).trunc();
+                let index = tape::with_active_tape(|t| t.push_unary(rhs.index, -q));
+                Reverse { value, index }
             }
         }
     };

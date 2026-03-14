@@ -59,10 +59,15 @@ impl<F: Float> super::BytecodeTape<F> {
                     adjoints[i] = F::zero();
                     let [a_idx, b_idx] = self.arg_indices[i];
                     let a = values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                    if op == OpCode::Powi {
+                        let exp = opcode::powi_exp_decode_raw(b_idx);
+                        let n = F::from(exp).unwrap();
+                        let da = n * a.powi(exp - 1);
+                        adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                        continue;
+                    }
+                    let b = if b_idx != UNUSED {
                         values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or_else(|| F::zero())
                     } else {
                         F::zero()
                     };
@@ -74,7 +79,7 @@ impl<F: Float> super::BytecodeTape<F> {
                     };
 
                     adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED && op != OpCode::Powi {
+                    if b_idx != UNUSED {
                         adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
                     }
                 }

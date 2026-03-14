@@ -289,15 +289,17 @@ impl<F: Float, const K: usize> Laurent<F, K> {
                 pole_order: self.pole_order / 2,
             }
         } else if self.pole_order > 0 {
-            let tc = self.as_taylor_coeffs();
+            if self.pole_order % 2 != 0 {
+                return Self::nan_laurent();
+            }
+            // pole_order is even: sqrt of t^p * f(t) = t^(p/2) * sqrt(f(t))
+            // where f(t) has coeffs[0] != 0 (due to normalization).
             let mut c = [F::zero(); K];
-            taylor_ops::taylor_sqrt(&tc, &mut c);
-            let mut l = Laurent {
+            taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
+            Laurent {
                 coeffs: c,
-                pole_order: 0,
-            };
-            l.normalize();
-            l
+                pole_order: self.pole_order / 2,
+            }
         } else {
             let mut c = [F::zero(); K];
             taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
@@ -326,17 +328,19 @@ impl<F: Float, const K: usize> Laurent<F, K> {
                 pole_order: self.pole_order / 3,
             }
         } else if self.pole_order > 0 {
-            let tc = self.as_taylor_coeffs();
+            if self.pole_order % 3 != 0 {
+                return Self::nan_laurent();
+            }
+            // pole_order divisible by 3: cbrt of t^p * f(t) = t^(p/3) * cbrt(f(t))
+            // where f(t) has coeffs[0] != 0 (due to normalization).
             let mut c = [F::zero(); K];
             let mut s1 = [F::zero(); K];
             let mut s2 = [F::zero(); K];
-            taylor_ops::taylor_cbrt(&tc, &mut c, &mut s1, &mut s2);
-            let mut l = Laurent {
+            taylor_ops::taylor_cbrt(&self.coeffs, &mut c, &mut s1, &mut s2);
+            Laurent {
                 coeffs: c,
-                pole_order: 0,
-            };
-            l.normalize();
-            l
+                pole_order: self.pole_order / 3,
+            }
         } else {
             let mut c = [F::zero(); K];
             let mut s1 = [F::zero(); K];

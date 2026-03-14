@@ -1,8 +1,10 @@
 #![cfg(feature = "bytecode")]
 
 use echidna::opcode::{
-    eval_forward, forced_reverse_partials, powi_exp_encode, reverse_partials, OpCode,
+    eval_forward, forced_reverse_partials, powi_exp_decode_raw, powi_exp_encode, reverse_partials,
+    OpCode,
 };
+use num_traits::Float;
 
 const TOL: f64 = 1e-10;
 
@@ -405,4 +407,60 @@ fn powi_encode_zero() {
 #[test]
 fn powi_encode_negative() {
     assert_eq!(powi_exp_encode(-1), u32::MAX);
+}
+
+// ══════════════════════════════════════════════
+//  powi_exp_decode_raw round-trip
+// ══════════════════════════════════════════════
+
+#[test]
+fn powi_decode_raw_positive() {
+    assert_eq!(powi_exp_decode_raw(powi_exp_encode(5)), 5);
+}
+
+#[test]
+fn powi_decode_raw_zero() {
+    assert_eq!(powi_exp_decode_raw(powi_exp_encode(0)), 0);
+}
+
+#[test]
+fn powi_decode_raw_negative() {
+    assert_eq!(powi_exp_decode_raw(powi_exp_encode(-1)), -1);
+    assert_eq!(powi_exp_decode_raw(powi_exp_encode(-2)), -2);
+    assert_eq!(powi_exp_decode_raw(powi_exp_encode(-10)), -10);
+    assert_eq!(powi_exp_decode_raw(powi_exp_encode(i32::MIN)), i32::MIN);
+}
+
+// ══════════════════════════════════════════════
+//  f32 powi tape: value + gradient (regression for the f32 exponent encoding bug)
+// ══════════════════════════════════════════════
+
+#[test]
+fn f32_tape_powi_negative_2() {
+    // x^(-2) at x=2: value=0.25, gradient=-2*2^(-3)=-0.25
+    let (mut tape, _) = echidna::record(|x: &[echidna::BReverse<f32>]| x[0].powi(-2), &[2.0f32]);
+    let grad = tape.gradient(&[2.0f32]);
+    assert!((tape.values_slice()[tape.output_index()] - 0.25f32).abs() < 1e-6);
+    assert!((grad[0] - (-0.25f32)).abs() < 1e-6);
+}
+
+#[test]
+fn f32_tape_powi_negative_10() {
+    // x^(-10) at x=2: value=1/1024, gradient=-10*2^(-11)=-10/2048
+    let expected_val: f32 = 2.0f32.powi(-10);
+    let expected_grad: f32 = -10.0 * 2.0f32.powi(-11);
+    let (mut tape, _) = echidna::record(|x: &[echidna::BReverse<f32>]| x[0].powi(-10), &[2.0f32]);
+    let grad = tape.gradient(&[2.0f32]);
+    assert!(
+        (tape.values_slice()[tape.output_index()] - expected_val).abs() < 1e-8,
+        "value: got {}, expected {}",
+        tape.values_slice()[tape.output_index()],
+        expected_val
+    );
+    assert!(
+        (grad[0] - expected_grad).abs() < 1e-8,
+        "grad: got {}, expected {}",
+        grad[0],
+        expected_grad
+    );
 }

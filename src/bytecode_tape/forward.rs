@@ -30,10 +30,13 @@ fn forward_dispatch<F: Float>(
             op => {
                 let [a_idx, b_idx] = arg_indices[i];
                 let a = values[a_idx as usize];
-                let b = if b_idx != UNUSED && op != OpCode::Powi {
+                if op == OpCode::Powi {
+                    let exp = opcode::powi_exp_decode_raw(b_idx);
+                    values[i] = a.powi(exp);
+                    continue;
+                }
+                let b = if b_idx != UNUSED {
                     values[b_idx as usize]
-                } else if op == OpCode::Powi {
-                    F::from(b_idx).unwrap_or_else(|| F::zero())
                 } else {
                     F::zero()
                 };
@@ -128,7 +131,7 @@ impl<F: Float> super::BytecodeTape<F> {
                         branch: if a >= F::zero() { 1 } else { -1 },
                     });
                 }
-                OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
+                OpCode::Floor | OpCode::Ceil | OpCode::Trunc => {
                     // Kink at integer values. switching_value = distance to
                     // nearest integer: zero exactly at kink points, works
                     // symmetrically for both approach directions.
@@ -141,6 +144,19 @@ impl<F: Float> super::BytecodeTape<F> {
                         } else {
                             -1
                         },
+                    });
+                }
+                OpCode::Round => {
+                    // Round has kinks at half-integers (0.5, 1.5, ...),
+                    // not at integers. Shift by 0.5 to measure distance
+                    // to the nearest half-integer.
+                    let half = F::from(0.5).unwrap();
+                    let shifted = a + half;
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: shifted - shifted.round(),
+                        branch: if a - a.floor() < half { 1 } else { -1 },
                     });
                 }
                 _ => unreachable!(),

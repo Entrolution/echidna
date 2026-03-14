@@ -34,7 +34,13 @@ impl<F: Float> super::BytecodeTape<F> {
             if a != UNUSED {
                 stack.push(a);
             }
-            if b != UNUSED && self.opcodes[i] != OpCode::Powi {
+            if self.opcodes[i] == OpCode::Custom {
+                // For Custom ops, b is a callback index, not a tape index.
+                // The actual second operand (for binary custom ops) is in custom_second_args.
+                if let Some(&second_arg) = self.custom_second_args.get(&(idx)) {
+                    stack.push(second_arg);
+                }
+            } else if b != UNUSED && self.opcodes[i] != OpCode::Powi {
                 stack.push(b);
             }
         }
@@ -62,10 +68,13 @@ impl<F: Float> super::BytecodeTape<F> {
                 } else {
                     UNUSED
                 };
-                let rb = if b != UNUSED && self.opcodes[read] != OpCode::Powi {
+                let rb = if b != UNUSED
+                    && self.opcodes[read] != OpCode::Powi
+                    && self.opcodes[read] != OpCode::Custom
+                {
                     remap[b as usize]
                 } else {
-                    b
+                    b // Powi: b is encoded exponent; Custom: b is callback index
                 };
                 self.arg_indices[write] = [ra, rb];
                 write += 1;
@@ -76,6 +85,16 @@ impl<F: Float> super::BytecodeTape<F> {
         self.arg_indices.truncate(new_len);
         self.values.truncate(new_len);
         self.num_variables = new_len as u32;
+
+        // Remap custom_second_args: both keys and values are tape indices.
+        if !self.custom_second_args.is_empty() {
+            self.custom_second_args = self
+                .custom_second_args
+                .iter()
+                .filter(|(&k, _)| reachable[k as usize])
+                .map(|(&k, &v)| (remap[k as usize], remap[v as usize]))
+                .collect();
+        }
 
         remap
     }
@@ -96,9 +115,6 @@ impl<F: Float> super::BytecodeTape<F> {
     /// reachability only from `active_outputs`. After compaction,
     /// `output_indices` contains only the active outputs (remapped), and
     /// `output_index` is set to the first active output.
-    ///
-    /// **Note**: Like `dead_code_elimination`, this does not remap
-    /// `custom_second_args` (pre-existing limitation).
     ///
     /// # Panics
     /// Panics if `active_outputs` is empty.
@@ -142,13 +158,19 @@ impl<F: Float> super::BytecodeTape<F> {
             }
 
             let [mut a, mut b] = self.arg_indices[i];
-            // Apply remap to args (except Powi exponent in b).
+            // Apply remap to args (except Powi exponent and Custom callback in b).
             a = remap[a as usize];
-            if b != UNUSED && op != OpCode::Powi {
+            if b != UNUSED && op != OpCode::Powi && op != OpCode::Custom {
                 b = remap[b as usize];
             }
             // Update arg_indices with remapped values.
             self.arg_indices[i] = [a, b];
+
+            // Skip CSE for Custom ops: the key doesn't capture custom_second_args,
+            // so binary custom ops with different second operands would be incorrectly merged.
+            if op == OpCode::Custom {
+                continue;
+            }
 
             // Build the canonical key.
             let key = if b == UNUSED {
@@ -176,12 +198,20 @@ impl<F: Float> super::BytecodeTape<F> {
             }
             let [a, b] = self.arg_indices[i];
             let ra = remap[a as usize];
-            let rb = if b != UNUSED && op != OpCode::Powi {
+            let rb = if b != UNUSED && op != OpCode::Powi && op != OpCode::Custom {
                 remap[b as usize]
             } else {
-                b
+                b // Powi: b is encoded exponent; Custom: b is callback index
             };
             self.arg_indices[i] = [ra, rb];
+        }
+
+        // Remap custom_second_args values (keys are not changed by CSE remap,
+        // but the second operand indices may have been CSE'd).
+        if !self.custom_second_args.is_empty() {
+            for v in self.custom_second_args.values_mut() {
+                *v = remap[*v as usize];
+            }
         }
 
         // Update output indices.
@@ -198,8 +228,7 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// In debug builds, validates internal consistency after optimization.
     pub fn optimize(&mut self) {
-        self.cse();
-        self.dead_code_elimination();
+        self.cse(); // CSE already calls dead_code_elimination() internally.
 
         // Validate internal consistency in debug builds.
         #[cfg(debug_assertions)]

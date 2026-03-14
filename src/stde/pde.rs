@@ -171,12 +171,14 @@ pub fn parabolic_diffusion_stochastic<F: Float>(
 
     let (mean, sample_variance, standard_error) = acc.finalize();
 
-    // Unbiased estimator for ½ Σ_i (σ·e_i)^T H (σ·e_i): d * mean * ½
+    // Unbiased estimator for ½ Σ_i (σ·e_i)^T H (σ·e_i): d * mean * ½.
+    // Scale variance/SE to match the rescaled estimate.
+    let scale = df * half;
     EstimatorResult {
         value,
-        estimate: mean * df * half,
-        sample_variance,
-        standard_error,
+        estimate: mean * scale,
+        sample_variance: sample_variance * scale * scale,
+        standard_error: standard_error * scale,
         num_samples: sampled_indices.len(),
     }
 }
