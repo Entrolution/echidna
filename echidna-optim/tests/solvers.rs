@@ -726,19 +726,13 @@ impl Objective<f64> for SaddleNearby {
 
     fn eval_hessian(&mut self, x: &[f64]) -> (f64, Vec<f64>, Vec<Vec<f64>>) {
         let (f, g) = self.eval_grad(x);
-        let h = vec![
-            vec![2.0, 0.0],
-            vec![0.0, -2.0 + 12.0 * x[1] * x[1]],
-        ];
+        let h = vec![vec![2.0, 0.0], vec![0.0, -2.0 + 12.0 * x[1] * x[1]]];
         (f, g, h)
     }
 
     fn hvp(&mut self, x: &[f64], v: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let g = vec![2.0 * x[0], -2.0 * x[1] + 4.0 * x[1].powi(3)];
-        let hv = vec![
-            2.0 * v[0],
-            (-2.0 + 12.0 * x[1] * x[1]) * v[1],
-        ];
+        let hv = vec![2.0 * v[0], (-2.0 + 12.0 * x[1] * x[1]) * v[1]];
         (g, hv)
     }
 }
