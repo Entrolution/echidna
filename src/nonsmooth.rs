@@ -72,6 +72,7 @@ impl<F: Float> NonsmoothInfo<F> {
     /// Branch signature: `(tape_index, branch)` pairs for all kinks.
     ///
     /// Two evaluations at the same input produce the same signature.
+    #[must_use]
     pub fn signature(&self) -> Vec<(u32, i8)> {
         self.kinks
             .iter()

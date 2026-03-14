@@ -32,6 +32,7 @@ pub struct TaylorArena<F: Float> {
 
 impl<F: Float> TaylorArena<F> {
     /// Create a new arena with the given degree.
+    #[must_use]
     pub fn new(degree: usize) -> Self {
         TaylorArena {
             data: Vec::new(),
@@ -42,6 +43,7 @@ impl<F: Float> TaylorArena<F> {
 
     /// Number of coefficients per entry.
     #[inline]
+    #[must_use]
     pub fn degree(&self) -> usize {
         self.degree
     }
@@ -58,6 +60,7 @@ impl<F: Float> TaylorArena<F> {
 
     /// Get the coefficient slice for entry `index`.
     #[inline]
+    #[must_use]
     pub fn coeffs(&self, index: u32) -> &[F] {
         let start = index as usize * self.degree;
         &self.data[start..start + self.degree]
@@ -113,6 +116,10 @@ pub fn with_active_arena<F: TaylorArenaLocal, R>(f: impl FnOnce(&mut TaylorArena
             !ptr.is_null(),
             "No active Taylor arena. Create a TaylorDynGuard first."
         );
+        // SAFETY: The pointer is non-null (asserted above) and was set by a
+        // `TaylorDynGuard` that owns the `Box<TaylorArena<F>>` and keeps it alive
+        // for the guard's lifetime. The thread-local cell ensures single-threaded
+        // access, so no aliasing occurs.
         let arena = unsafe { &mut *ptr };
         f(arena)
     })
@@ -130,6 +137,7 @@ pub struct TaylorDynGuard<F: TaylorArenaLocal> {
 impl<F: TaylorArenaLocal> TaylorDynGuard<F> {
     /// Create and activate a Taylor arena with the given `degree`
     /// (number of Taylor coefficients per variable).
+    #[must_use]
     pub fn new(degree: usize) -> Self {
         let mut arena = Box::new(TaylorArena::new(degree));
         let prev = F::cell().with(|cell| {
@@ -141,6 +149,7 @@ impl<F: TaylorArenaLocal> TaylorDynGuard<F> {
     }
 
     /// Access the underlying arena.
+    #[must_use]
     pub fn arena(&self) -> &TaylorArena<F> {
         &self.arena
     }

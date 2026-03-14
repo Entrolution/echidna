@@ -71,6 +71,9 @@ macro_rules! cuda_forward_batch_body {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&$batch_size);
+        // SAFETY: All device buffers are correctly sized for `batch_size` elements,
+        // the kernel was compiled from our bundled source, and the launch config
+        // grid/block dimensions match the batch size.
         unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         s.synchronize().map_err(cuda_err)?;
@@ -117,6 +120,9 @@ macro_rules! cuda_gradient_batch_body {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&$batch_size);
+        // SAFETY: All device buffers are correctly sized for `batch_size` elements,
+        // the kernel was compiled from our bundled source, and the launch config
+        // grid/block dimensions match the batch size.
         unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         // Reverse pass
@@ -139,6 +145,9 @@ macro_rules! cuda_gradient_batch_body {
         builder.arg(&ni);
         builder.arg(&nv);
         builder.arg(&$batch_size);
+        // SAFETY: All device buffers are correctly sized for `batch_size` elements,
+        // the kernel was compiled from our bundled source, and the launch config
+        // grid/block dimensions match the batch size.
         unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         s.synchronize().map_err(cuda_err)?;
@@ -207,6 +216,9 @@ macro_rules! cuda_hvp_batch_body {
         builder.arg(&ni);
         builder.arg(&nv);
         builder.arg(&$batch_size);
+        // SAFETY: All device buffers are correctly sized for `batch_size` elements,
+        // the kernel was compiled from our bundled source, and the launch config
+        // grid/block dimensions match the batch size.
         unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         s.synchronize().map_err(cuda_err)?;
@@ -285,6 +297,9 @@ macro_rules! cuda_sparse_jacobian_body {
         builder.arg(&nv);
         builder.arg(&$tape.num_outputs);
         builder.arg(&batch);
+        // SAFETY: All device buffers are correctly sized for `batch` elements,
+        // the kernel was compiled from our bundled source, and the launch config
+        // grid/block dimensions match the batch size.
         unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         s.synchronize().map_err(cuda_err)?;
@@ -397,6 +412,9 @@ macro_rules! cuda_taylor_fwd_2nd_body {
         builder.arg(&nv);
         builder.arg(&no);
         builder.arg(&$batch_size);
+        // SAFETY: All device buffers are correctly sized for `batch_size` elements,
+        // the kernel was compiled from our bundled source, and the launch config
+        // grid/block dimensions match the batch size.
         unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
 
         s.synchronize().map_err(cuda_err)?;
@@ -553,6 +571,8 @@ impl CudaContext {
             arg1: s.clone_htod(&arg1).unwrap(),
             constants_f64: s.clone_htod(&constants).unwrap(),
             output_indices: s.clone_htod(&output_indices).unwrap(),
+            // SAFETY(u32 cast): tape length cannot practically exceed u32::MAX (~4.3B opcodes
+            // ≈ 17 GB of opcode storage alone).
             num_ops: tape.opcodes_slice().len() as u32,
             num_inputs: tape.num_inputs() as u32,
             num_variables: tape.num_variables_count() as u32,

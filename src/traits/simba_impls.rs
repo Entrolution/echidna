@@ -30,6 +30,8 @@ impl<F: Float> SimdValue for Dual<F> {
         *self
     }
     #[inline(always)]
+    // SAFETY: This is a single-lane (LANES=1) scalar type, so the lane index
+    // is always 0 and the operation is trivially safe regardless of input.
     unsafe fn extract_unchecked(&self, _: usize) -> Self::Element {
         *self
     }
@@ -38,6 +40,8 @@ impl<F: Float> SimdValue for Dual<F> {
         *self = val;
     }
     #[inline(always)]
+    // SAFETY: This is a single-lane (LANES=1) scalar type, so the lane index
+    // is always 0 and the operation is trivially safe regardless of input.
     unsafe fn replace_unchecked(&mut self, _: usize, val: Self::Element) {
         *self = val;
     }
@@ -67,6 +71,8 @@ impl<F: Float + TapeThreadLocal> SimdValue for Reverse<F> {
         *self
     }
     #[inline(always)]
+    // SAFETY: This is a single-lane (LANES=1) scalar type, so the lane index
+    // is always 0 and the operation is trivially safe regardless of input.
     unsafe fn extract_unchecked(&self, _: usize) -> Self::Element {
         *self
     }
@@ -75,6 +81,8 @@ impl<F: Float + TapeThreadLocal> SimdValue for Reverse<F> {
         *self = val;
     }
     #[inline(always)]
+    // SAFETY: This is a single-lane (LANES=1) scalar type, so the lane index
+    // is always 0 and the operation is trivially safe regardless of input.
     unsafe fn replace_unchecked(&mut self, _: usize, val: Self::Element) {
         *self = val;
     }

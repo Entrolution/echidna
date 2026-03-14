@@ -75,7 +75,9 @@ impl<F: Float, const K: usize> Sub for Laurent<F, K> {
     }
 }
 
-// Laurent Mul delegates to taylor_ops::taylor_mul (Cauchy product) which involves addition
+// Truncated Laurent series multiplication uses the Cauchy product, which accumulates
+// terms via addition — clippy flags the + inside a Mul impl, but this is correct for
+// power-series coefficient propagation.
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Mul for Laurent<F, K> {
     type Output = Self;
@@ -87,7 +89,9 @@ impl<F: Float, const K: usize> Mul for Laurent<F, K> {
     }
 }
 
-// Laurent Div delegates to taylor_ops::taylor_div which involves multiplication internally
+// Truncated Laurent series division computes coefficients via recurrence that uses
+// multiplication internally — clippy flags the * inside a Div impl, but this is correct
+// for power-series coefficient propagation.
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Div for Laurent<F, K> {
     type Output = Self;
@@ -208,7 +212,9 @@ macro_rules! impl_laurent_scalar_ops {
             }
         }
 
-        // Scalar Div delegates to Laurent Div (self / Laurent::constant(rhs)) to reuse pole arithmetic
+        // Scalar division delegates to full Laurent Div to reuse pole-order arithmetic.
+        // Clippy flags the / inside a Div impl (self-referential dispatch), but this is
+        // intentional — the scalar is promoted to a Laurent series first.
         #[allow(clippy::suspicious_arithmetic_impl)]
         impl<const K: usize> Div<$f> for Laurent<$f, K> {
             type Output = Laurent<$f, K>;

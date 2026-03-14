@@ -32,7 +32,9 @@ impl<F: Float, const K: usize> Sub for Taylor<F, K> {
     }
 }
 
-// Taylor Mul delegates to taylor_ops::taylor_mul (Cauchy product) which involves addition
+// Truncated Taylor series multiplication uses the Cauchy product, which accumulates
+// terms via addition — clippy flags the + inside a Mul impl, but this is correct for
+// power-series coefficient propagation.
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Mul for Taylor<F, K> {
     type Output = Self;
@@ -44,7 +46,9 @@ impl<F: Float, const K: usize> Mul for Taylor<F, K> {
     }
 }
 
-// Taylor Div delegates to taylor_ops::taylor_div which involves multiplication internally
+// Truncated Taylor series division computes coefficients via recurrence that uses
+// multiplication internally — clippy flags the * inside a Div impl, but this is correct
+// for power-series coefficient propagation.
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float, const K: usize> Div for Taylor<F, K> {
     type Output = Self;
@@ -186,7 +190,8 @@ macro_rules! impl_taylor_scalar_ops {
             }
         }
 
-        // Scalar Div uses Mul internally (multiply by reciprocal for efficiency)
+        // Scalar division multiplies by the reciprocal for efficiency — clippy flags
+        // the * inside a Div impl, but this is the standard reciprocal-multiply optimization.
         #[allow(clippy::suspicious_arithmetic_impl)]
         impl<const K: usize> Div<$f> for Taylor<$f, K> {
             type Output = Taylor<$f, K>;
@@ -268,7 +273,9 @@ impl<F: Float + TaylorArenaLocal> Sub for TaylorDyn<F> {
     }
 }
 
-// TaylorDyn Mul delegates to taylor_ops::taylor_mul (Cauchy product) which involves addition
+// Truncated Taylor series multiplication uses the Cauchy product, which accumulates
+// terms via addition — clippy flags the + inside a Mul impl, but this is correct for
+// power-series coefficient propagation.
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float + TaylorArenaLocal> Mul for TaylorDyn<F> {
     type Output = Self;
@@ -278,7 +285,9 @@ impl<F: Float + TaylorArenaLocal> Mul for TaylorDyn<F> {
     }
 }
 
-// TaylorDyn Div delegates to taylor_ops::taylor_div which involves multiplication internally
+// Truncated Taylor series division computes coefficients via recurrence that uses
+// multiplication internally — clippy flags the * inside a Div impl, but this is correct
+// for power-series coefficient propagation.
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl<F: Float + TaylorArenaLocal> Div for TaylorDyn<F> {
     type Output = Self;
