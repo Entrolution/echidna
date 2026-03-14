@@ -203,12 +203,13 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
 
     let (mean, sample_variance, standard_error) = acc.finalize();
 
-    // Unbiased estimator for Σ_j d_j: n * mean(sampled d_j's)
+    // Unbiased estimator for Σ_j d_j: n * mean(sampled d_j's).
+    // Scale variance/SE to match the rescaled estimate.
     EstimatorResult {
         value,
         estimate: mean * nf,
-        sample_variance,
-        standard_error,
+        sample_variance: sample_variance * nf * nf,
+        standard_error: standard_error * nf,
         num_samples: sampled_indices.len(),
     }
 }

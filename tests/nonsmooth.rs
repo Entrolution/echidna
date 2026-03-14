@@ -280,14 +280,33 @@ fn forward_nonsmooth_detects_ceil_kink() {
 
 #[test]
 fn forward_nonsmooth_detects_round_trunc() {
-    // round(x) and trunc(x) near integers → kinks detected
+    // Trunc has kinks at integers, Round has kinks at half-integers.
+    // Use x = 4.001 (near integer 4) for trunc, x = 3.501 (near half-integer 3.5) for round.
+
+    // Test trunc near integer
+    let (mut tape, _) = record(|x| x[0].trunc(), &[4.001]);
+    let info = tape.forward_nonsmooth(&[4.001]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].opcode, OpCode::Trunc);
+    assert_eq!(info.active_kinks(0.01).len(), 1);
+
+    // Test round near half-integer
+    let (mut tape, _) = record(|x| x[0].round(), &[3.501]);
+    let info = tape.forward_nonsmooth(&[3.501]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].opcode, OpCode::Round);
+    assert_eq!(info.active_kinks(0.01).len(), 1);
+
+    // Both in one expression: use a value near both a half-integer and an integer
+    // is impossible (they're 0.5 apart), so test that both kinks are detected
+    // even when only one is active.
     let (mut tape, _) = record(|x| x[0].round() + x[0].trunc(), &[4.001]);
     let info = tape.forward_nonsmooth(&[4.001]);
     assert_eq!(info.kinks.len(), 2);
     assert_eq!(info.kinks[0].opcode, OpCode::Round);
     assert_eq!(info.kinks[1].opcode, OpCode::Trunc);
-    // Both near integer → active
-    assert_eq!(info.active_kinks(0.01).len(), 2);
+    // Only trunc is near its kink (integer); round's kink is at half-integers
+    assert_eq!(info.active_kinks(0.01).len(), 1);
 }
 
 #[test]

@@ -808,3 +808,66 @@ fn taylor_dyn_through_scalar_generic() {
     let result = ad_generic_rosenbrock(x, y);
     assert_relative_eq!(result.value(), 0.0, epsilon = 1e-10);
 }
+
+// ══════════════════════════════════════════════
+//  powi with negative base (regression test)
+// ══════════════════════════════════════════════
+
+#[test]
+fn taylor_powi_negative_base_squared() {
+    // f(t) = (-2 + t)^2 = 4 - 4t + t^2
+    // Coefficients: [4, -4, 1, 0]
+    let x = Taylor::<f64, 4>::variable(-2.0);
+    let result = x.powi(2);
+    assert_relative_eq!(result.coeffs[0], 4.0, epsilon = 1e-12);
+    assert_relative_eq!(result.coeffs[1], -4.0, epsilon = 1e-12);
+    assert_relative_eq!(result.coeffs[2], 1.0, epsilon = 1e-12);
+    assert_relative_eq!(result.coeffs[3], 0.0, epsilon = 1e-12);
+}
+
+#[test]
+fn taylor_powi_negative_base_cubed() {
+    // f(t) = (-2 + t)^3 = -8 + 12t - 6t^2 + t^3
+    // Coefficients: [-8, 12, -6, 1]
+    let x = Taylor::<f64, 4>::variable(-2.0);
+    let result = x.powi(3);
+    assert_relative_eq!(result.coeffs[0], -8.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[1], 12.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[2], -6.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[3], 1.0, epsilon = 1e-10);
+}
+
+#[test]
+fn taylor_powi_negative_base_fourth_power() {
+    // f(t) = (-3 + t)^4 = 81 - 108t + 54t^2 - 12t^3 + t^4
+    let x = Taylor::<f64, 5>::variable(-3.0);
+    let result = x.powi(4);
+    assert_relative_eq!(result.coeffs[0], 81.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[1], -108.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[2], 54.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[3], -12.0, epsilon = 1e-10);
+    assert_relative_eq!(result.coeffs[4], 1.0, epsilon = 1e-10);
+}
+
+#[test]
+fn taylor_powi_negative_base_negative_exponent() {
+    // f(t) = (-2 + t)^(-1) at t=0:
+    // f(0) = -0.5, f'(0) = -(-2)^(-2) = -0.25, f''(0)/2 = -(-2)^(-3) = -0.125
+    let x = Taylor::<f64, 4>::variable(-2.0);
+    let result = x.powi(-1);
+    assert_relative_eq!(result.coeffs[0], -0.5, epsilon = 1e-12);
+    assert_relative_eq!(result.coeffs[1], -0.25, epsilon = 1e-12);
+    assert_relative_eq!(result.coeffs[2], -0.125, epsilon = 1e-12);
+    assert_relative_eq!(result.coeffs[3], -0.0625, epsilon = 1e-12);
+}
+
+#[test]
+fn taylor_powi_positive_base_still_works() {
+    // Regression: positive base should still use the efficient exp-ln path for large exponents.
+    // f(t) = (2 + t)^10 at t=0: c[0] = 1024
+    let x = Taylor::<f64, 3>::variable(2.0);
+    let result = x.powi(10);
+    assert_relative_eq!(result.coeffs[0], 1024.0, epsilon = 1e-8);
+    // f'(0) = 10 * 2^9 = 5120
+    assert_relative_eq!(result.coeffs[1], 5120.0, epsilon = 1e-6);
+}

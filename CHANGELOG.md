@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-03-14
+
+### Fixed
+
+- **Powi f32 exponent encoding**: `powi(n)` on f32 bytecode tapes silently produced wrong values and gradients for negative exponents (`n <= -2`). The `i32` exponent was stored as `u32` then round-tripped through `f32`, which loses precision for values > 2^24 (all negative exponents). All 5 dispatch sites (forward, reverse, tangent forward, tangent reverse, cross-country) now decode the exponent directly from the raw `u32` via `powi_exp_decode_raw`, bypassing the float conversion entirely.
+- **taylor_powi negative base**: `Taylor::powi` and bytecode Taylor-mode produced NaN for negative base values (e.g. `(-2)^3`) because the implementation used `exp(n * ln(a))` which fails for `ln(negative)`. Added `taylor_powi_squaring` using binary exponentiation with `taylor_mul`, dispatched when `a[0] < 0` or `|n| <= 8`.
+- **Checkpoint position lookup**: `grad_checkpointed`, `grad_checkpointed_disk`, and `grad_checkpointed_with_hints` used `Vec::contains()` for checkpoint position lookups (O(n) per step). Converted to `HashSet` for O(1) lookups.
+- **Nonsmooth Round kink detection**: `forward_nonsmooth` now correctly detects Round kinks at half-integers (0.5, 1.5, ...) instead of at integers, matching the actual discontinuity locations of the `round` function. Updated test to match.
+
 ## [0.4.0] - 2026-02-26
 
 ### Changed
@@ -175,7 +184,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Entrolution/echidna/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Entrolution/echidna/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Entrolution/echidna/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Entrolution/echidna/compare/v0.1.0...v0.2.0

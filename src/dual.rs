@@ -85,7 +85,7 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn powi(self, n: i32) -> Self {
         let val = self.re.powi(n);
-        let deriv = F::from(n).unwrap() * self.re.powi(n - 1);
+        let deriv = F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap());
         self.chain(val, deriv)
     }
 
@@ -315,7 +315,11 @@ impl<F: Float> Dual<F> {
         let h = self.re.hypot(other.re);
         Dual {
             re: h,
-            eps: (self.re * self.eps + other.re * other.eps) / h,
+            eps: if h == F::zero() {
+                F::zero()
+            } else {
+                (self.re * self.eps + other.re * other.eps) / h
+            },
         }
     }
 

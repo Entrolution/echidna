@@ -644,7 +644,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
 
     fn powi(self, n: i32) -> Self {
         let val = self.value.powi(n);
-        let deriv = F::from(n).unwrap() * self.value.powi(n - 1);
+        let deriv = F::from(n).unwrap() * self.value.powf(F::from(n as i64 - 1).unwrap());
         rev_unary(self, val, deriv)
     }
 
@@ -793,8 +793,11 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
 
     fn hypot(self, other: Self) -> Self {
         let h = self.value.hypot(other.value);
-        let dx = self.value / h;
-        let dy = other.value / h;
+        let (dx, dy) = if h == F::zero() {
+            (F::zero(), F::zero())
+        } else {
+            (self.value / h, other.value / h)
+        };
         rev_binary(self, other, h, dx, dy)
     }
 

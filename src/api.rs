@@ -43,6 +43,12 @@ pub fn grad<F: Float + TapeThreadLocal>(
     let output = f(&inputs);
     drop(guard);
 
+    // If the output is a constant (independent of all inputs), the gradient is zero.
+    if output.index == crate::tape::CONSTANT {
+        Tape::return_to_pool(tape);
+        return vec![F::zero(); n];
+    }
+
     // Run reverse sweep.
     let adjoints = tape.reverse(output.index);
 

@@ -442,12 +442,14 @@ pub fn taylor_powf<F: Float>(
 
 /// `c = a^n` (powi) — integer power.
 ///
-/// Uses `scratch1` for `ln(a)` and `scratch2` for `n * ln(a)`.
+/// Dispatches between two strategies:
+/// - **Repeated squaring** (binary exponentiation via `taylor_mul`): used when
+///   `a[0] < 0` (where `ln` would produce NaN) or `|n| <= 8` (at most 3
+///   multiplications, competitive with exp-ln).
+/// - **exp(n * ln(a))**: used for positive base with large exponents.
 #[inline]
 pub fn taylor_powi<F: Float>(a: &[F], n: i32, c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
     let deg = c.len();
-    // For small integer powers, direct computation may be more efficient,
-    // but for generality use exp(n * ln(a)).
     if n == 0 {
         c[0] = F::one();
         for ck in c[1..deg].iter_mut() {
@@ -459,14 +461,76 @@ pub fn taylor_powi<F: Float>(a: &[F], n: i32, c: &mut [F], scratch1: &mut [F], s
         c.copy_from_slice(a);
         return;
     }
-    // scratch1 = ln(a)
-    taylor_ln(a, scratch1);
-    // scratch2 = n * ln(a)
-    let nf = F::from(n).unwrap();
-    taylor_scale(scratch1, nf, scratch2);
-    // c = exp(n * ln(a))
-    taylor_exp(scratch2, c);
-    c[0] = a[0].powi(n);
+    if n == -1 {
+        taylor_recip(a, c);
+        return;
+    }
+    if a[0] < F::zero() || n.unsigned_abs() <= 8 {
+        taylor_powi_squaring(a, n, c, scratch1, scratch2);
+    } else {
+        // scratch1 = ln(a)
+        taylor_ln(a, scratch1);
+        // scratch2 = n * ln(a)
+        let nf = F::from(n).unwrap();
+        taylor_scale(scratch1, nf, scratch2);
+        // c = exp(n * ln(a))
+        taylor_exp(scratch2, c);
+        c[0] = a[0].powi(n);
+    }
+}
+
+/// Integer power via binary exponentiation on Taylor coefficient arrays.
+///
+/// Computes `a^n` using repeated squaring with `taylor_mul`. Works correctly
+/// for negative base values (unlike the exp-ln path). For negative `n`,
+/// computes `a^|n|` then takes the reciprocal.
+fn taylor_powi_squaring<F: Float>(
+    a: &[F],
+    n: i32,
+    c: &mut [F],
+    scratch1: &mut [F],
+    scratch2: &mut [F],
+) {
+    let deg = c.len();
+    let abs_n = n.unsigned_abs();
+
+    // result (c) = 1
+    c[0] = F::one();
+    for ck in c[1..deg].iter_mut() {
+        *ck = F::zero();
+    }
+
+    // base (scratch1) = a
+    scratch1[..deg].copy_from_slice(&a[..deg]);
+
+    let mut power = abs_n;
+    while power > 0 {
+        if power & 1 == 1 {
+            // result = result * base
+            taylor_mul(c, &*scratch1, scratch2);
+            c[..deg].copy_from_slice(&scratch2[..deg]);
+        }
+        power >>= 1;
+        if power > 0 {
+            // base = base * base
+            let base_ref: &[F] = &*scratch1;
+            // Inline squaring to avoid borrow conflict (scratch1 is both source and dest)
+            for k in 0..deg {
+                let mut sum = F::zero();
+                for j in 0..=k {
+                    sum = sum + base_ref[j] * base_ref[k - j];
+                }
+                scratch2[k] = sum;
+            }
+            scratch1[..deg].copy_from_slice(&scratch2[..deg]);
+        }
+    }
+
+    if n < 0 {
+        // c = 1/c: copy c into scratch1, then compute recip into c
+        scratch1[..deg].copy_from_slice(&c[..deg]);
+        taylor_recip(scratch1, c);
+    }
 }
 
 /// `c = cbrt(a) = a^(1/3)`.

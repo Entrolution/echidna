@@ -265,11 +265,11 @@ macro_rules! impl_breverse_scalar_ops {
             #[inline]
             fn rem(self, rhs: BReverse<$f>) -> BReverse<$f> {
                 let value = self % rhs.value;
-                // Constant % variable has zero derivative — treat as constant.
-                BReverse {
-                    value,
-                    index: CONSTANT,
-                }
+                let index = bytecode_tape::with_active_btape(|t| {
+                    let c = t.push_const(self);
+                    t.push_op(OpCode::Rem, c, rhs.index, value)
+                });
+                BReverse { value, index }
             }
         }
     };

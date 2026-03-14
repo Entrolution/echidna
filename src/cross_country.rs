@@ -77,10 +77,18 @@ impl<F: Float> LinearizedGraph<F> {
                 op => {
                     let [a_idx, b_idx] = arg_indices[i];
                     let a = values[a_idx as usize];
-                    let b = if b_idx != UNUSED && op != OpCode::Powi {
+                    if op == OpCode::Powi {
+                        let exp = opcode::powi_exp_decode_raw(b_idx);
+                        let n = F::from(exp).unwrap();
+                        let da = n * a.powi(exp - 1);
+                        if opcodes[a_idx as usize] != OpCode::Const && da != zero {
+                            preds[i].push((a_idx, da));
+                            succs[a_idx as usize].push((i as u32, da));
+                        }
+                        continue;
+                    }
+                    let b = if b_idx != UNUSED {
                         values[b_idx as usize]
-                    } else if op == OpCode::Powi {
-                        F::from(b_idx).unwrap_or(zero)
                     } else {
                         zero
                     };
@@ -93,12 +101,8 @@ impl<F: Float> LinearizedGraph<F> {
                         succs[a_idx as usize].push((i as u32, da));
                     }
 
-                    // Edge from second argument (binary ops only, not Powi)
-                    if b_idx != UNUSED
-                        && op != OpCode::Powi
-                        && opcodes[b_idx as usize] != OpCode::Const
-                        && db != zero
-                    {
+                    // Edge from second argument (binary ops only)
+                    if b_idx != UNUSED && opcodes[b_idx as usize] != OpCode::Const && db != zero {
                         preds[i].push((b_idx, db));
                         succs[b_idx as usize].push((i as u32, db));
                     }

@@ -67,9 +67,10 @@ impl<F: Float, const N: usize> Rem for DualVec<F, N> {
     type Output = Self;
     #[inline]
     fn rem(self, rhs: Self) -> Self {
+        let q = (self.re / rhs.re).trunc();
         DualVec {
             re: self.re % rhs.re,
-            eps: self.eps,
+            eps: std::array::from_fn(|k| self.eps[k] - rhs.eps[k] * q),
         }
     }
 }
@@ -217,9 +218,10 @@ macro_rules! impl_dual_vec_scalar_ops {
             type Output = DualVec<$f, N>;
             #[inline]
             fn rem(self, rhs: DualVec<$f, N>) -> DualVec<$f, N> {
+                let q = (self / rhs.re).trunc();
                 DualVec {
                     re: self % rhs.re,
-                    eps: [<$f>::from(0.0); N],
+                    eps: std::array::from_fn(|k| -rhs.eps[k] * q),
                 }
             }
         }

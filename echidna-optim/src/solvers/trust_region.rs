@@ -62,9 +62,9 @@ pub fn trust_region<F: Float, O: Objective<F>>(
     {
         return OptimResult {
             x: x0.to_vec(),
-            value: F::zero(),
-            gradient: vec![F::zero(); n],
-            gradient_norm: F::zero(),
+            value: F::nan(),
+            gradient: vec![F::nan(); n],
+            gradient_norm: F::nan(),
             iterations: 0,
             func_evals: 0,
             termination: TerminationReason::NumericalError,
