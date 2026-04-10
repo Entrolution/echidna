@@ -650,7 +650,7 @@ impl GpuBackend for WgpuContext {
             });
 
         // Values buffer: B * num_variables (working memory per thread)
-        let values_size = (batch_size * num_variables) as u64 * 4;
+        let values_size = (batch_size as u64) * (num_variables as u64) * 4;
         let values_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("values"),
             size: values_size,
@@ -659,7 +659,7 @@ impl GpuBackend for WgpuContext {
         });
 
         // Output buffer: B * num_outputs
-        let output_size = (batch_size * num_outputs) as u64 * 4;
+        let output_size = (batch_size as u64) * (num_outputs as u64) * 4;
         let output_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("outputs"),
             size: output_size,
@@ -794,7 +794,7 @@ impl GpuBackend for WgpuContext {
             });
 
         // Values buffer: B * num_variables (shared between forward and reverse)
-        let values_size = (batch_size * num_variables) as u64 * 4;
+        let values_size = (batch_size as u64) * (num_variables as u64) * 4;
         let values_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("values"),
             size: values_size,
@@ -803,7 +803,7 @@ impl GpuBackend for WgpuContext {
         });
 
         // Output buffer: B * num_outputs
-        let output_count = (batch_size * num_outputs) as u64;
+        let output_count = (batch_size as u64) * (num_outputs as u64);
         let output_size = output_count * 4;
         let output_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("outputs"),
@@ -821,7 +821,7 @@ impl GpuBackend for WgpuContext {
         });
 
         // Gradient output buffer: B * num_inputs
-        let grad_count = (batch_size * num_inputs) as u64;
+        let grad_count = (batch_size as u64) * (num_inputs as u64);
         let grad_size = grad_count * 4;
         let grad_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grad_out"),
@@ -1042,7 +1042,7 @@ impl GpuBackend for WgpuContext {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-        let buf_size = (batch * num_variables) as u64 * 4;
+        let buf_size = (batch as u64) * (num_variables as u64) * 4;
         let primals_work = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("primals_work"),
             size: buf_size,

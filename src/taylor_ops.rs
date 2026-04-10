@@ -465,7 +465,7 @@ pub fn taylor_powi<F: Float>(a: &[F], n: i32, c: &mut [F], scratch1: &mut [F], s
         taylor_recip(a, c);
         return;
     }
-    if a[0] < F::zero() || n.unsigned_abs() <= 8 {
+    if a[0] <= F::zero() || n.unsigned_abs() <= 8 {
         taylor_powi_squaring(a, n, c, scratch1, scratch2);
     } else {
         // scratch1 = ln(a)
@@ -538,15 +538,30 @@ fn taylor_powi_squaring<F: Float>(
 /// Uses `scratch1` and `scratch2`.
 #[inline]
 pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
-    let three = F::from(3.0).unwrap();
-    let third = F::one() / three;
-    // scratch1 = ln(a)
-    taylor_ln(a, scratch1);
-    // scratch2 = (1/3) * ln(a)
-    taylor_scale(scratch1, third, scratch2);
-    // c = exp((1/3) * ln(a))
-    taylor_exp(scratch2, c);
-    c[0] = a[0].cbrt();
+    let deg = a.len();
+    if a[0] < F::zero() {
+        // cbrt(-x) = -cbrt(x): negate input, compute cbrt on positive, negate output.
+        // Use c as temporary for negated input (safe: taylor_ln reads before writing).
+        for i in 0..deg {
+            c[i] = -a[i];
+        }
+        let three = F::from(3.0).unwrap();
+        let third = F::one() / three;
+        taylor_ln(c, scratch1);
+        taylor_scale(scratch1, third, scratch2);
+        taylor_exp(scratch2, c);
+        c[0] = a[0].cbrt();
+        for i in 1..deg {
+            c[i] = -c[i];
+        }
+    } else {
+        let three = F::from(3.0).unwrap();
+        let third = F::one() / three;
+        taylor_ln(a, scratch1);
+        taylor_scale(scratch1, third, scratch2);
+        taylor_exp(scratch2, c);
+        c[0] = a[0].cbrt();
+    }
 }
 
 /// `c = exp2(a) = 2^a = exp(a * ln(2))`.
@@ -559,6 +574,10 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 }
 
 /// `c = exp(a) - 1` (exp_m1).
+///
+/// NOTE (verified correct): The recurrence uses `exp(a[0])` for c[1..] (via `taylor_exp`),
+/// then patches c[0] to `exp_m1(a[0])`. This is correct because derivatives of `exp(x)-1`
+/// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
     taylor_exp(a, c);
@@ -636,13 +655,26 @@ pub fn taylor_atan2<F: Float>(
     scratch2: &mut [F],
     scratch3: &mut [F],
 ) {
-    // c = atan(a/b) with correct quadrant
-    // First compute ratio = a/b
-    taylor_div(a, b, scratch1);
-    // Then atan(ratio)
-    taylor_atan(scratch1, c, scratch2, scratch3);
-    // Fix c[0] for quadrant correctness
-    c[0] = a[0].atan2(b[0]);
+    if b[0] != F::zero() {
+        // Standard path: atan(a/b) with quadrant correction on c[0].
+        // Derivatives of atan2(a,b) and atan(a/b) are identical where both defined.
+        taylor_div(a, b, scratch1);
+        taylor_atan(scratch1, c, scratch2, scratch3);
+        c[0] = a[0].atan2(b[0]);
+    } else if a[0] != F::zero() {
+        // b[0]==0, a[0]!=0: use atan2(a,b) = sign(a)*pi/2 - atan(b/a)
+        taylor_div(b, a, scratch1);
+        taylor_atan(scratch1, c, scratch2, scratch3);
+        // c = -atan(b/a)
+        for ck in c.iter_mut() {
+            *ck = -*ck;
+        }
+        // Fix c[0] to the correct atan2 value
+        c[0] = a[0].atan2(b[0]);
+    } else {
+        // Both zero: mathematically undefined; return discontinuous zero
+        taylor_discontinuous(F::zero(), c);
+    }
 }
 
 /// Discontinuous function: `c[0] = f(a[0])`, `c[k>=1] = 0`.

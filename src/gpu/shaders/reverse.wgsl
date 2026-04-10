@@ -147,11 +147,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 da = inv;
                 db = -a * inv * inv;
             }
-            case 6u /* REM */: { da = 1.0; db = 0.0; }
+            case 6u /* REM */: {
+                let b = values[v_base + b_idx];
+                da = 1.0;
+                db = -trunc(a / b);
+            }
             case 7u /* POWF */: {
                 let b = values[v_base + b_idx];
                 da = b * pow(a, b - 1.0);
-                db = r * log(a);
+                db = select(r * log(a), 0.0, r == 0.0);
             }
             case 8u /* ATAN2 */: {
                 let b = values[v_base + b_idx];
@@ -161,8 +165,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 9u /* HYPOT */: {
                 let b = values[v_base + b_idx];
+                if r == 0.0 { da = 0.0; db = 0.0; } else {
                 da = a / r;
-                db = b / r;
+                db = b / r; }
             }
             case 10u /* MAX */: {
                 let b = values[v_base + b_idx];

@@ -175,8 +175,15 @@ impl<F: Float> super::BytecodeTape<F> {
                     let a = tangent_vals[a_idx as usize];
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
-                        let n = T::from(exp).unwrap();
-                        let da = n * a.powi(exp - 1);
+                        let da = if exp == 0 {
+                            T::zero()
+                        } else if exp == i32::MIN {
+                            let n = T::from(exp).unwrap();
+                            n * a.powf(T::from(exp as i64 - 1).unwrap())
+                        } else {
+                            let n = T::from(exp).unwrap();
+                            n * a.powi(exp - 1)
+                        };
                         buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
                         continue;
                     }

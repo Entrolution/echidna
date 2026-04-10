@@ -100,8 +100,11 @@ fn cosh_f32(x: f32) -> f32 {
 }
 
 fn asinh_f32(x: f32) -> f32 {
-    // asinh(x) = ln(x + sqrt(x^2 + 1))
-    return log(x + sqrt(x * x + 1.0));
+    // Use |x| to avoid catastrophic cancellation for large negative x:
+    // log(x + sqrt(x²+1)) ≈ log(0) when x << 0, but log(|x| + sqrt(x²+1)) is stable.
+    let a = abs(x);
+    let r = log(a + sqrt(a * a + 1.0));
+    return select(-r, r, x >= 0.0);
 }
 
 fn acosh_f32(x: f32) -> f32 {
@@ -115,7 +118,14 @@ fn atanh_f32(x: f32) -> f32 {
 }
 
 fn hypot_f32(a: f32, b: f32) -> f32 {
-    return sqrt(a * a + b * b);
+    // Factor out max magnitude to avoid overflow for large inputs
+    let ax = abs(a);
+    let ay = abs(b);
+    let mx = max(ax, ay);
+    let mn = min(ax, ay);
+    if mx == 0.0 { return 0.0; }
+    let r = mn / mx;
+    return mx * sqrt(1.0 + r * r);
 }
 
 fn rem_f32(a: f32, b: f32) -> f32 {
@@ -132,9 +142,11 @@ fn log10_f32(x: f32) -> f32 {
 }
 
 fn signum_f32(x: f32) -> f32 {
-    if x > 0.0 { return 1.0; }
-    if x < 0.0 { return -1.0; }
-    return 0.0;
+    // Match Rust's f32::signum: returns ±1 for all finite values (including ±0),
+    // NaN for NaN. WGSL can't distinguish ±0, so we return 1.0 for x >= 0.
+    if x != x { return x; }  // NaN passthrough
+    if x >= 0.0 { return 1.0; }
+    return -1.0;
 }
 
 fn powi_f32(base: f32, exp_bits: u32) -> f32 {

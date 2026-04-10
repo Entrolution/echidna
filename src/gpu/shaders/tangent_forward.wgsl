@@ -160,8 +160,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 rt = inv * at - a * inv * inv * bt;
             }
             case 6u /* REM */: {
-                r = a - trunc(a / primals[p_base + b_idx]) * primals[p_base + b_idx];
-                rt = at; // d(a%b)/da = 1
+                let b = primals[p_base + b_idx];
+                let bt = tangents[t_base + b_idx];
+                r = a - trunc(a / b) * b;
+                rt = at - trunc(a / b) * bt;
             }
             case 7u /* POWF */: {
                 let b = primals[p_base + b_idx];

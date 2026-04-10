@@ -79,8 +79,15 @@ impl<F: Float> LinearizedGraph<F> {
                     let a = values[a_idx as usize];
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
-                        let n = F::from(exp).unwrap();
-                        let da = n * a.powi(exp - 1);
+                        let da = if exp == 0 {
+                            F::zero()
+                        } else if exp == i32::MIN {
+                            let n = F::from(exp).unwrap();
+                            n * a.powf(F::from(exp as i64 - 1).unwrap())
+                        } else {
+                            let n = F::from(exp).unwrap();
+                            n * a.powi(exp - 1)
+                        };
                         if opcodes[a_idx as usize] != OpCode::Const && da != zero {
                             preds[i].push((a_idx, da));
                             succs[a_idx as usize].push((i as u32, da));

@@ -149,8 +149,9 @@ macro_rules! impl_breverse_scalar_ops {
             fn add(self, rhs: $f) -> BReverse<$f> {
                 let value = self.value + rhs;
                 let index = bytecode_tape::with_active_btape(|t| {
+                    let si = ensure_on_tape(&self, t);
                     let c = t.push_const(rhs);
-                    t.push_op(OpCode::Add, self.index, c, value)
+                    t.push_op(OpCode::Add, si, c, value)
                 });
                 BReverse { value, index }
             }
@@ -163,7 +164,8 @@ macro_rules! impl_breverse_scalar_ops {
                 let value = self + rhs.value;
                 let index = bytecode_tape::with_active_btape(|t| {
                     let c = t.push_const(self);
-                    t.push_op(OpCode::Add, c, rhs.index, value)
+                    let ri = ensure_on_tape(&rhs, t);
+                    t.push_op(OpCode::Add, c, ri, value)
                 });
                 BReverse { value, index }
             }
@@ -175,8 +177,9 @@ macro_rules! impl_breverse_scalar_ops {
             fn sub(self, rhs: $f) -> BReverse<$f> {
                 let value = self.value - rhs;
                 let index = bytecode_tape::with_active_btape(|t| {
+                    let si = ensure_on_tape(&self, t);
                     let c = t.push_const(rhs);
-                    t.push_op(OpCode::Sub, self.index, c, value)
+                    t.push_op(OpCode::Sub, si, c, value)
                 });
                 BReverse { value, index }
             }
@@ -189,7 +192,8 @@ macro_rules! impl_breverse_scalar_ops {
                 let value = self - rhs.value;
                 let index = bytecode_tape::with_active_btape(|t| {
                     let c = t.push_const(self);
-                    t.push_op(OpCode::Sub, c, rhs.index, value)
+                    let ri = ensure_on_tape(&rhs, t);
+                    t.push_op(OpCode::Sub, c, ri, value)
                 });
                 BReverse { value, index }
             }
@@ -201,8 +205,9 @@ macro_rules! impl_breverse_scalar_ops {
             fn mul(self, rhs: $f) -> BReverse<$f> {
                 let value = self.value * rhs;
                 let index = bytecode_tape::with_active_btape(|t| {
+                    let si = ensure_on_tape(&self, t);
                     let c = t.push_const(rhs);
-                    t.push_op(OpCode::Mul, self.index, c, value)
+                    t.push_op(OpCode::Mul, si, c, value)
                 });
                 BReverse { value, index }
             }
@@ -215,7 +220,8 @@ macro_rules! impl_breverse_scalar_ops {
                 let value = self * rhs.value;
                 let index = bytecode_tape::with_active_btape(|t| {
                     let c = t.push_const(self);
-                    t.push_op(OpCode::Mul, c, rhs.index, value)
+                    let ri = ensure_on_tape(&rhs, t);
+                    t.push_op(OpCode::Mul, c, ri, value)
                 });
                 BReverse { value, index }
             }
@@ -227,8 +233,9 @@ macro_rules! impl_breverse_scalar_ops {
             fn div(self, rhs: $f) -> BReverse<$f> {
                 let value = self.value / rhs;
                 let index = bytecode_tape::with_active_btape(|t| {
+                    let si = ensure_on_tape(&self, t);
                     let c = t.push_const(rhs);
-                    t.push_op(OpCode::Div, self.index, c, value)
+                    t.push_op(OpCode::Div, si, c, value)
                 });
                 BReverse { value, index }
             }
@@ -241,7 +248,8 @@ macro_rules! impl_breverse_scalar_ops {
                 let value = self / rhs.value;
                 let index = bytecode_tape::with_active_btape(|t| {
                     let c = t.push_const(self);
-                    t.push_op(OpCode::Div, c, rhs.index, value)
+                    let ri = ensure_on_tape(&rhs, t);
+                    t.push_op(OpCode::Div, c, ri, value)
                 });
                 BReverse { value, index }
             }
@@ -253,8 +261,9 @@ macro_rules! impl_breverse_scalar_ops {
             fn rem(self, rhs: $f) -> BReverse<$f> {
                 let value = self.value % rhs;
                 let index = bytecode_tape::with_active_btape(|t| {
+                    let si = ensure_on_tape(&self, t);
                     let c = t.push_const(rhs);
-                    t.push_op(OpCode::Rem, self.index, c, value)
+                    t.push_op(OpCode::Rem, si, c, value)
                 });
                 BReverse { value, index }
             }
@@ -267,7 +276,8 @@ macro_rules! impl_breverse_scalar_ops {
                 let value = self % rhs.value;
                 let index = bytecode_tape::with_active_btape(|t| {
                     let c = t.push_const(self);
-                    t.push_op(OpCode::Rem, c, rhs.index, value)
+                    let ri = ensure_on_tape(&rhs, t);
+                    t.push_op(OpCode::Rem, c, ri, value)
                 });
                 BReverse { value, index }
             }

@@ -227,11 +227,11 @@ extern "C" __global__ void reverse_sweep(
                 F inv = F(1)/b;
                 da = inv; db = -a*inv*inv; break;
             }
-            case OP_REM: da = F(1); break;
+            case OP_REM: { F b = values[v_base+bi]; da = F(1); db = -trunc(a/b); break; }
             case OP_POWF: {
                 F b = values[v_base+bi];
                 da = b * pow(a, b-F(1));
-                db = r * log(a); break;
+                db = (r == F(0)) ? F(0) : r * log(a); break;
             }
             case OP_ATAN2: {
                 F b = values[v_base+bi];
@@ -240,7 +240,9 @@ extern "C" __global__ void reverse_sweep(
             }
             case OP_HYPOT: {
                 F b = values[v_base+bi];
-                da = a/r; db = b/r; break;
+                if (r == F(0)) { da = F(0); db = F(0); }
+                else { da = a/r; db = b/r; }
+                break;
             }
             case OP_MAX: {
                 F b = values[v_base+bi];
@@ -352,10 +354,14 @@ extern "C" __global__ void tangent_forward(
                 F b=primals[base+bi]; F bt=tangents[base+bi];
                 r=a/b; F inv=F(1)/b; rt=inv*at-a*inv*inv*bt; break;
             }
-            case OP_REM: r=fmod(a, primals[base+bi]); rt=at; break;
+            case OP_REM: { F b=primals[base+bi]; F bt=tangents[base+bi]; r=fmod(a,b); rt=at-trunc(a/b)*bt; break; }
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
-                r=pow(a,b); rt=r*(b/a*at+log(a)*bt); break;
+                r=pow(a,b);
+                // Guard: at a=0, b/a and log(a) are -inf/inf; split dx/dy
+                F dx = (a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at;
+                F dy = (r == F(0)) ? F(0) : r*log(a)*bt;
+                rt = dx + dy; break;
             }
             case OP_ATAN2: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
@@ -477,10 +483,13 @@ extern "C" __global__ void tangent_reverse(
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 r=a/b; F inv=F(1)/b; rt=inv*at-a*inv*inv*bt; break;
             }
-            case OP_REM: r=fmod(a, primals[base+bi]); rt=at; break;
+            case OP_REM: { F b=primals[base+bi]; F bt=tans[base+bi]; r=fmod(a,b); rt=at-trunc(a/b)*bt; break; }
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                r=pow(a,b); rt=r*(b/a*at+log(a)*bt); break;
+                r=pow(a,b);
+                F dx = (a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at;
+                F dy = (r == F(0)) ? F(0) : r*log(a)*bt;
+                rt = dx + dy; break;
             }
             case OP_ATAN2: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
@@ -581,16 +590,17 @@ extern "C" __global__ void tangent_reverse(
                 da_re=inv; da_eps=-bt*inv*inv;
                 db_re=-a*inv*inv; db_eps=-at*inv*inv+F(2)*a*bt*inv*inv*inv; break;
             }
-            case OP_REM: da_re=F(1); break;
+            case OP_REM: { F b=primals[base+bi]; da_re=F(1); db_re=-trunc(a/b); break; }
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 F ab1 = pow(a, b-F(1));
                 da_re = b * ab1;
                 da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt);
                 F la = log(a);
-                db_re = r * la;
+                F rr = primals[base+i]; // r = a^b from forward pass
+                db_re = (rr == F(0)) ? F(0) : rr * la;
                 F rt2 = tans[base+i];
-                db_eps = rt2*la + r*at/a; break;
+                db_eps = (rr == F(0)) ? F(0) : rt2*la + rr*at/a; break;
             }
             case OP_ATAN2: {
                 F b=primals[base+bi]; F bt=tans[base+bi];

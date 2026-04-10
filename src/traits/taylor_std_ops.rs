@@ -228,9 +228,17 @@ macro_rules! impl_taylor_scalar_ops {
             type Output = Taylor<$f, K>;
             #[inline]
             fn rem(self, rhs: Taylor<$f, K>) -> Taylor<$f, K> {
-                let mut coeffs = [<$f>::from(0.0); K];
-                coeffs[0] = self % rhs.coeffs[0];
-                Taylor { coeffs }
+                // scalar % b(t) = scalar - trunc(scalar/b[0]) * b(t)
+                let q = (self / rhs.coeffs[0]).trunc();
+                Taylor {
+                    coeffs: std::array::from_fn(|k| {
+                        if k == 0 {
+                            self % rhs.coeffs[0]
+                        } else {
+                            -q * rhs.coeffs[k]
+                        }
+                    }),
+                }
             }
         }
     };

@@ -133,7 +133,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 3u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a-b; rt=at-bt; }
             case 4u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a*b; rt=b*at+a*bt; }
             case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-a*inv*inv*bt; }
-            case 6u: { r=a-trunc(a/primals[base+bi])*primals[base+bi]; rt=at; }
+            case 6u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=a-trunc(a/b)*b; rt=at-trunc(a/b)*bt; }
             case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=pow(a,b); rt=r*(b/a*at+log(a)*bt); }
             case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let d=a*a+b*b; rt=(b*at-a*bt)/d; }
             case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=sqrt(a*a+b*b); rt=(a*at+b*bt)/r; }
@@ -222,7 +222,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 da_re=inv; da_eps=-bt*inv*inv;
                 db_re=-a*inv*inv; db_eps=-at*inv*inv+2.0*a*bt*inv*inv*inv;
             }
-            case 6u /* REM */: { da_re=1.0; }
+            case 6u /* REM */: {
+                let b=primals[base+bi];
+                da_re=1.0;
+                db_re=-trunc(a/b);
+                // db_eps = 0 since trunc has zero derivative a.e.
+            }
             case 7u /* POWF */: {
                 let b=primals[base+bi]; let bt=tans[base+bi];
                 // da = b*a^(b-1)
