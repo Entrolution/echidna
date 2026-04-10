@@ -224,14 +224,14 @@ pub fn eval_forward<T: Float>(op: OpCode, a: T, b: T) -> T {
         OpCode::Atan2 => a.atan2(b),
         OpCode::Hypot => a.hypot(b),
         OpCode::Max => {
-            if a >= b {
+            if a >= b || b.is_nan() {
                 a
             } else {
                 b
             }
         }
         OpCode::Min => {
-            if a <= b {
+            if a <= b || b.is_nan() {
                 a
             } else {
                 b
@@ -244,7 +244,7 @@ pub fn eval_forward<T: Float>(op: OpCode, a: T, b: T) -> T {
         OpCode::Sqrt => a.sqrt(),
         OpCode::Cbrt => a.cbrt(),
         OpCode::Powi => {
-            let exp = powi_exp_decode(b);
+            let exp = powi_exp_decode_raw(b.to_u32().unwrap_or(0));
             a.powi(exp)
         }
 
@@ -315,14 +315,28 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         OpCode::Powf => {
             // d/da a^b = b * a^(b-1)
             // d/db a^b = a^b * ln(a)  (→ 0 when a^b = 0, since lim_{a→0+} a^b*ln(a) = 0 for b>0)
-            let da = b * a.powf(b - one);
-            let db = if r == zero { zero } else { r * a.ln() };
-            (da, db)
+            if b == zero {
+                // d/da(a^0) = 0, d/db(a^b)|_{b=0} = a^0 * ln(a) = ln(a) for a > 0
+                let db = if a > zero { a.ln() } else { zero };
+                (zero, db)
+            } else {
+                let da = if a == zero {
+                    b * a.powf(b - one)
+                } else {
+                    b * r / a
+                };
+                let db = if r == zero { zero } else { r * a.ln() };
+                (da, db)
+            }
         }
         OpCode::Atan2 => {
             // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
             let denom = a * a + b * b;
-            (b / denom, -a / denom)
+            if denom == zero {
+                (zero, zero)
+            } else {
+                (b / denom, -a / denom)
+            }
         }
         OpCode::Hypot => {
             // hypot(a,b) = sqrt(a²+b²), d/da = a/r, d/db = b/r
@@ -333,14 +347,14 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             }
         }
         OpCode::Max => {
-            if a >= b {
+            if a >= b || b.is_nan() {
                 (one, zero)
             } else {
                 (zero, one)
             }
         }
         OpCode::Min => {
-            if a <= b {
+            if a <= b || b.is_nan() {
                 (one, zero)
             } else {
                 (zero, one)
@@ -363,7 +377,7 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             (one / (three * r * r), zero)
         }
         OpCode::Powi => {
-            let exp = powi_exp_decode(b);
+            let exp = powi_exp_decode_raw(b.to_u32().unwrap_or(0));
             if exp == 0 {
                 (zero, zero) // d/dx(x^0) = 0
             } else if exp == i32::MIN {
@@ -416,17 +430,6 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
 
         OpCode::Custom => unreachable!("Custom ops are dispatched separately in the tape"),
     }
-}
-
-/// Decode a `powi` exponent from `arg_indices[1]` (stored as `u32` bits → `i32`).
-///
-/// During recording, the exponent `n: i32` is stored as `n as u32`.
-/// We recover it here via the reverse cast.
-#[inline]
-fn powi_exp_decode<T: Float>(b: T) -> i32 {
-    // b holds the bits of the u32 reinterpreted from i32.
-    // We round-trip through u32 to recover it.
-    b.to_u32().unwrap_or(0) as i32
 }
 
 /// Decode a `powi` exponent directly from the raw `u32` in `arg_indices[1]`.
