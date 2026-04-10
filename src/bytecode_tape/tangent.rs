@@ -12,6 +12,17 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Generic over `T: NumFloat` so it works with both `Dual<F>` and
     /// `DualVec<F, N>`.
+    ///
+    /// # Custom-op accuracy
+    ///
+    /// Custom operations use recording-time primals (`self.values`) for their
+    /// first-order linearization. If the tape has been re-evaluated at different
+    /// inputs via [`forward()`](Self::forward) but `self.values` was not updated
+    /// to match the tangent inputs, the custom-op linearization point will be
+    /// stale, producing O(||x - x_record||) errors in the tangent output.
+    /// For exact derivatives through custom ops, use the `Dual<F>` specialization
+    /// [`forward_tangent_dual`](Self::forward_tangent_dual) which calls
+    /// [`CustomOp::eval_dual`].
     pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
             // First-order chain rule: evaluate on primals, convert partials to T.
@@ -99,6 +110,9 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Reverse sweep with tangent-carrying adjoints. Uses values from
     /// [`forward_tangent`](Self::forward_tangent). Uses [`IsAllZero`] to
     /// safely skip zero adjoints without dropping tangent contributions.
+    ///
+    /// See [`forward_tangent`](Self::forward_tangent) for custom-op accuracy
+    /// caveats — the same recording-time primal limitation applies here.
     pub(super) fn reverse_tangent<T: NumFloat + IsAllZero>(
         &self,
         tangent_vals: &[T],

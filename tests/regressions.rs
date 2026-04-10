@@ -624,4 +624,73 @@ mod phase5 {
         let grad = tape.gradient(&[0.0, 2.0]);
         assert_eq!(grad[0], 0.0, "d/dx(x^2) at x=0 via breverse should be 0");
     }
+
+    // ── B5: Checkpoint thinning produces uniform spacing ──
+
+    #[test]
+    fn checkpoint_thinning_online() {
+        // Exercise the actual online checkpointing path with enough steps to
+        // trigger multiple thinning rounds (num_steps=50, 3 checkpoint slots).
+        // Compare against non-checkpointed gradient.
+        let x0 = [0.5_f64, 1.0];
+        let num_steps = 50;
+
+        let step = |x: &[BReverse<f64>]| {
+            let half = BReverse::constant(0.5_f64);
+            vec![x[0] * half + x[1].sin() * half, x[0].cos() * half + x[1] * half]
+        };
+        let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+        let g_online = echidna::grad_checkpointed_online(
+            step,
+            |_, step_idx| step_idx >= num_steps,
+            loss,
+            &x0,
+            3, // small budget forces many thinning rounds
+        );
+        let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+        for i in 0..2 {
+            assert!(
+                (g_online[i] - g_ref[i]).abs() < 1e-10,
+                "B5 thinning regression at {}: online={}, ref={}",
+                i, g_online[i], g_ref[i]
+            );
+        }
+    }
+
+    // ── B15: Abs has zero Hessian in sparse pattern ──
+
+    #[test]
+    fn sparse_hessian_abs_no_diagonal() {
+        // f(x) = |x|, Hessian should be zero (or empty pattern)
+        let (tape, _) = record(|x: &[BReverse<f64>]| x[0].abs(), &[1.0]);
+        let (_value, _grad, pattern, hess_vals) = tape.sparse_hessian(&[1.0]);
+        // The pattern should have no entries (d²|x|/dx² = 0 a.e.)
+        assert!(
+            pattern.rows.is_empty(),
+            "sparse Hessian of |x| should have no structural entries, got {} entries",
+            pattern.rows.len()
+        );
+        assert!(hess_vals.is_empty(), "Hessian values should be empty");
+    }
+
+    #[test]
+    fn sparse_hessian_abs_composition() {
+        // f(x) = x * |x| has f''(x) = 2*signum(x) ≠ 0, so the Hessian pattern
+        // must still include the (0,0) entry even with Abs as ZeroDerivative.
+        // The Mul node's BinaryNonlinear classification captures this.
+        let (tape, _) = record(|x: &[BReverse<f64>]| x[0] * x[0].abs(), &[1.0]);
+        let (_value, _grad, pattern, hess_vals) = tape.sparse_hessian(&[1.0]);
+        assert!(
+            !pattern.rows.is_empty(),
+            "sparse Hessian of x*|x| should have structural entries"
+        );
+        // f''(1) = 2*signum(1) = 2
+        assert!(
+            (hess_vals[0] - 2.0).abs() < 1e-10,
+            "d²(x*|x|)/dx² at x=1 should be 2, got {}",
+            hess_vals[0]
+        );
+    }
 }
