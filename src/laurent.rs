@@ -447,22 +447,35 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         }
         let mut c = [F::zero(); K];
         taylor_ops::taylor_ln(&self.coeffs, &mut c);
-        Laurent {
-            coeffs: c,
-            pole_order: 0,
-        }
+        Laurent::new(c, 0)
     }
 
     /// Base-2 logarithm.
     #[inline]
     pub fn log2(self) -> Self {
-        self.apply_regular(|a, c| taylor_ops::taylor_log2(a, c))
+        if self.pole_order != 0 {
+            return Self::nan_laurent();
+        }
+        if self.coeffs[0] <= F::zero() {
+            return Self::nan_laurent();
+        }
+        let mut c = [F::zero(); K];
+        taylor_ops::taylor_log2(&self.coeffs, &mut c);
+        Laurent::new(c, 0)
     }
 
     /// Base-10 logarithm.
     #[inline]
     pub fn log10(self) -> Self {
-        self.apply_regular(|a, c| taylor_ops::taylor_log10(a, c))
+        if self.pole_order != 0 {
+            return Self::nan_laurent();
+        }
+        if self.coeffs[0] <= F::zero() {
+            return Self::nan_laurent();
+        }
+        let mut c = [F::zero(); K];
+        taylor_ops::taylor_log10(&self.coeffs, &mut c);
+        Laurent::new(c, 0)
     }
 
     /// ln(1+x), accurate near zero.
@@ -583,10 +596,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
             &mut s2,
             &mut s3,
         );
-        Laurent {
-            coeffs: c,
-            pole_order: 0,
-        }
+        Laurent::new(c, 0)
     }
 
     /// Hyperbolic sine.
@@ -701,10 +711,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         }
         let mut coeffs = self.coeffs;
         coeffs[0] = self.coeffs[0].fract();
-        Laurent {
-            coeffs,
-            pole_order: 0,
-        }
+        Laurent::new(coeffs, 0)
     }
 
     /// Fused multiply-add: self * a + b.
@@ -768,10 +775,7 @@ mod laurent_serde {
             let coeffs: [F; K] = data.coeffs.try_into().map_err(|v: Vec<F>| {
                 serde::de::Error::invalid_length(v.len(), &&*format!("array of length {K}"))
             })?;
-            Ok(Laurent {
-                coeffs,
-                pole_order: data.pole_order,
-            })
+            Ok(Laurent::new(coeffs, data.pole_order))
         }
     }
 }

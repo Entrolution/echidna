@@ -643,15 +643,26 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn powi(self, n: i32) -> Self {
+        if n == 0 {
+            return rev_unary(self, F::one(), F::zero());
+        }
         let val = self.value.powi(n);
-        let deriv = F::from(n).unwrap() * self.value.powf(F::from(n as i64 - 1).unwrap());
+        let deriv = if n == i32::MIN {
+            F::from(n).unwrap() * self.value.powf(F::from(n as i64 - 1).unwrap())
+        } else {
+            F::from(n).unwrap() * self.value.powi(n - 1)
+        };
         rev_unary(self, val, deriv)
     }
 
     fn powf(self, n: Self) -> Self {
         let val = self.value.powf(n.value);
         let dx = n.value * self.value.powf(n.value - F::one());
-        let dy = val * self.value.ln();
+        let dy = if val == F::zero() {
+            F::zero() // lim_{x→0+} x^y * ln(x) = 0 for y > 0
+        } else {
+            val * self.value.ln()
+        };
         rev_binary(self, n, val, dx, dy)
     }
 
@@ -718,6 +729,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(self, self.value.tan(), F::one() / (c * c))
     }
 
+    // NOTE (verified correct): Two `rev_unary` calls for sin/cos are correct.
+    // Each output gets its own tape index; adjoints accumulate independently
+    // through both entries back to `self.index`.
     fn sin_cos(self) -> (Self, Self) {
         let (s, c) = self.value.sin_cos();
         (rev_unary(self, s, c), rev_unary(self, c, -s))
@@ -802,8 +816,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn max(self, other: Self) -> Self {
-        if self.value >= other.value {
-            // Propagate self's derivative.
+        if self.value >= other.value || other.value.is_nan() {
             rev_unary(self, self.value, F::one())
         } else {
             rev_unary(other, other.value, F::one())
@@ -811,7 +824,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn min(self, other: Self) -> Self {
-        if self.value <= other.value {
+        if self.value <= other.value || other.value.is_nan() {
             rev_unary(self, self.value, F::one())
         } else {
             rev_unary(other, other.value, F::one())

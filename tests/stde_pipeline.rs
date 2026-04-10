@@ -123,6 +123,50 @@ fn estimate_weighted_nonuniform() {
     assert_eq!(result.num_samples, 2);
 }
 
+/// Regression: estimate_weighted SE must use effective sample size (n_eff),
+/// not raw sample count. With non-uniform weights AND non-zero variance,
+/// the old code (SE = sqrt(var/n)) gave a different answer than the correct
+/// formula (SE = sqrt(var * w_sum2 / w_sum^2)).
+#[test]
+fn estimate_weighted_se_uses_effective_n() {
+    // f(x,y) = x^2 + 3*y^2 has H = [[2,0],[0,6]].
+    // Direction [1,0]: v^T H v = 2, sample = 2*c2 = 2
+    // Direction [0,1]: v^T H v = 6, sample = 2*c2 = 6
+    // Non-uniform weights [3.0, 1.0] → n_eff = (3+1)^2 / (9+1) = 1.6
+    // Whereas raw n = 2.
+    let tape = record_fn(
+        |x: &[BReverse<f64>]| x[0] * x[0] + (x[1] * x[1]) * BReverse::constant(3.0),
+        &[1.0, 2.0],
+    );
+    let v0: Vec<f64> = vec![1.0, 0.0];
+    let v1: Vec<f64> = vec![0.0, 1.0];
+    let dirs: Vec<&[f64]> = vec![&v0, &v1];
+    let weights = vec![3.0, 1.0];
+
+    let result = echidna::stde::estimate_weighted(
+        &echidna::stde::Laplacian,
+        &tape,
+        &[1.0, 2.0],
+        &dirs,
+        &weights,
+    );
+
+    // Samples: 2 and 6, weights: 3 and 1
+    // Weighted mean = (3*2 + 1*6) / (3+1) = 12/4 = 3.0
+    assert_relative_eq!(result.estimate, 3.0, epsilon = 1e-10);
+    // n_eff = (3+1)^2 / (3^2 + 1^2) = 16/10 = 1.6
+    // The SE with n_eff should be sqrt(var / 1.6), NOT sqrt(var / 2)
+    let n_eff = 16.0_f64 / 10.0;
+    let se_with_n_eff = (result.sample_variance / n_eff).sqrt();
+    assert_relative_eq!(result.standard_error, se_with_n_eff, epsilon = 1e-10);
+    // And it should NOT equal the old wrong formula
+    let se_wrong = (result.sample_variance / 2.0).sqrt();
+    assert!(
+        (result.standard_error - se_wrong).abs() > 1e-6,
+        "SE should differ from wrong formula using raw n"
+    );
+}
+
 // ══════════════════════════════════════════════
 //  14. Hutch++ trace estimator
 // ══════════════════════════════════════════════

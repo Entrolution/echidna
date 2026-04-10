@@ -109,8 +109,15 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Integer power.
     #[inline]
     pub fn powi(self, n: i32) -> Self {
+        if n == 0 {
+            return DualVec { re: F::one(), eps: [F::zero(); N] };
+        }
         let val = self.re.powi(n);
-        let deriv = F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap());
+        let deriv = if n == i32::MIN {
+            F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap())
+        } else {
+            F::from(n).unwrap() * self.re.powi(n - 1)
+        };
         self.chain(val, deriv)
     }
 
@@ -118,10 +125,20 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn powf(self, n: Self) -> Self {
         let val = self.re.powf(n.re);
+        let dx_factor = if self.re == F::zero() {
+            n.re * self.re.powf(n.re - F::one())
+        } else {
+            n.re * val / self.re
+        };
+        let dy_factor = if val == F::zero() {
+            F::zero()
+        } else {
+            val * self.re.ln()
+        };
         DualVec {
             re: val,
             eps: std::array::from_fn(|k| {
-                val * (n.re * self.eps[k] / self.re + n.eps[k] * self.re.ln())
+                dx_factor * self.eps[k] + dy_factor * n.eps[k]
             }),
         }
     }
@@ -382,7 +399,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Maximum of two values.
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.re >= other.re {
+        if self.re >= other.re || other.re.is_nan() {
             self
         } else {
             other
@@ -392,7 +409,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Minimum of two values.
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.re <= other.re {
+        if self.re <= other.re || other.re.is_nan() {
             self
         } else {
             other

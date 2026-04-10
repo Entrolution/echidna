@@ -314,6 +314,9 @@ pub fn laplacian_hutchpp<F: Float>(
         );
 
         // g' = g - Q(Q^T g)
+        // NOTE (verified correct): Dot products use original `g` (not progressively
+        // projected vector). This is mathematically equivalent because Q is orthonormal:
+        // (I - q₂q₂ᵀ)(I - q₁q₁ᵀ)g = g - q₁(q₁ᵀg) - q₂(q₂ᵀg) when q₁ᵀq₂ = 0.
         projected.copy_from_slice(g);
         for qi in q.iter().take(rank) {
             let dot: F = qi

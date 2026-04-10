@@ -175,8 +175,15 @@ impl<F: Float> super::BytecodeTape<F> {
                     let a = tangent_vals[a_idx as usize];
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
-                        let n = T::from(exp).unwrap();
-                        let da = n * a.powi(exp - 1);
+                        let da = if exp == 0 {
+                            T::zero()
+                        } else if exp == i32::MIN {
+                            let n = T::from(exp).unwrap();
+                            n * a.powf(T::from(exp as i64 - 1).unwrap())
+                        } else {
+                            let n = T::from(exp).unwrap();
+                            n * a.powi(exp - 1)
+                        };
                         buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
                         continue;
                     }
@@ -295,6 +302,11 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Processes `ceil(n/N)` batches instead of `n` individual HVPs,
     /// computing N Hessian columns simultaneously.
+    ///
+    /// **Custom ops limitation:** For tapes containing custom ops, this method
+    /// uses first-order chain rule (linearized partials). For exact second-order
+    /// derivatives through custom ops, use `hessian` instead, which calls
+    /// `CustomOp::eval_dual` / `CustomOp::partials_dual`.
     pub fn hessian_vec<const N: usize>(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");

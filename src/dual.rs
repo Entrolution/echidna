@@ -88,8 +88,16 @@ impl<F: Float> Dual<F> {
     /// Integer power.
     #[inline]
     pub fn powi(self, n: i32) -> Self {
+        if n == 0 {
+            return Dual { re: F::one(), eps: F::zero() };
+        }
         let val = self.re.powi(n);
-        let deriv = F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap());
+        let deriv = if n == i32::MIN {
+            // n - 1 would overflow i32; fall back to powf
+            F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap())
+        } else {
+            F::from(n).unwrap() * self.re.powi(n - 1)
+        };
         self.chain(val, deriv)
     }
 
@@ -98,10 +106,19 @@ impl<F: Float> Dual<F> {
     pub fn powf(self, n: Self) -> Self {
         // d/dx (x^y) = y * x^(y-1) * dx + x^y * ln(x) * dy
         let val = self.re.powf(n.re);
-        Dual {
-            re: val,
-            eps: val * (n.re * self.eps / self.re + n.eps * self.re.ln()),
-        }
+        let dx = if self.re == F::zero() {
+            // Avoid 0/0: use n*x^(n-1) form which IEEE handles correctly
+            n.re * self.re.powf(n.re - F::one()) * self.eps
+        } else {
+            n.re * val / self.re * self.eps
+        };
+        let dy = if val == F::zero() {
+            // lim_{x→0+} x^y * ln(x) = 0 for y > 0
+            F::zero()
+        } else {
+            val * self.re.ln() * n.eps
+        };
+        Dual { re: val, eps: dx + dy }
     }
 
     // ── Exp/Log ──
@@ -276,6 +293,10 @@ impl<F: Float> Dual<F> {
     // ── Misc ──
 
     /// Absolute value.
+    ///
+    /// Derivative uses `signum(x)`: returns 1 at x=+0 and -1 at x=-0
+    /// (matching Rust's `f64::signum`). Both are valid subgradients of |x| at 0.
+    /// Consistent across all AD modes and GPU backends.
     #[inline]
     pub fn abs(self) -> Self {
         self.chain(self.re.abs(), self.re.signum())
@@ -360,9 +381,12 @@ impl<F: Float> Dual<F> {
     }
 
     /// Maximum of two values.
+    ///
+    /// Matches `num_traits::Float::max` semantics: returns the non-NaN argument.
+    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.re >= other.re {
+        if self.re >= other.re || other.re.is_nan() {
             self
         } else {
             other
@@ -370,9 +394,12 @@ impl<F: Float> Dual<F> {
     }
 
     /// Minimum of two values.
+    ///
+    /// Matches `num_traits::Float::min` semantics: returns the non-NaN argument.
+    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.re <= other.re {
+        if self.re <= other.re || other.re.is_nan() {
             self
         } else {
             other

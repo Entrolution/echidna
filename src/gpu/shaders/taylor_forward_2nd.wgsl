@@ -86,7 +86,7 @@ struct TapeMeta {
 // ── Helpers for missing WGSL builtins ──
 fn sinh_f(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
 fn cosh_f(x: f32) -> f32 { return (exp(x) + exp(-x)) * 0.5; }
-fn asinh_f(x: f32) -> f32 { return log(x + sqrt(x * x + 1.0)); }
+fn asinh_f(x: f32) -> f32 { let a=abs(x); return select(-log(a+sqrt(a*a+1.0)), log(a+sqrt(a*a+1.0)), x>=0.0); }
 fn acosh_f(x: f32) -> f32 { return log(x + sqrt(x * x - 1.0)); }
 fn atanh_f(x: f32) -> f32 { return 0.5 * log((1.0 + x) / (1.0 - x)); }
 

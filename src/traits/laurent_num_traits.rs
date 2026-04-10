@@ -347,32 +347,14 @@ impl<F: Float, const K: usize> NumFloat for Laurent<F, K> {
     }
 
     fn to_degrees(self) -> Self {
+        // Linear operation: scalar multiplication preserves full series structure
         let factor = F::from(180.0).unwrap() / F::PI();
-        if self.pole_order() != 0 {
-            return Self::constant(self.value().to_degrees());
-        }
-        let coeffs = std::array::from_fn(|k| {
-            if k == 0 {
-                self.coeff(0).to_degrees()
-            } else {
-                self.coeff(k as i32) * factor
-            }
-        });
-        Laurent::new(coeffs, 0)
+        self * Laurent::constant(factor)
     }
 
     fn to_radians(self) -> Self {
+        // Linear operation: scalar multiplication preserves full series structure
         let factor = F::PI() / F::from(180.0).unwrap();
-        if self.pole_order() != 0 {
-            return Self::constant(self.value().to_radians());
-        }
-        let coeffs = std::array::from_fn(|k| {
-            if k == 0 {
-                self.coeff(0).to_radians()
-            } else {
-                self.coeff(k as i32) * factor
-            }
-        });
-        Laurent::new(coeffs, 0)
+        self * Laurent::constant(factor)
     }
 }

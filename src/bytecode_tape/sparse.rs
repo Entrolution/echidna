@@ -12,6 +12,7 @@ impl<F: Float> super::BytecodeTape<F> {
         crate::sparse::detect_sparsity_impl(
             &self.opcodes,
             &self.arg_indices,
+            &self.custom_second_args,
             self.num_inputs as usize,
             self.num_variables as usize,
         )
@@ -27,6 +28,7 @@ impl<F: Float> super::BytecodeTape<F> {
         crate::sparse::detect_jacobian_sparsity_impl(
             &self.opcodes,
             &self.arg_indices,
+            &self.custom_second_args,
             self.num_inputs as usize,
             self.num_variables as usize,
             out_indices,
@@ -56,6 +58,11 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Reduces the number of forward+reverse sweeps from `num_colors` to
     /// `ceil(num_colors / N)`. Each sweep processes N colors simultaneously.
+    ///
+    /// **Custom ops limitation:** For tapes containing custom ops, this method
+    /// uses first-order chain rule (linearized partials). For exact second-order
+    /// derivatives through custom ops, use `sparse_hessian` instead, which calls
+    /// `CustomOp::eval_dual` / `CustomOp::partials_dual`.
     ///
     /// Returns `(value, gradient, pattern, hessian_values)`.
     pub fn sparse_hessian_vec<const N: usize>(

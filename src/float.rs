@@ -23,7 +23,7 @@ use crate::bytecode_tape::BtapeThreadLocal;
 /// Implemented by primitive types (`f32`, `f64`) and by `Dual<F>`, which enables
 /// nested forward-mode: `Dual<Dual<f64>>` for second-order derivatives.
 pub trait Float:
-    NumFloat + FloatConst + FromPrimitive + Copy + Send + Sync + Default + Debug + Display + 'static
+    NumFloat + FloatConst + FromPrimitive + Copy + Send + Sync + Default + Debug + Display + IsAllZero + 'static
 {
 }
 
@@ -52,7 +52,8 @@ impl<F: Float, const K: usize> Float for crate::laurent::Laurent<F, K> {}
 /// compares `.re`, so a value with `re==0` but `eps!=0` would be
 /// incorrectly pruned without this trait.
 #[cfg_attr(not(feature = "bytecode"), allow(dead_code))]
-pub(crate) trait IsAllZero {
+#[doc(hidden)]
+pub trait IsAllZero {
     fn is_all_zero(&self) -> bool;
 }
 
@@ -70,17 +71,19 @@ impl IsAllZero for f64 {
     }
 }
 
-impl<F: Float> IsAllZero for Dual<F> {
+impl<F: Float + IsAllZero> IsAllZero for Dual<F> {
     #[inline(always)]
     fn is_all_zero(&self) -> bool {
-        self.re == F::zero() && self.eps == F::zero()
+        // Use is_all_zero() recursively instead of == to correctly handle
+        // nested types like Dual<Dual<f64>> where PartialEq ignores eps.
+        self.re.is_all_zero() && self.eps.is_all_zero()
     }
 }
 
-impl<F: Float, const N: usize> IsAllZero for DualVec<F, N> {
+impl<F: Float + IsAllZero, const N: usize> IsAllZero for DualVec<F, N> {
     #[inline(always)]
     fn is_all_zero(&self) -> bool {
-        self.re == F::zero() && self.eps.iter().all(|&e| e == F::zero())
+        self.re.is_all_zero() && self.eps.iter().all(|e| e.is_all_zero())
     }
 }
 

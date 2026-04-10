@@ -314,9 +314,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         OpCode::Rem => (one, -(a / b).trunc()),
         OpCode::Powf => {
             // d/da a^b = b * a^(b-1)
-            // d/db a^b = a^b * ln(a)
+            // d/db a^b = a^b * ln(a)  (→ 0 when a^b = 0, since lim_{a→0+} a^b*ln(a) = 0 for b>0)
             let da = b * a.powf(b - one);
-            let db = r * a.ln();
+            let db = if r == zero { zero } else { r * a.ln() };
             (da, db)
         }
         OpCode::Atan2 => {
@@ -326,7 +326,11 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Hypot => {
             // hypot(a,b) = sqrt(a²+b²), d/da = a/r, d/db = b/r
-            (a / r, b / r)
+            if r == zero {
+                (zero, zero)
+            } else {
+                (a / r, b / r)
+            }
         }
         OpCode::Max => {
             if a >= b {
@@ -360,8 +364,16 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Powi => {
             let exp = powi_exp_decode(b);
-            let n = T::from(exp).unwrap();
-            (n * a.powi(exp - 1), zero)
+            if exp == 0 {
+                (zero, zero) // d/dx(x^0) = 0
+            } else if exp == i32::MIN {
+                // exp - 1 would overflow i32; use powf fallback
+                let n = T::from(exp).unwrap();
+                (n * a.powf(T::from(exp as i64 - 1).unwrap()), zero)
+            } else {
+                let n = T::from(exp).unwrap();
+                (n * a.powi(exp - 1), zero)
+            }
         }
 
         // Exp/Log

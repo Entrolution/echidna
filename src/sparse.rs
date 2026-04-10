@@ -3,6 +3,8 @@
 //! Provides sparsity detection for both Jacobians ([`JacobianSparsityPattern`]) and
 //! Hessians ([`SparsityPattern`]), plus graph coloring algorithms for compressed evaluation.
 
+use std::collections::HashMap;
+
 use crate::opcode::{OpCode, UNUSED};
 
 /// Symmetric sparsity pattern in COO format (lower triangle + diagonal).
@@ -50,6 +52,7 @@ impl SparsityPattern {
 pub(crate) fn detect_sparsity_impl(
     opcodes: &[OpCode],
     arg_indices: &[[u32; 2]],
+    custom_second_args: &HashMap<u32, u32>,
     num_inputs: usize,
     num_vars: usize,
 ) -> SparsityPattern {
@@ -105,43 +108,61 @@ pub(crate) fn detect_sparsity_impl(
                         }
                     }
                     OpClass::BinaryNonlinear => {
-                        let b = b_idx as usize;
-                        // Extract bits before mutation — a and b differ from i,
-                        // so we can read deps[a] and deps[b] directly.
-                        let bits_a = extract_bits(&deps[a], num_inputs);
-                        let bits_b = extract_bits(&deps[b], num_inputs);
-                        // Union dependencies
-                        union_into(&mut deps, i, a);
-                        union_into(&mut deps, i, b);
-                        // Mark cross-pairs between operand dependency sets
-                        for &va in &bits_a {
-                            for &vb in &bits_b {
-                                let (r, c) = if va >= vb { (va, vb) } else { (vb, va) };
-                                interactions.push((r, c));
-                            }
-                        }
-                        // For non-Mul binary ops (Div, Powf, Atan2, Hypot, Custom),
-                        // within-operand second derivatives are nonzero.
-                        // E.g. d^2(a/b)/db^2 = 2a/b^3, so variables flowing into
-                        // the same operand interact.
-                        // Mul is excluded: d^2(a*b)/da^2 = 0 (bilinear).
-                        if op != OpCode::Mul {
-                            for ii in 0..bits_a.len() {
-                                for jj in 0..=ii {
-                                    let (r, c) = if bits_a[ii] >= bits_a[jj] {
-                                        (bits_a[ii], bits_a[jj])
-                                    } else {
-                                        (bits_a[jj], bits_a[ii])
-                                    };
+                        // For Custom ops, arg_indices[i][1] is the callback index,
+                        // NOT a tape index. The real second operand (if any) is in
+                        // custom_second_args. Unary custom ops have no second operand.
+                        let real_b = if op == OpCode::Custom {
+                            custom_second_args.get(&(i as u32)).map(|&v| v as usize)
+                        } else {
+                            Some(b_idx as usize)
+                        };
+
+                        if let Some(b) = real_b {
+                            // Binary: full cross-pair + within-operand analysis
+                            let bits_a = extract_bits(&deps[a], num_inputs);
+                            let bits_b = extract_bits(&deps[b], num_inputs);
+                            union_into(&mut deps, i, a);
+                            union_into(&mut deps, i, b);
+                            // Cross-pairs between operand dependency sets
+                            for &va in &bits_a {
+                                for &vb in &bits_b {
+                                    let (r, c) = if va >= vb { (va, vb) } else { (vb, va) };
                                     interactions.push((r, c));
                                 }
                             }
-                            for ii in 0..bits_b.len() {
+                            // Within-operand second derivatives (non-Mul ops)
+                            if op != OpCode::Mul {
+                                for ii in 0..bits_a.len() {
+                                    for jj in 0..=ii {
+                                        let (r, c) = if bits_a[ii] >= bits_a[jj] {
+                                            (bits_a[ii], bits_a[jj])
+                                        } else {
+                                            (bits_a[jj], bits_a[ii])
+                                        };
+                                        interactions.push((r, c));
+                                    }
+                                }
+                                for ii in 0..bits_b.len() {
+                                    for jj in 0..=ii {
+                                        let (r, c) = if bits_b[ii] >= bits_b[jj] {
+                                            (bits_b[ii], bits_b[jj])
+                                        } else {
+                                            (bits_b[jj], bits_b[ii])
+                                        };
+                                        interactions.push((r, c));
+                                    }
+                                }
+                            }
+                        } else {
+                            // Unary custom op: treat as UnaryNonlinear
+                            union_into(&mut deps, i, a);
+                            let bits = extract_bits(&deps[i], num_inputs);
+                            for ii in 0..bits.len() {
                                 for jj in 0..=ii {
-                                    let (r, c) = if bits_b[ii] >= bits_b[jj] {
-                                        (bits_b[ii], bits_b[jj])
+                                    let (r, c) = if bits[ii] >= bits[jj] {
+                                        (bits[ii], bits[jj])
                                     } else {
-                                        (bits_b[jj], bits_b[ii])
+                                        (bits[jj], bits[ii])
                                     };
                                     interactions.push((r, c));
                                 }
@@ -529,6 +550,7 @@ impl JacobianSparsityPattern {
 pub(crate) fn detect_jacobian_sparsity_impl(
     opcodes: &[OpCode],
     arg_indices: &[[u32; 2]],
+    custom_second_args: &HashMap<u32, u32>,
     num_inputs: usize,
     num_vars: usize,
     output_indices: &[u32],
@@ -555,7 +577,13 @@ pub(crate) fn detect_jacobian_sparsity_impl(
                 let a = a_idx as usize;
                 // Union dependencies from all operands (first-order: all ops propagate)
                 union_into(&mut deps, i, a);
-                if is_binary_op(op) && b_idx != UNUSED {
+                // For Custom ops, the real second operand is in custom_second_args,
+                // not in arg_indices[i][1] (which is the callback index).
+                if op == OpCode::Custom {
+                    if let Some(&real_b) = custom_second_args.get(&(i as u32)) {
+                        union_into(&mut deps, i, real_b as usize);
+                    }
+                } else if is_binary_op(op) && b_idx != UNUSED {
                     union_into(&mut deps, i, b_idx as usize);
                 }
             }

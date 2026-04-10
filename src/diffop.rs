@@ -708,7 +708,12 @@ impl<F: Float> DiffOp<F> {
         DiffOp { terms, num_vars: n }
     }
 
-    /// Biharmonic: `Σ_j ∂⁴/∂x_j⁴`.
+    /// Sum of pure fourth partial derivatives: `Σ_j ∂⁴/∂x_j⁴`.
+    ///
+    /// Note: this is the diagonal 4th-order operator, equivalent to `diagonal(n, 4)`.
+    /// It is NOT the true biharmonic `Δ² = (Σ_j ∂²/∂x_j²)²`, which would also
+    /// include cross terms `2 Σ_{j<k} ∂⁴/(∂x_j² ∂x_k²)`. The cross terms
+    /// require mixed-partial jet evaluation which is not yet supported.
     #[must_use]
     pub fn biharmonic(n: usize) -> Self {
         let terms = (0..n)

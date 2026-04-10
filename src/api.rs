@@ -12,7 +12,7 @@ use crate::tape::{Tape, TapeGuard, TapeThreadLocal};
 #[cfg(feature = "bytecode")]
 use crate::breverse::BReverse;
 #[cfg(feature = "bytecode")]
-use crate::bytecode_tape::{BtapeGuard, BtapeThreadLocal, BytecodeTape};
+use crate::bytecode_tape::{BtapeGuard, BtapeThreadLocal, BytecodeTape, CONSTANT};
 
 /// Compute the gradient of a scalar function `f : R^n → R` using reverse mode.
 ///
@@ -202,7 +202,14 @@ pub fn record<F: Float + BtapeThreadLocal>(
     let _guard = BtapeGuard::new(&mut tape);
     let output = f(&inputs);
 
-    tape.set_output(output.index);
+    // Promote constant outputs (index == CONSTANT) to a tape entry so
+    // set_output has a valid index. The gradient will correctly be zero.
+    let output_index = if output.index == CONSTANT {
+        tape.push_const(output.value)
+    } else {
+        output.index
+    };
+    tape.set_output(output_index);
     let value = output.value;
     (tape, value)
 }
@@ -235,7 +242,17 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
     let outputs = f(&inputs);
 
     let values: Vec<F> = outputs.iter().map(|o| o.value).collect();
-    let indices: Vec<u32> = outputs.iter().map(|o| o.index).collect();
+    // Promote constant outputs to tape entries (see record() for rationale).
+    let indices: Vec<u32> = outputs
+        .iter()
+        .map(|o| {
+            if o.index == CONSTANT {
+                tape.push_const(o.value)
+            } else {
+                o.index
+            }
+        })
+        .collect();
 
     tape.set_outputs(&indices);
     // Also set single output_index for backward compat

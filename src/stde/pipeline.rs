@@ -94,8 +94,9 @@ pub fn estimate_weighted<F: Float>(
     let denom = w_sum - w_sum2 / w_sum;
     let (sample_variance, standard_error) = if n > 1 && denom > F::zero() {
         let var = m2 / denom;
-        let nf = F::from(n).unwrap();
-        (var, (var / nf).sqrt())
+        // Effective sample size for weighted estimates: n_eff = w_sum^2 / w_sum2
+        let n_eff = w_sum * w_sum / w_sum2;
+        (var, (var / n_eff).sqrt())
     } else {
         (F::zero(), F::zero())
     };

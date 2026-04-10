@@ -569,11 +569,11 @@ impl CudaContext {
         let output_indices = tape.all_output_indices().to_vec();
 
         Ok(CudaTapeBuffersF64 {
-            opcodes: s.clone_htod(&opcodes).unwrap(),
-            arg0: s.clone_htod(&arg0).unwrap(),
-            arg1: s.clone_htod(&arg1).unwrap(),
-            constants_f64: s.clone_htod(&constants).unwrap(),
-            output_indices: s.clone_htod(&output_indices).unwrap(),
+            opcodes: s.clone_htod(&opcodes).map_err(cuda_err)?,
+            arg0: s.clone_htod(&arg0).map_err(cuda_err)?,
+            arg1: s.clone_htod(&arg1).map_err(cuda_err)?,
+            constants_f64: s.clone_htod(&constants).map_err(cuda_err)?,
+            output_indices: s.clone_htod(&output_indices).map_err(cuda_err)?,
             // SAFETY(u32 cast): tape length cannot practically exceed u32::MAX (~4.3B opcodes
             // ≈ 17 GB of opcode storage alone).
             num_ops: tape.opcodes_slice().len() as u32,
