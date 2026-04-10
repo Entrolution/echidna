@@ -647,32 +647,57 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         writeln!(s, "            }}").unwrap();
     }
 
-    // REM
+    // REM: d(a%b)/da = 1 a.e.; b is constant in Taylor mode — pass through a's jet
     writeln!(s, "            case 6u: {{").unwrap();
     writeln!(s, "                let b_val = jets[j_base + b_idx * K];").unwrap();
+    writeln!(s, "                r = a;").unwrap();
     writeln!(
         s,
-        "                r = jet_const(a.v[0] - trunc(a.v[0] / b_val) * b_val);"
+        "                r.v[0] = a.v[0] - trunc(a.v[0] / b_val) * b_val;"
     )
     .unwrap();
     writeln!(s, "            }}").unwrap();
 
-    // POWF
+    // POWF — guard a<=0 (ln(a) is NaN/Inf)
     writeln!(s, "            case 7u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
-    writeln!(s, "                let lna = jet_ln(a);").unwrap();
-    writeln!(s, "                let product = jet_mul(b, lna);").unwrap();
-    writeln!(s, "                r = jet_exp(product);").unwrap();
-    writeln!(s, "                r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                if a.v[0] <= 0.0 {{").unwrap();
+    writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                    let da = b.v[0] * pow(a.v[0], b.v[0] - 1.0);").unwrap();
+    writeln!(s, "                    let db = select(val * log(abs(a.v[0])), 0.0, val == 0.0);").unwrap();
+    writeln!(s, "                    r.v[0] = val;").unwrap();
+    writeln!(s, "                    r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
+    for i in 2..k {
+        writeln!(s, "                    r.v[{i}] = 0.0;").unwrap();
+    }
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    let lna = jet_ln(a);").unwrap();
+    writeln!(s, "                    let product = jet_mul(b, lna);").unwrap();
+    writeln!(s, "                    r = jet_exp(product);").unwrap();
+    writeln!(s, "                    r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
-    // ATAN2
+    // ATAN2 — guard b==0 (division by zero in jet_div)
     writeln!(s, "            case 8u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
-    writeln!(s, "                let ratio = jet_div(a, b);").unwrap();
-    writeln!(s, "                let at = jet_atan(ratio);").unwrap();
-    writeln!(s, "                r = at;").unwrap();
-    writeln!(s, "                r.v[0] = atan2(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                if b.v[0] == 0.0 {{").unwrap();
+    writeln!(s, "                    r.v[0] = atan2(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                    if a.v[0] == 0.0 {{").unwrap();
+    for i in 1..k {
+        writeln!(s, "                        r.v[{i}] = 0.0;").unwrap();
+    }
+    writeln!(s, "                    }} else {{").unwrap();
+    writeln!(s, "                        let inv_a = 1.0 / a.v[0];").unwrap();
+    for i in 1..k {
+        writeln!(s, "                        r.v[{i}] = -b.v[{i}] * inv_a;").unwrap();
+    }
+    writeln!(s, "                    }}").unwrap();
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    let ratio = jet_div(a, b);").unwrap();
+    writeln!(s, "                    r = jet_atan(ratio);").unwrap();
+    writeln!(s, "                    r.v[0] = atan2(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
     // HYPOT
@@ -712,33 +737,55 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "            case 13u: {{ r = jet_recip(a); }}").unwrap();
     writeln!(s, "            case 14u: {{ r = jet_sqrt(a); }}").unwrap();
 
-    // CBRT
+    // CBRT — guard a.v[0]==0 (vertical tangent singularity)
     writeln!(s, "            case 15u: {{").unwrap();
-    writeln!(s, "                let sg = sign(a.v[0]);").unwrap();
+    writeln!(s, "                if a.v[0] == 0.0 {{").unwrap();
+    writeln!(s, "                    r.v[0] = 0.0;").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    r.v[{i}] = 1.0 / 0.0;").unwrap();
+    }
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);").unwrap();
     write!(
         s,
-        "                var abs_a: JetK;\n                abs_a.v[0] = abs(a.v[0]);\n"
+        "                    var abs_a: JetK;\n                    abs_a.v[0] = abs(a.v[0]);\n"
     )
     .unwrap();
     for i in 1..k {
-        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+        writeln!(s, "                    abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
     }
-    writeln!(s, "                let lna = jet_ln(abs_a);").unwrap();
-    writeln!(s, "                let third = jet_scale(lna, 1.0 / 3.0);").unwrap();
-    writeln!(s, "                let e = jet_exp(third);").unwrap();
-    writeln!(s, "                r.v[0] = sg * e.v[0];").unwrap();
+    writeln!(s, "                    let lna = jet_ln(abs_a);").unwrap();
+    writeln!(s, "                    let third = jet_scale(lna, 1.0 / 3.0);").unwrap();
+    writeln!(s, "                    let e = jet_exp(third);").unwrap();
+    writeln!(s, "                    r.v[0] = sg * e.v[0];").unwrap();
     for i in 1..k {
-        writeln!(s, "                r.v[{i}] = sg * e.v[{i}];").unwrap();
+        writeln!(s, "                    r.v[{i}] = sg * e.v[{i}];").unwrap();
     }
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
-    // POWI
+    // POWI — handle negative bases via sign(a)^n * exp(n * ln(|a|))
     writeln!(s, "            case 16u: {{").unwrap();
     writeln!(s, "                let n = f32(bitcast<i32>(b_idx));").unwrap();
+    writeln!(s, "                let ni = bitcast<i32>(b_idx);").unwrap();
     writeln!(s, "                if n == 0.0 {{").unwrap();
     writeln!(s, "                    r = jet_const(1.0);").unwrap();
     writeln!(s, "                }} else if n == 1.0 {{").unwrap();
     writeln!(s, "                    r = a;").unwrap();
+    writeln!(s, "                }} else if a.v[0] < 0.0 {{").unwrap();
+    writeln!(s, "                    let sf = select(1.0, -1.0, ni % 2 != 0);").unwrap();
+    writeln!(s, "                    let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);").unwrap();
+    write!(s, "                    var abs_a: JetK;\n                    abs_a.v[0] = abs(a.v[0]);\n").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+    }
+    writeln!(s, "                    let lna = jet_ln(abs_a);").unwrap();
+    writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
+    writeln!(s, "                    let e = jet_exp(nlna);").unwrap();
+    for i in 0..k {
+        writeln!(s, "                    r.v[{i}] = sf * e.v[{i}];").unwrap();
+    }
+    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
     writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
@@ -1373,17 +1420,18 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "        }}").unwrap();
     }
 
-    // REM
+    // REM: d(a%b)/da = 1 a.e.; b is constant in Taylor mode — pass through a's jet
     writeln!(s, "        case 6: {{").unwrap();
     writeln!(s, "            F b_val = jets[j_base + b_idx * K];").unwrap();
+    writeln!(s, "            r = a;").unwrap();
     writeln!(
         s,
-        "            r = jet_const(a.v[0] - trunc(a.v[0] / b_val) * b_val); break;"
+        "            r.v[0] = fmod(a.v[0], b_val); break;"
     )
     .unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // POWF
+    // POWF — guard a<=0 (ln(a) is NaN/Inf)
     writeln!(s, "        case 7: {{").unwrap();
     writeln!(
         s,
@@ -1393,13 +1441,27 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     for c in 0..k {
         writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
     }
-    writeln!(s, "            JetK lna = jet_ln(a);").unwrap();
-    writeln!(s, "            JetK product = jet_mul(b, lna);").unwrap();
-    writeln!(s, "            r = jet_exp(product);").unwrap();
-    writeln!(s, "            r.v[0] = pow(a.v[0], b.v[0]); break;").unwrap();
+    writeln!(s, "            if (a.v[0] <= F(0)) {{").unwrap();
+    writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                F da = b.v[0] * pow(a.v[0], b.v[0] - F(1));").unwrap();
+    writeln!(s, "                F db = (val == F(0)) ? F(0) : val * log(fabs(a.v[0]));").unwrap();
+    writeln!(s, "                r.v[0] = val;").unwrap();
+    if k > 1 {
+        writeln!(s, "                r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
+    }
+    for i in 2..k {
+        writeln!(s, "                r.v[{i}] = F(0);").unwrap();
+    }
+    writeln!(s, "            }} else {{").unwrap();
+    writeln!(s, "                JetK lna = jet_ln(a);").unwrap();
+    writeln!(s, "                JetK product = jet_mul(b, lna);").unwrap();
+    writeln!(s, "                r = jet_exp(product);").unwrap();
+    writeln!(s, "                r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // ATAN2
+    // ATAN2 — guard b==0 (division by zero in jet_div)
     writeln!(s, "        case 8: {{").unwrap();
     writeln!(
         s,
@@ -1409,9 +1471,23 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     for c in 0..k {
         writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
     }
-    writeln!(s, "            JetK ratio = jet_div(a, b);").unwrap();
-    writeln!(s, "            r = jet_atan(ratio);").unwrap();
-    writeln!(s, "            r.v[0] = atan2(a.v[0], b.v[0]); break;").unwrap();
+    writeln!(s, "            if (b.v[0] == F(0)) {{").unwrap();
+    writeln!(s, "                r.v[0] = atan2(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                if (a.v[0] == F(0)) {{").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    r.v[{i}] = F(0);").unwrap();
+    }
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    F inv_a = F(1) / a.v[0];").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    r.v[{i}] = -b.v[{i}] * inv_a;").unwrap();
+    }
+    writeln!(s, "                }}").unwrap();
+    writeln!(s, "            }} else {{").unwrap();
+    writeln!(s, "                r = jet_atan(jet_div(a, b));").unwrap();
+    writeln!(s, "                r.v[0] = atan2(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
     // HYPOT
@@ -1456,29 +1532,50 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 13: r = jet_recip(a); break;").unwrap();
     writeln!(s, "        case 14: r = jet_sqrt(a); break;").unwrap();
 
-    // CBRT
+    // CBRT — guard a.v[0]==0 (vertical tangent singularity)
     writeln!(s, "        case 15: {{").unwrap();
-    writeln!(s, "            F sg = _sign(a.v[0]);").unwrap();
-    writeln!(s, "            JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
+    writeln!(s, "            if (a.v[0] == F(0)) {{").unwrap();
+    writeln!(s, "                r.v[0] = F(0);").unwrap();
     for i in 1..k {
-        writeln!(s, "            abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+        writeln!(s, "                r.v[{i}] = F(1.0/0.0);").unwrap();
+    }
+    writeln!(s, "            }} else {{").unwrap();
+    writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
+    writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
     }
     writeln!(
         s,
-        "            JetK e = jet_exp(jet_scale(jet_ln(abs_a), (F)(1.0/3.0)));"
+        "                JetK e = jet_exp(jet_scale(jet_ln(abs_a), (F)(1.0/3.0)));"
     )
     .unwrap();
     for i in 0..k {
-        writeln!(s, "            r.v[{i}] = sg * e.v[{i}];").unwrap();
+        writeln!(s, "                r.v[{i}] = sg * e.v[{i}];").unwrap();
     }
+    writeln!(s, "            }}").unwrap();
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // POWI
+    // POWI — handle negative bases via sign(a)^n * exp(n * ln(|a|))
     writeln!(s, "        case 16: {{").unwrap();
-    writeln!(s, "            F n = (F)((int)b_idx);").unwrap();
-    writeln!(s, "            if (n == (F)0) {{ r = jet_const((F)1); }}").unwrap();
-    writeln!(s, "            else if (n == (F)1) {{ r = a; }}").unwrap();
+    writeln!(s, "            int ni = (int)b_idx;").unwrap();
+    writeln!(s, "            F n = (F)ni;").unwrap();
+    writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
+    writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
+    writeln!(s, "            else if (a.v[0] < F(0)) {{").unwrap();
+    writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
+    writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
+    writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+    }
+    writeln!(s, "                JetK e = jet_exp(jet_scale(jet_ln(abs_a), n));").unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = sf * e.v[{i}];").unwrap();
+    }
+    writeln!(s, "                r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "            }}").unwrap();
     writeln!(
         s,
         "            else {{ r = jet_exp(jet_scale(jet_ln(a), n)); r.v[0] = pow(a.v[0], n); }}"

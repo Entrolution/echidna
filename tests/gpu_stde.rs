@@ -2,8 +2,11 @@
 
 use echidna::{record, Scalar};
 
+use echidna::gpu::{GpuBackend, GpuTapeData};
 #[cfg(feature = "gpu-wgpu")]
-use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
+use echidna::gpu::WgpuContext;
+#[cfg(feature = "gpu-cuda")]
+use echidna::gpu::CudaContext;
 
 fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
@@ -28,6 +31,17 @@ fn gpu_context() -> Option<WgpuContext> {
         Some(ctx) => Some(ctx),
         None => {
             eprintln!("WARNING: No GPU adapter found — skipping GPU STDE test");
+            None
+        }
+    }
+}
+
+#[cfg(feature = "gpu-cuda")]
+fn cuda_context() -> Option<CudaContext> {
+    match CudaContext::new() {
+        Some(ctx) => Some(ctx),
+        None => {
+            eprintln!("WARNING: No CUDA device found — skipping GPU STDE test");
             None
         }
     }
@@ -163,250 +177,152 @@ fn gpu_taylor_2nd_batch_sizes() {
 //  Section 2: Per-opcode Taylor K=3 tests
 // ══════════════════════════════════════════════
 
-#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
-mod opcode_tests {
-    use super::*;
+#[cfg(feature = "stde")]
+fn check_1d(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+    label: &str,
+) {
+    let x = [x0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
 
-    /// Helper: record a 1-input function, push direction 1.0 on GPU and CPU, compare.
-    fn check_1d(
-        ctx: &WgpuContext,
-        f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
-        x0: f64,
-        label: &str,
-    ) {
-        let x = [x0];
-        let (tape, _) = record(f, &x);
-        let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
-        let tape_buf = ctx.upload_tape(&gpu_data);
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap();
 
-        let gpu_result = ctx
-            .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
-            .unwrap();
+    let (c0, c1, c2) = echidna::stde::taylor_jet_2nd(&tape, &x, &[1.0]);
 
-        let (c0, c1, c2) = echidna::stde::taylor_jet_2nd(&tape, &x, &[1.0]);
-
-        let tol: f64 = 1e-2;
-        assert!(
-            (gpu_result.values[0] as f64 - c0).abs() < tol.max(c0.abs() * 1e-4),
-            "{} c0: gpu={} cpu={}",
-            label,
-            gpu_result.values[0],
-            c0
-        );
-        assert!(
-            (gpu_result.c1s[0] as f64 - c1).abs() < tol.max(c1.abs() * 1e-4),
-            "{} c1: gpu={} cpu={}",
-            label,
-            gpu_result.c1s[0],
-            c1
-        );
-        assert!(
-            (gpu_result.c2s[0] as f64 - c2).abs() < tol.max(c2.abs() * 1e-3),
-            "{} c2: gpu={} cpu={}",
-            label,
-            gpu_result.c2s[0],
-            c2
-        );
-    }
-
-    fn f_exp<T: Scalar>(x: &[T]) -> T {
-        x[0].exp()
-    }
-    fn f_ln<T: Scalar>(x: &[T]) -> T {
-        x[0].ln()
-    }
-    fn f_exp2<T: Scalar>(x: &[T]) -> T {
-        x[0].exp2()
-    }
-    fn f_log2<T: Scalar>(x: &[T]) -> T {
-        x[0].log2()
-    }
-    fn f_log10<T: Scalar>(x: &[T]) -> T {
-        x[0].log10()
-    }
-    fn f_ln_1p<T: Scalar>(x: &[T]) -> T {
-        x[0].ln_1p()
-    }
-    fn f_exp_m1<T: Scalar>(x: &[T]) -> T {
-        x[0].exp_m1()
-    }
-    fn f_sqrt<T: Scalar>(x: &[T]) -> T {
-        x[0].sqrt()
-    }
-    fn f_cbrt<T: Scalar>(x: &[T]) -> T {
-        x[0].cbrt()
-    }
-    fn f_sin<T: Scalar>(x: &[T]) -> T {
-        x[0].sin()
-    }
-    fn f_cos<T: Scalar>(x: &[T]) -> T {
-        x[0].cos()
-    }
-    fn f_tan<T: Scalar>(x: &[T]) -> T {
-        x[0].tan()
-    }
-    fn f_sinh<T: Scalar>(x: &[T]) -> T {
-        x[0].sinh()
-    }
-    fn f_cosh<T: Scalar>(x: &[T]) -> T {
-        x[0].cosh()
-    }
-    fn f_tanh<T: Scalar>(x: &[T]) -> T {
-        x[0].tanh()
-    }
-    fn f_asin<T: Scalar>(x: &[T]) -> T {
-        x[0].asin()
-    }
-    fn f_acos<T: Scalar>(x: &[T]) -> T {
-        x[0].acos()
-    }
-    fn f_atan<T: Scalar>(x: &[T]) -> T {
-        x[0].atan()
-    }
-    fn f_asinh<T: Scalar>(x: &[T]) -> T {
-        x[0].asinh()
-    }
-    fn f_acosh<T: Scalar>(x: &[T]) -> T {
-        x[0].acosh()
-    }
-    fn f_atanh<T: Scalar>(x: &[T]) -> T {
-        x[0].atanh()
-    }
-    fn f_abs_fn<T: Scalar>(x: &[T]) -> T {
-        x[0].abs()
-    }
-    fn f_powi3<T: Scalar>(x: &[T]) -> T {
-        x[0].powi(3)
-    }
-    fn f_powf25<T: Scalar>(x: &[T]) -> T {
-        let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.5).unwrap());
-        x[0].powf(exp)
-    }
-    fn f_arith<T: Scalar>(x: &[T]) -> T {
-        let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
-        let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
-        (x[0] + one) * (two - x[0]) + x[0].recip()
-    }
-    fn f_div<T: Scalar>(x: &[T]) -> T {
-        let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
-        (x[0] * x[0] + one) / (x[0] + one)
-    }
-
-    #[test]
-    fn gpu_op_exp_ln() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_exp, 1.5, "exp");
-        check_1d(&ctx, f_ln, 2.0, "ln");
-        check_1d(&ctx, f_exp2, 1.0, "exp2");
-        check_1d(&ctx, f_log2, 3.0, "log2");
-        check_1d(&ctx, f_log10, 2.0, "log10");
-        check_1d(&ctx, f_ln_1p, 0.5, "ln_1p");
-        check_1d(&ctx, f_exp_m1, 0.3, "expm1");
-    }
-
-    #[test]
-    fn gpu_op_sqrt_cbrt() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_sqrt, 4.0, "sqrt");
-        check_1d(&ctx, f_cbrt, 8.0, "cbrt");
-    }
-
-    #[test]
-    fn gpu_op_sin_cos() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_sin, 1.0, "sin");
-        check_1d(&ctx, f_cos, 1.0, "cos");
-    }
-
-    #[test]
-    fn gpu_op_tan() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_tan, 0.5, "tan");
-    }
-
-    #[test]
-    fn gpu_op_hyperbolic() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_sinh, 1.0, "sinh");
-        check_1d(&ctx, f_cosh, 1.0, "cosh");
-        check_1d(&ctx, f_tanh, 0.5, "tanh");
-    }
-
-    #[test]
-    fn gpu_op_inverse_trig() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_asin, 0.5, "asin");
-        check_1d(&ctx, f_acos, 0.5, "acos");
-        check_1d(&ctx, f_atan, 1.0, "atan");
-    }
-
-    #[test]
-    fn gpu_op_inverse_hyp() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_asinh, 1.0, "asinh");
-        check_1d(&ctx, f_acosh, 2.0, "acosh");
-        check_1d(&ctx, f_atanh, 0.5, "atanh");
-    }
-
-    #[test]
-    fn gpu_op_pow() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_powf25, 2.0, "powf");
-        check_1d(&ctx, f_powi3, 2.0, "powi");
-    }
-
-    #[test]
-    fn gpu_op_arithmetic() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_arith, 1.5, "arith");
-    }
-
-    #[test]
-    fn gpu_op_div() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_div, 2.0, "div");
-    }
-
-    #[test]
-    fn gpu_op_nonsmooth() {
-        let ctx = match gpu_context() {
-            Some(c) => c,
-            None => return,
-        };
-        check_1d(&ctx, f_abs_fn, -2.0, "abs_neg");
-        check_1d(&ctx, f_abs_fn, 2.0, "abs_pos");
-    }
+    let tol: f64 = 1e-2;
+    assert!(
+        (gpu_result.values[0] as f64 - c0).abs() < tol.max(c0.abs() * 1e-4),
+        "{} c0: gpu={} cpu={}",
+        label,
+        gpu_result.values[0],
+        c0
+    );
+    assert!(
+        (gpu_result.c1s[0] as f64 - c1).abs() < tol.max(c1.abs() * 1e-4),
+        "{} c1: gpu={} cpu={}",
+        label,
+        gpu_result.c1s[0],
+        c1
+    );
+    assert!(
+        (gpu_result.c2s[0] as f64 - c2).abs() < tol.max(c2.abs() * 1e-3),
+        "{} c2: gpu={} cpu={}",
+        label,
+        gpu_result.c2s[0],
+        c2
+    );
 }
+
+fn f_exp<T: Scalar>(x: &[T]) -> T { x[0].exp() }
+fn f_ln<T: Scalar>(x: &[T]) -> T { x[0].ln() }
+fn f_exp2<T: Scalar>(x: &[T]) -> T { x[0].exp2() }
+fn f_log2<T: Scalar>(x: &[T]) -> T { x[0].log2() }
+fn f_log10<T: Scalar>(x: &[T]) -> T { x[0].log10() }
+fn f_ln_1p<T: Scalar>(x: &[T]) -> T { x[0].ln_1p() }
+fn f_exp_m1<T: Scalar>(x: &[T]) -> T { x[0].exp_m1() }
+fn f_sqrt<T: Scalar>(x: &[T]) -> T { x[0].sqrt() }
+fn f_cbrt<T: Scalar>(x: &[T]) -> T { x[0].cbrt() }
+fn f_sin<T: Scalar>(x: &[T]) -> T { x[0].sin() }
+fn f_cos<T: Scalar>(x: &[T]) -> T { x[0].cos() }
+fn f_tan<T: Scalar>(x: &[T]) -> T { x[0].tan() }
+fn f_sinh<T: Scalar>(x: &[T]) -> T { x[0].sinh() }
+fn f_cosh<T: Scalar>(x: &[T]) -> T { x[0].cosh() }
+fn f_tanh<T: Scalar>(x: &[T]) -> T { x[0].tanh() }
+fn f_asin<T: Scalar>(x: &[T]) -> T { x[0].asin() }
+fn f_acos<T: Scalar>(x: &[T]) -> T { x[0].acos() }
+fn f_atan<T: Scalar>(x: &[T]) -> T { x[0].atan() }
+fn f_asinh<T: Scalar>(x: &[T]) -> T { x[0].asinh() }
+fn f_acosh<T: Scalar>(x: &[T]) -> T { x[0].acosh() }
+fn f_atanh<T: Scalar>(x: &[T]) -> T { x[0].atanh() }
+fn f_abs_fn<T: Scalar>(x: &[T]) -> T { x[0].abs() }
+fn f_powi3<T: Scalar>(x: &[T]) -> T { x[0].powi(3) }
+fn f_powf25<T: Scalar>(x: &[T]) -> T {
+    let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.5).unwrap());
+    x[0].powf(exp)
+}
+fn f_arith<T: Scalar>(x: &[T]) -> T {
+    let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
+    let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
+    (x[0] + one) * (two - x[0]) + x[0].recip()
+}
+fn f_div<T: Scalar>(x: &[T]) -> T {
+    let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
+    (x[0] * x[0] + one) / (x[0] + one)
+}
+
+/// Generate per-opcode Taylor tests for a specific GPU backend.
+macro_rules! opcode_tests_for_backend {
+    ($mod_name:ident, $feature:literal, $ctx_fn:path, $ctx_ty:ty) => {
+        #[cfg(all(feature = $feature, feature = "stde"))]
+        mod $mod_name {
+            use super::*;
+
+            fn get_ctx() -> Option<$ctx_ty> { $ctx_fn() }
+
+            #[test] fn op_exp_ln() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_exp, 1.5, "exp"); check_1d(&ctx, f_ln, 2.0, "ln");
+                check_1d(&ctx, f_exp2, 1.0, "exp2"); check_1d(&ctx, f_log2, 3.0, "log2");
+                check_1d(&ctx, f_log10, 2.0, "log10"); check_1d(&ctx, f_ln_1p, 0.5, "ln_1p");
+                check_1d(&ctx, f_exp_m1, 0.3, "expm1");
+            }
+            #[test] fn op_sqrt_cbrt() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_sqrt, 4.0, "sqrt"); check_1d(&ctx, f_cbrt, 8.0, "cbrt");
+            }
+            #[test] fn op_sin_cos() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_sin, 1.0, "sin"); check_1d(&ctx, f_cos, 1.0, "cos");
+            }
+            #[test] fn op_tan() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_tan, 0.5, "tan");
+            }
+            #[test] fn op_hyperbolic() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_sinh, 1.0, "sinh"); check_1d(&ctx, f_cosh, 1.0, "cosh");
+                check_1d(&ctx, f_tanh, 0.5, "tanh");
+            }
+            #[test] fn op_inverse_trig() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_asin, 0.5, "asin"); check_1d(&ctx, f_acos, 0.5, "acos");
+                check_1d(&ctx, f_atan, 1.0, "atan");
+            }
+            #[test] fn op_inverse_hyp() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_asinh, 1.0, "asinh"); check_1d(&ctx, f_acosh, 2.0, "acosh");
+                check_1d(&ctx, f_atanh, 0.5, "atanh");
+            }
+            #[test] fn op_pow() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_powf25, 2.0, "powf"); check_1d(&ctx, f_powi3, 2.0, "powi");
+            }
+            #[test] fn op_arithmetic() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_arith, 1.5, "arith");
+            }
+            #[test] fn op_div() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_div, 2.0, "div");
+            }
+            #[test] fn op_nonsmooth() {
+                let ctx = match get_ctx() { Some(c) => c, None => return };
+                check_1d(&ctx, f_abs_fn, -2.0, "abs_neg"); check_1d(&ctx, f_abs_fn, 2.0, "abs_pos");
+            }
+        }
+    };
+}
+
+#[cfg(feature = "gpu-wgpu")]
+opcode_tests_for_backend!(wgpu_opcode_tests, "gpu-wgpu", gpu_context, WgpuContext);
+#[cfg(feature = "gpu-cuda")]
+opcode_tests_for_backend!(cuda_opcode_tests, "gpu-cuda", cuda_context, CudaContext);
 
 // ══════════════════════════════════════════════
 //  Section 3: GPU STDE high-level function tests

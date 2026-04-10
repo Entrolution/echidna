@@ -358,26 +358,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 r = jet_div(a, b);
             }
             case 6u /* REM */: {
-                // No meaningful Taylor rule — zero higher-order coefficients
+                // d(a%b)/da = 1 a.e.; b is constant in Taylor mode
                 let b_val = jets[j_base + b_idx * 3u];
-                r = Jet3(a.c0 - trunc(a.c0 / b_val) * b_val, 0.0, 0.0);
+                r = Jet3(a.c0 - trunc(a.c0 / b_val) * b_val, a.c1, a.c2);
             }
             case 7u /* POWF */: {
                 let b_off = j_base + b_idx * 3u;
                 let b = Jet3(jets[b_off], jets[b_off + 1u], jets[b_off + 2u]);
-                // c = exp(b * ln(a))
-                let lna = jet_ln(a);
-                let product = jet_mul(b, lna);
-                r = jet_exp(product);
-                r.c0 = pow(a.c0, b.c0);
+                if a.c0 <= 0.0 {
+                    // Fallback: primal + first-order chain rule (c2 conservative zero)
+                    let val = pow(a.c0, b.c0);
+                    let da = b.c0 * pow(a.c0, b.c0 - 1.0);
+                    let db = select(val * log(abs(a.c0)), 0.0, val == 0.0);
+                    r = Jet3(val, da * a.c1 + db * b.c1, 0.0);
+                } else {
+                    // c = exp(b * ln(a))
+                    let lna = jet_ln(a);
+                    let product = jet_mul(b, lna);
+                    r = jet_exp(product);
+                    r.c0 = pow(a.c0, b.c0);
+                }
             }
             case 8u /* ATAN2 */: {
                 let b_off = j_base + b_idx * 3u;
                 let b = Jet3(jets[b_off], jets[b_off + 1u], jets[b_off + 2u]);
-                // atan2(a, b) = atan(a/b) with quadrant fix
-                let ratio = jet_div(a, b);
-                let at = jet_atan(ratio);
-                r = Jet3(atan2(a.c0, b.c0), at.c1, at.c2);
+                if b.c0 == 0.0 {
+                    // Direct formula: d(atan2)/da = 0, d(atan2)/db = -1/a (when b=0)
+                    if a.c0 == 0.0 {
+                        r = Jet3(atan2(a.c0, b.c0), 0.0, 0.0);
+                    } else {
+                        let inv_a = 1.0 / a.c0;
+                        r = Jet3(atan2(a.c0, b.c0), -b.c1 * inv_a, -b.c2 * inv_a);
+                    }
+                } else {
+                    // atan2(a, b) = atan(a/b) with quadrant fix
+                    let ratio = jet_div(a, b);
+                    let at = jet_atan(ratio);
+                    r = Jet3(atan2(a.c0, b.c0), at.c1, at.c2);
+                }
             }
             case 9u /* HYPOT */: {
                 let b_off = j_base + b_idx * 3u;
@@ -405,21 +423,37 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 13u /* RECIP */: { r = jet_recip(a); }
             case 14u /* SQRT */: { r = jet_sqrt(a); }
             case 15u /* CBRT */: {
-                // cbrt(a) = sign(a) * exp(ln(|a|)/3)
-                let s = sign(a.c0);
-                let abs_a = Jet3(abs(a.c0), s * a.c1, s * a.c2);
-                let lna = jet_ln(abs_a);
-                let third = jet_scale(lna, 1.0 / 3.0);
-                let e = jet_exp(third);
-                r = Jet3(s * e.c0, s * e.c1, s * e.c2);
+                if a.c0 == 0.0 {
+                    // cbrt(0) = 0, cbrt'(0) = Inf (vertical tangent)
+                    r = Jet3(0.0, 1.0 / 0.0, 1.0 / 0.0);
+                } else {
+                    // cbrt(a) = sign(a) * exp(ln(|a|)/3)
+                    let s = select(sign(a.c0), 1.0, a.c0 == 0.0);
+                    let abs_a = Jet3(abs(a.c0), s * a.c1, s * a.c2);
+                    let lna = jet_ln(abs_a);
+                    let third = jet_scale(lna, 1.0 / 3.0);
+                    let e = jet_exp(third);
+                    r = Jet3(s * e.c0, s * e.c1, s * e.c2);
+                }
             }
             case 16u /* POWI */: {
                 // Exponent n is stored in arg1 as bitcast i32, NOT a buffer index
                 let n = f32(bitcast<i32>(b_idx));
+                let ni = bitcast<i32>(b_idx);
                 if n == 0.0 {
                     r = Jet3(1.0, 0.0, 0.0);
                 } else if n == 1.0 {
                     r = a;
+                } else if a.c0 < 0.0 {
+                    // Negative base: sign(a)^n * exp(n * ln(|a|))
+                    let sf = select(1.0, -1.0, ni % 2 != 0);
+                    let s = select(sign(a.c0), 1.0, a.c0 == 0.0);
+                    let abs_a = Jet3(abs(a.c0), s * a.c1, s * a.c2);
+                    let lna = jet_ln(abs_a);
+                    let nlna = jet_scale(lna, n);
+                    let e = jet_exp(nlna);
+                    r = Jet3(sf * e.c0, sf * e.c1, sf * e.c2);
+                    r.c0 = pow(a.c0, n);
                 } else {
                     // exp(n * ln(a))
                     let lna = jet_ln(a);
