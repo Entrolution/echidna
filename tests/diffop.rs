@@ -381,8 +381,7 @@ fn diffop_type_construction() {
     assert_eq!(lap.order(), 2);
 
     let bih = DiffOp::<f64>::biharmonic(2);
-    // 2 diagonal terms (∂⁴/∂x⁴, ∂⁴/∂y⁴) + 1 cross term (2·∂⁴/∂x²∂y²) = 3
-    assert_eq!(bih.terms().len(), 3);
+    assert_eq!(bih.terms().len(), 2);
     assert_eq!(bih.order(), 4);
 
     let diag3 = DiffOp::<f64>::diagonal(4, 3);

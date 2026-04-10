@@ -184,8 +184,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 14u /* SQRT */: { da = 0.5 / r; }
             case 15u /* CBRT */: { da = 1.0 / (3.0 * r * r); }
             case 16u /* POWI */: {
-                let n = f32(bitcast<i32>(b_idx));
-                da = n * pow(a, n - 1.0);
+                let exp = bitcast<i32>(b_idx);
+                if exp == 0 { da = 0.0; } else {
+                let n = f32(exp);
+                da = n * pow(a, n - 1.0); }
             }
 
             // Exp/Log
@@ -214,7 +216,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 35u /* ATANH */: { da = 1.0 / (1.0 - a * a); }
 
             // Misc
-            case 36u /* ABS */: { da = sign(a); }
+            case 36u /* ABS */: { da = select(select(-1.0, 1.0, a >= 0.0), 0.0, a != a); }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: { da = 0.0; }
             case 42u /* FRACT */: { da = 1.0; }
 

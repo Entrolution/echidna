@@ -63,7 +63,8 @@ typedef FLOAT_TYPE F;
 #define UNUSED 0xFFFFFFFFu
 
 // Math helpers — use the right precision
-__device__ F _sign(F x) { return (x > F(0)) - (x < F(0)); }
+// Match Rust's f64::signum: returns ±1 for all finite values (including ±0), NaN for NaN.
+__device__ F _sign(F x) { return (x != x) ? x : (x >= F(0)) ? F(1) : F(-1); }
 __device__ F _cbrt(F x) { return copysign(pow(fabs(x), F(1.0/3.0)), x); }
 __device__ F _fract(F x) { return x - floor(x); }
 
@@ -258,7 +259,7 @@ extern "C" __global__ void reverse_sweep(
             case OP_CBRT:   da = F(1)/(F(3)*r*r); break;
             case OP_POWI: {
                 int n = (int)bi;
-                da = F(n) * pow(a, F(n)-F(1)); break;
+                da = (n == 0) ? F(0) : F(n) * pow(a, F(n)-F(1)); break;
             }
             case OP_EXP:    da = r; break;
             case OP_EXP2:   da = r * log(F(2)); break;
@@ -369,7 +370,7 @@ extern "C" __global__ void tangent_forward(
             }
             case OP_HYPOT: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
-                r=hypot(a,b); rt=(a*at+b*bt)/r; break;
+                r=hypot(a,b); rt=(r==F(0)) ? F(0) : (a*at+b*bt)/r; break;
             }
             case OP_MAX: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
@@ -386,7 +387,7 @@ extern "C" __global__ void tangent_forward(
             case OP_POWI: {
                 int n = (int)bi;
                 F fn = F(n);
-                r=pow(a,fn); rt=fn*pow(a,fn-F(1))*at; break;
+                r=pow(a,fn); rt=(n==0) ? F(0) : fn*pow(a,fn-F(1))*at; break;
             }
             case OP_EXP:   r=exp(a); rt=r*at; break;
             case OP_EXP2:  r=exp2(a); rt=r*log(F(2))*at; break;
@@ -497,7 +498,7 @@ extern "C" __global__ void tangent_reverse(
             }
             case OP_HYPOT: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                r=hypot(a,b); rt=(a*at+b*bt)/r; break;
+                r=hypot(a,b); rt=(r==F(0)) ? F(0) : (a*at+b*bt)/r; break;
             }
             case OP_MAX: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
@@ -514,7 +515,7 @@ extern "C" __global__ void tangent_reverse(
             case OP_POWI: {
                 int n = (int)bi;
                 F fn = F(n);
-                r=pow(a,fn); rt=fn*pow(a,fn-F(1))*at; break;
+                r=pow(a,fn); rt=(n==0) ? F(0) : fn*pow(a,fn-F(1))*at; break;
             }
             case OP_EXP:   r=exp(a); rt=r*at; break;
             case OP_EXP2:  r=exp2(a); rt=r*log(F(2))*at; break;
@@ -595,9 +596,10 @@ extern "C" __global__ void tangent_reverse(
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 F ab1 = pow(a, b-F(1));
                 da_re = b * ab1;
-                da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt);
-                F la = log(a);
-                F rr = primals[base+i]; // r = a^b from forward pass
+                if (a == F(0)) { da_eps = F(0); }
+                else { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt); }
+                F rr = primals[base+i];
+                F la = (a == F(0)) ? F(0) : log(a);
                 db_re = (rr == F(0)) ? F(0) : rr * la;
                 F rt2 = tans[base+i];
                 db_eps = (rr == F(0)) ? F(0) : rt2*la + rr*at/a; break;
@@ -611,9 +613,9 @@ extern "C" __global__ void tangent_reverse(
             }
             case OP_HYPOT: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                F r2=r*r; F rt2=tans[base+i];
-                da_re=a/r; da_eps=(at*r-a*rt2)/r2;
-                db_re=b/r; db_eps=(bt*r-b*rt2)/r2; break;
+                if (r == F(0)) { da_re=F(0); da_eps=F(0); db_re=F(0); db_eps=F(0); }
+                else { F r2=r*r; F rt2=tans[base+i]; da_re=a/r; da_eps=(at*r-a*rt2)/r2; db_re=b/r; db_eps=(bt*r-b*rt2)/r2; }
+                break;
             }
             case OP_MAX: {
                 F b=primals[base+bi];
@@ -629,9 +631,9 @@ extern "C" __global__ void tangent_reverse(
             case OP_CBRT:  { F rr=r*r; da_re=F(1)/(F(3)*rr); da_eps=F(-2)*at/(F(9)*rr*r); break; }
             case OP_POWI: {
                 int n = (int)bi;
-                F fn = F(n);
-                da_re=fn*pow(a,fn-F(1));
-                da_eps=fn*(fn-F(1))*pow(a,fn-F(2))*at; break;
+                if (n == 0) { da_re=F(0); da_eps=F(0); }
+                else { F fn=F(n); da_re=fn*pow(a,fn-F(1)); da_eps=fn*(fn-F(1))*pow(a,fn-F(2))*at; }
+                break;
             }
             case OP_EXP:    da_re=r; da_eps=r*at; break;
             case OP_EXP2:   { F l2=log(F(2)); da_re=r*l2; da_eps=r*l2*l2*at; break; }

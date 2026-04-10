@@ -169,7 +169,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
                 r = pow(a, b);
-                rt = r * (b / a * at + log(a) * bt);
+                // Guard: at a=0, b/a and log(a) are undefined; split dx/dy
+                let dx = select(b * r / a * at, b * pow(a, b - 1.0) * at, a == 0.0);
+                let dy = select(r * log(a) * bt, 0.0, r == 0.0);
+                rt = dx + dy;
             }
             case 8u /* ATAN2 */: {
                 let b = primals[p_base + b_idx];
@@ -182,7 +185,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
                 r = sqrt(a * a + b * b);
-                rt = (a * at + b * bt) / r;
+                if r == 0.0 { rt = 0.0; } else { rt = (a * at + b * bt) / r; }
             }
             case 10u /* MAX */: {
                 let b = primals[p_base + b_idx];
@@ -205,9 +208,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 rt = at / (3.0 * r * r);
             }
             case 16u /* POWI */: {
-                let n = f32(bitcast<i32>(b_idx));
+                let exp = bitcast<i32>(b_idx);
+                let n = f32(exp);
                 r = pow(a, n);
-                rt = n * pow(a, n - 1.0) * at;
+                rt = select(n * pow(a, n - 1.0) * at, 0.0, exp == 0);
             }
             case 17u /* EXP */: { r = exp(a); rt = r * at; }
             case 18u /* EXP2 */: { r = exp2(a); rt = r * log(2.0) * at; }
@@ -225,14 +229,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 30u /* SINH */: { r = sinh_f(a); rt = cosh_f(a) * at; }
             case 31u /* COSH */: { r = cosh_f(a); rt = sinh_f(a) * at; }
             case 32u /* TANH */: { r = tanh(a); let c = cosh_f(a); rt = at / (c * c); }
-            case 33u /* ASINH */: { r = log(a + sqrt(a * a + 1.0)); rt = at / sqrt(a * a + 1.0); }
+            case 33u /* ASINH */: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt = at / sqrt(a * a + 1.0); }
             case 34u /* ACOSH */: { r = log(a + sqrt(a * a - 1.0)); rt = at / sqrt(a * a - 1.0); }
             case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / (1.0 - a * a); }
-            case 36u /* ABS */: { r = abs(a); rt = sign(a) * at; }
+            case 36u /* ABS */: { r = abs(a); let s = select(-1.0, 1.0, a >= 0.0); rt = select(s * at, 0.0, a != a); }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: {
                 // Zero derivative ops
                 switch op {
-                    case 37u: { r = sign(a); }
+                    case 37u: { if a != a { r = a; } else if a >= 0.0 { r = 1.0; } else { r = -1.0; } }
                     case 38u: { r = floor(a); }
                     case 39u: { r = ceil(a); }
                     case 40u: { r = round(a); }

@@ -294,9 +294,9 @@ impl<F: Float> Dual<F> {
 
     /// Absolute value.
     ///
-    /// Derivative uses `signum(x)` which gives 0 at x=0. This is a deliberate
-    /// subgradient convention (element of Clarke subdifferential [-1, 1]),
-    /// consistent across all AD modes.
+    /// Derivative uses `signum(x)`: returns 1 at x=+0 and -1 at x=-0
+    /// (matching Rust's `f64::signum`). Both are valid subgradients of |x| at 0.
+    /// Consistent across all AD modes and GPU backends.
     #[inline]
     pub fn abs(self) -> Self {
         self.chain(self.re.abs(), self.re.signum())

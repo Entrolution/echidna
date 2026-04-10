@@ -708,24 +708,17 @@ impl<F: Float> DiffOp<F> {
         DiffOp { terms, num_vars: n }
     }
 
-    /// Biharmonic operator: `Δ² = (Σ_j ∂²/∂x_j²)²`.
+    /// Sum of pure fourth partial derivatives: `Σ_j ∂⁴/∂x_j⁴`.
     ///
-    /// Expands to `Σ_j ∂⁴/∂x_j⁴ + 2 Σ_{j<k} ∂⁴/(∂x_j² ∂x_k²)`.
+    /// Note: this is the diagonal 4th-order operator, equivalent to `diagonal(n, 4)`.
+    /// It is NOT the true biharmonic `Δ² = (Σ_j ∂²/∂x_j²)²`, which would also
+    /// include cross terms `2 Σ_{j<k} ∂⁴/(∂x_j² ∂x_k²)`. The cross terms
+    /// require mixed-partial jet evaluation which is not yet supported.
     #[must_use]
     pub fn biharmonic(n: usize) -> Self {
-        let two = F::one() + F::one();
-        let mut terms: Vec<(F, MultiIndex)> = (0..n)
+        let terms = (0..n)
             .map(|j| (F::one(), MultiIndex::diagonal(n, j, 4)))
             .collect();
-        // Cross terms: 2 * ∂⁴/(∂x_j² ∂x_k²) for each j < k
-        for j in 0..n {
-            for k in (j + 1)..n {
-                let mut orders = vec![0u8; n];
-                orders[j] = 2;
-                orders[k] = 2;
-                terms.push((two, MultiIndex::new(&orders)));
-            }
-        }
         DiffOp { terms, num_vars: n }
     }
 

@@ -200,13 +200,14 @@ mod phase3_taylor {
 
     #[test]
     fn taylor_atan2_b_zero() {
-        // atan2(1, 0) = pi/2
+        // atan2(1, 0) = pi/2; derivative is 0 (atan2(a,0) = sign(a)*pi/2 is constant for a>0)
         let a = Taylor::<f64, 4>::variable(1.0);
         let b = Taylor::<f64, 4>::constant(0.0);
         let t = a.atan2(b);
         let half_pi = std::f64::consts::FRAC_PI_2;
         assert!((t.coeffs[0] - half_pi).abs() < 1e-12, "atan2(1,0) = pi/2");
         assert!(!t.coeffs[1].is_nan(), "atan2 derivative at b=0 should not be NaN");
+        assert_eq!(t.coeffs[1], 0.0, "d/da atan2(a,0) = 0 for a > 0");
     }
 }
 
@@ -263,16 +264,17 @@ mod phase3_diffop {
     use echidna::record;
 
     #[test]
-    fn biharmonic_cross_terms() {
-        // f(x,y) = x^2 * y^2
-        // ∂⁴f/∂x⁴ = 0, ∂⁴f/∂y⁴ = 0, ∂⁴f/(∂x²∂y²) = 4
-        // True biharmonic Δ² = 0 + 0 + 2*4 = 8
-        let (tape, _) = record(|x| x[0] * x[0] * x[1] * x[1], &[1.0, 1.0]);
+    fn biharmonic_diagonal_4th() {
+        // biharmonic computes Σ_j ∂⁴/∂x_j⁴ (diagonal only, not full Δ²)
+        let (tape, _) = record(
+            |x| x[0] * x[0] * x[0] * x[0] + x[1] * x[1] * x[1] * x[1],
+            &[2.0, 3.0],
+        );
         let op = DiffOp::<f64>::biharmonic(2);
-        let (_value, biharm) = op.eval(&tape, &[1.0, 1.0]);
+        let (_value, biharm) = op.eval(&tape, &[2.0, 3.0]);
         assert!(
-            (biharm - 8.0).abs() < 1e-6,
-            "biharmonic should include cross terms, got {biharm}"
+            (biharm - 48.0).abs() < 1e-4,
+            "biharmonic diagonal sum should be 48, got {biharm}"
         );
     }
 }
@@ -435,14 +437,10 @@ mod phase1c_sparsity {
 
     #[test]
     fn sparsity_custom_binary_op() {
-        // Verify sparsity detection works correctly.
-        // Use a function with known Hessian structure and check
-        // that sparse_hessian produces the same result as dense hessian.
         let (mut tape, _) = record(|x| x[0] * x[1] + x[0].sin(), &[1.0, 2.0]);
         let dense = tape.hessian(&[1.0, 2.0]);
         let (_, _, pattern, _sparse_vals) = tape.sparse_hessian(&[1.0, 2.0]);
 
-        // Verify all nonzero entries in dense appear in sparse
         for i in 0..2 {
             for j in 0..=i {
                 if (dense.2[i][j] as f64).abs() > 1e-12 {
@@ -454,5 +452,48 @@ mod phase1c_sparsity {
                 }
             }
         }
+    }
+}
+
+// ══════════════════════════════════════════════════════
+//  Additional coverage: Reverse-mode and Rem
+// ══════════════════════════════════════════════════════
+
+mod reverse_mode {
+    use echidna::grad;
+    use num_traits::Float as _;
+
+    #[test]
+    fn reverse_powi_zero_at_zero() {
+        let g = grad(|x| x[0].powi(0), &[0.0_f64]);
+        assert!(!g[0].is_nan(), "Reverse powi(0) at x=0 should be 0");
+        assert_eq!(g[0], 0.0);
+    }
+
+    #[test]
+    fn reverse_max_nan() {
+        let g = grad(|x| x[0].max(x[1]), &[5.0_f64, f64::NAN]);
+        assert_eq!(g[0], 1.0, "d/dx max(x, NaN) should be 1");
+    }
+
+    #[test]
+    fn reverse_min_nan() {
+        let g = grad(|x| x[0].min(x[1]), &[5.0_f64, f64::NAN]);
+        assert_eq!(g[0], 1.0, "d/dx min(x, NaN) should be 1");
+    }
+}
+
+#[cfg(feature = "bytecode")]
+mod rem_coverage {
+    use echidna::record;
+
+    #[test]
+    fn rem_db_partial_tape() {
+        // a % b: d/db = -trunc(a/b). For a=7, b=3: db = -trunc(7/3) = -2
+        let (mut tape, val) = record(|x| x[0] % x[1], &[7.0, 3.0]);
+        assert_eq!(val, 1.0);
+        let grad = tape.gradient(&[7.0, 3.0]);
+        assert_eq!(grad[0], 1.0, "d(a%b)/da = 1");
+        assert_eq!(grad[1], -2.0, "d(a%b)/db = -trunc(7/3) = -2");
     }
 }

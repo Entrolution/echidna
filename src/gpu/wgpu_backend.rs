@@ -1056,7 +1056,7 @@ impl GpuBackend for WgpuContext {
             mapped_at_creation: false,
         });
 
-        let out_size = (batch * tape.num_outputs) as u64 * 4;
+        let out_size = (batch as u64) * (tape.num_outputs as u64) * 4;
         let tangent_out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("tangent_outputs"),
             size: out_size,
@@ -1215,8 +1215,8 @@ impl GpuBackend for WgpuContext {
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
-        let buf_size = (batch_size * nv) as u64 * 4;
-        let grad_size = (batch_size * ni) as u64 * 4;
+        let buf_size = (batch_size as u64) * (nv as u64) * 4;
+        let grad_size = (batch_size as u64) * (ni as u64) * 4;
 
         let primals_work = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pw"),
