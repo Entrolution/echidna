@@ -232,11 +232,13 @@ mod sparse_stde_tests {
 
     #[test]
     fn stde_sparse_diagonal_4th() {
-        // Biharmonic on quartic: ∂⁴(x⁴+y⁴)/∂x⁴ + ∂⁴(x⁴+y⁴)/∂y⁴ = 24 + 24 = 48
+        // Diagonal 4th-order operator on quartic: Σ_j ∂⁴/∂x_j⁴ = 24 + 24 = 48
+        // Uses diagonal(n, 4) for uniform-weight stochastic test (biharmonic has
+        // non-uniform weights which require importance sampling, not full enumeration).
         let tape = record_fn(quartic, &[2.0, 3.0]);
         let x = [2.0, 3.0];
 
-        let op = DiffOp::<f64>::biharmonic(2);
+        let op = DiffOp::<f64>::diagonal(2, 4);
         let (_, exact) = op.eval(&tape, &x);
         assert_relative_eq!(exact, 48.0, epsilon = 1e-4);
 

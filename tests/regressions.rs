@@ -264,17 +264,15 @@ mod phase3_diffop {
     use echidna::record;
 
     #[test]
-    fn biharmonic_diagonal_4th() {
-        // biharmonic computes Σ_j ∂⁴/∂x_j⁴ (diagonal only, not full Δ²)
-        let (tape, _) = record(
-            |x| x[0] * x[0] * x[0] * x[0] + x[1] * x[1] * x[1] * x[1],
-            &[2.0, 3.0],
-        );
+    fn biharmonic_cross_terms() {
+        // True biharmonic Δ² on x²y²: only cross terms contribute
+        // ∂⁴/∂x⁴ = 0, ∂⁴/∂y⁴ = 0, 2*∂⁴/(∂x²∂y²) = 2*4 = 8
+        let (tape, _) = record(|x| x[0] * x[0] * x[1] * x[1], &[1.0, 1.0]);
         let op = DiffOp::<f64>::biharmonic(2);
-        let (_value, biharm) = op.eval(&tape, &[2.0, 3.0]);
+        let (_value, biharm) = op.eval(&tape, &[1.0, 1.0]);
         assert!(
-            (biharm - 48.0).abs() < 1e-4,
-            "biharmonic diagonal sum should be 48, got {biharm}"
+            (biharm - 8.0).abs() < 1e-4,
+            "biharmonic should include cross terms, got {biharm}"
         );
     }
 }
