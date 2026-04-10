@@ -217,6 +217,29 @@ fn mixed_third_order_cubic() {
 }
 
 // ══════════════════════════════════════════════
+//  Mixed fourth-order (diagnostic for biharmonic cross terms)
+// ══════════════════════════════════════════════
+
+#[test]
+fn mixed_fourth_order_cross_zero() {
+    // ∂⁴(x⁴+y⁴)/(∂x²∂y²) = 0 (no cross terms)
+    let tape = record_fn(
+        |x| x[0] * x[0] * x[0] * x[0] + x[1] * x[1] * x[1] * x[1],
+        &[2.0, 3.0],
+    );
+    let (_, deriv) = echidna::diffop::mixed_partial(&tape, &[2.0, 3.0], &[2, 2]);
+    assert_relative_eq!(deriv, 0.0, epsilon = 1e-6);
+}
+
+#[test]
+fn mixed_fourth_order_cross_nonzero() {
+    // ∂⁴(x²y²)/(∂x²∂y²) = 4
+    let tape = record_fn(|x| x[0] * x[0] * x[1] * x[1], &[2.0, 3.0]);
+    let (_, deriv) = echidna::diffop::mixed_partial(&tape, &[2.0, 3.0], &[2, 2]);
+    assert_relative_eq!(deriv, 4.0, epsilon = 1e-6);
+}
+
+// ══════════════════════════════════════════════
 //  Hessian cross-validation
 // ══════════════════════════════════════════════
 
@@ -381,7 +404,8 @@ fn diffop_type_construction() {
     assert_eq!(lap.order(), 2);
 
     let bih = DiffOp::<f64>::biharmonic(2);
-    assert_eq!(bih.terms().len(), 2);
+    // 2 diagonal + 1 cross term for n=2
+    assert_eq!(bih.terms().len(), 3);
     assert_eq!(bih.order(), 4);
 
     let diag3 = DiffOp::<f64>::diagonal(4, 3);
@@ -456,8 +480,10 @@ fn diffop_eval_laplacian() {
 }
 
 #[test]
-fn diffop_eval_biharmonic() {
-    // Biharmonic on x^4 + y^4: ∂⁴/∂x⁴ = 24, ∂⁴/∂y⁴ = 24, sum = 48
+fn diffop_eval_biharmonic_separable() {
+    // Biharmonic on x^4 + y^4:
+    // ∂⁴/∂x⁴ = 24, ∂⁴/∂y⁴ = 24, 2*∂⁴/(∂x²∂y²) = 0
+    // Δ² = 48
     let tape = record_fn(
         |x| {
             let a = x[0] * x[0] * x[0] * x[0];
@@ -466,11 +492,34 @@ fn diffop_eval_biharmonic() {
         },
         &[2.0, 3.0],
     );
-    let x = [2.0, 3.0];
-
     let op = DiffOp::<f64>::biharmonic(2);
-    let (_, bih) = op.eval(&tape, &x);
+    let (_, bih) = op.eval(&tape, &[2.0, 3.0]);
     assert_relative_eq!(bih, 48.0, epsilon = 1e-4);
+}
+
+#[test]
+fn diffop_eval_biharmonic_nonseparable() {
+    // Biharmonic on x²y²:
+    // ∂⁴/∂x⁴ = 0, ∂⁴/∂y⁴ = 0, ∂⁴/(∂x²∂y²) = 4
+    // Δ² = 0 + 0 + 2*4 = 8
+    let tape = record_fn(|x| x[0] * x[0] * x[1] * x[1], &[2.0, 3.0]);
+    let op = DiffOp::<f64>::biharmonic(2);
+    let (_, bih) = op.eval(&tape, &[2.0, 3.0]);
+    assert_relative_eq!(bih, 8.0, epsilon = 1e-4);
+}
+
+#[test]
+fn diffop_eval_biharmonic_3d() {
+    // Biharmonic on x²y² + y²z² + x²z² in 3D:
+    // Each pair has ∂⁴/(∂xi²∂xj²) = 4, all diagonal 4th = 0
+    // Δ² = 2*(4+4+4) = 24
+    let tape = record_fn(
+        |x| x[0] * x[0] * x[1] * x[1] + x[1] * x[1] * x[2] * x[2] + x[0] * x[0] * x[2] * x[2],
+        &[1.0, 1.0, 1.0],
+    );
+    let op = DiffOp::<f64>::biharmonic(3);
+    let (_, bih) = op.eval(&tape, &[1.0, 1.0, 1.0]);
+    assert_relative_eq!(bih, 24.0, epsilon = 1e-4);
 }
 
 // ══════════════════════════════════════════════
