@@ -305,7 +305,7 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// **Custom ops limitation:** For tapes containing custom ops, this method
     /// uses first-order chain rule (linearized partials). For exact second-order
-    /// derivatives through custom ops, use [`hessian`] instead, which calls
+    /// derivatives through custom ops, use `hessian` instead, which calls
     /// `CustomOp::eval_dual` / `CustomOp::partials_dual`.
     pub fn hessian_vec<const N: usize>(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
         let n = self.num_inputs as usize;

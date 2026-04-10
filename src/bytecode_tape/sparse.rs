@@ -61,7 +61,7 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// **Custom ops limitation:** For tapes containing custom ops, this method
     /// uses first-order chain rule (linearized partials). For exact second-order
-    /// derivatives through custom ops, use [`sparse_hessian`] instead, which calls
+    /// derivatives through custom ops, use `sparse_hessian` instead, which calls
     /// `CustomOp::eval_dual` / `CustomOp::partials_dual`.
     ///
     /// Returns `(value, gradient, pattern, hessian_values)`.

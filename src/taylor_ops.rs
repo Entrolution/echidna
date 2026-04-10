@@ -575,8 +575,8 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 
 /// `c = exp(a) - 1` (exp_m1).
 ///
-/// NOTE (verified correct): The recurrence uses `exp(a[0])` for c[1..] (via `taylor_exp`),
-/// then patches c[0] to `exp_m1(a[0])`. This is correct because derivatives of `exp(x)-1`
+/// NOTE (verified correct): The recurrence uses `exp(a\[0\])` for `c\[1..\]` (via `taylor_exp`),
+/// then patches `c\[0\]` to `exp_m1(a\[0\])`. This is correct because derivatives of `exp(x)-1`
 /// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
