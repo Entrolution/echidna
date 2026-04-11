@@ -66,6 +66,12 @@ impl<F: Float, const K: usize> Sub for Laurent<F, K> {
         let p_out = p1.min(p2);
         let shift1 = (p1 - p_out) as usize;
         let shift2 = (p2 - p_out) as usize;
+        assert!(
+            shift1 < K && shift2 < K,
+            "Laurent Sub: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
+            shift1.max(shift2),
+            K - 1,
+        );
 
         let a: [F; K] = std::array::from_fn(|i| {
             if i >= shift1 && i - shift1 < K {

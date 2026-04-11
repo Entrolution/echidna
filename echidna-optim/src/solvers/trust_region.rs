@@ -88,6 +88,18 @@ pub fn trust_region<F: Float, O: Objective<F>>(
     let mut grad_norm = norm(&grad);
     let mut radius = config.initial_radius;
 
+    if !grad_norm.is_finite() || !f_val.is_finite() {
+        return OptimResult {
+            x,
+            value: f_val,
+            gradient: grad,
+            gradient_norm: grad_norm,
+            iterations: 0,
+            func_evals,
+            termination: TerminationReason::NumericalError,
+        };
+    }
+
     if grad_norm < config.convergence.grad_tol {
         return OptimResult {
             x,
@@ -129,6 +141,13 @@ pub fn trust_region<F: Float, O: Objective<F>>(
 
         let step_norm = norm(&step);
 
+        // Guard: reject step unconditionally when predicted reduction is non-positive.
+        // The quadratic model predicts the step makes things worse — the subproblem is unreliable.
+        if predicted <= F::zero() {
+            radius = (quarter * radius).max(config.min_radius);
+            continue;
+        }
+
         // Ratio of actual to predicted reduction
         let rho = if predicted.abs() < F::epsilon() {
             if actual >= F::zero() {
@@ -142,7 +161,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
 
         // Update trust-region radius
         if rho < quarter {
-            radius = (quarter * step_norm).max(config.min_radius);
+            radius = (quarter * radius).max(config.min_radius);
         } else if rho > three_quarter && (step_norm - radius).abs() < F::epsilon() * radius {
             // Step was on the boundary and rho is good — expand
             radius = (two * radius).min(config.max_radius);
@@ -156,6 +175,19 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             f_val = f_new;
             grad = g_new;
             grad_norm = norm(&grad);
+
+            // NaN/Inf detection
+            if !grad_norm.is_finite() || !f_val.is_finite() {
+                return OptimResult {
+                    x,
+                    value: f_val,
+                    gradient: grad,
+                    gradient_norm: grad_norm,
+                    iterations: iter + 1,
+                    func_evals,
+                    termination: TerminationReason::NumericalError,
+                };
+            }
 
             // Convergence checks
             if grad_norm < config.convergence.grad_tol {
@@ -227,8 +259,9 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
     let mut r: Vec<F> = grad.to_vec();
     let mut d: Vec<F> = r.iter().map(|&ri| F::zero() - ri).collect();
     let mut r_dot_r = dot(&r, &r);
+    let cg_tol = F::epsilon().sqrt() * r_dot_r.sqrt(); // relative to initial residual (= ||grad||)
 
-    if r_dot_r.sqrt() < F::epsilon() {
+    if r_dot_r.sqrt() < cg_tol {
         return s;
     }
 
@@ -271,7 +304,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
         }
         let r_dot_r_new = dot(&r, &r);
 
-        if r_dot_r_new.sqrt() < F::epsilon() {
+        if r_dot_r_new.sqrt() < cg_tol {
             return s;
         }
 

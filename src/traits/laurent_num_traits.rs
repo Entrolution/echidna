@@ -21,7 +21,7 @@ impl<F: Float, const K: usize> Zero for Laurent<F, K> {
     }
     #[inline]
     fn is_zero(&self) -> bool {
-        self.value().is_zero()
+        self.is_all_zero_pub()
     }
 }
 

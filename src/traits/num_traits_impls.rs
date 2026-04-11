@@ -608,6 +608,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         self.value.classify()
     }
 
+    // BUG-HUNT-NOTE: Returning Reverse::constant() (no tape entry) is a valid optimization.
+    // These are piecewise-constant functions with zero derivative a.e. Skipping tape
+    // recording saves space without affecting gradient correctness.
     fn floor(self) -> Self {
         Reverse::constant(self.value.floor())
     }
@@ -775,7 +778,8 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn atan2(self, other: Self) -> Self {
-        let denom = self.value * self.value + other.value * other.value;
+        let h = self.value.hypot(other.value);
+        let denom = h * h;
         if denom == F::zero() {
             return Reverse::constant(self.value.atan2(other.value));
         }

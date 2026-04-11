@@ -447,6 +447,9 @@ pub fn taylor_powf<F: Float>(
     // may differ from the patched value by sub-ULP rounding. This is a deliberate
     // tradeoff: exact primal vs perfectly consistent jet coefficients.
     // Verified correct 2026-04-11: the discrepancy is O(ULP) for well-conditioned inputs.
+    // BUG-HUNT-NOTE: Patching c[0] = a[0].powf(b[0]) after exp-ln recurrence introduces
+    // O(ULP) inconsistency with c[1..K] which used exp(b[0]*ln(a[0])) as c[0]. This is
+    // an intentional precision tradeoff: direct powf is more accurate for c[0].
     c[0] = a[0].powf(b[0]);
 }
 
@@ -548,7 +551,8 @@ fn taylor_powi_squaring<F: Float>(
 /// Uses `scratch1` and `scratch2`.
 #[inline]
 pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
-    let deg = a.len();
+    let deg = c.len();
+    debug_assert_eq!(a.len(), c.len());
     if a[0] == F::zero() {
         // cbrt(0) = 0, but cbrt'(0) = 1/(3*cbrt(0)^2) = Inf (vertical tangent).
         c[0] = F::zero();
@@ -568,6 +572,8 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
         taylor_ln(c, scratch1);
         taylor_scale(scratch1, third, scratch2);
         taylor_exp(scratch2, c);
+        // BUG-HUNT-NOTE: Same O(ULP) primal-patch tradeoff as taylor_powf. The
+        // negate-all-coefficients approach (-cbrt(-a) = cbrt(a)) is mathematically exact.
         c[0] = a[0].cbrt();
         for ci in c.iter_mut().skip(1) {
             *ci = -*ci;
@@ -596,6 +602,9 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 /// NOTE (verified correct): The recurrence uses `exp(a\[0\])` for `c\[1..\]` (via `taylor_exp`),
 /// then patches `c\[0\]` to `exp_m1(a\[0\])`. This is correct because derivatives of `exp(x)-1`
 /// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
+// BUG-HUNT-NOTE: Higher-order coefficients correctly use exp(a[0]) as c[0] in the
+// recurrence, not exp_m1(a[0]). Since d/dx[exp(x)-1] = d/dx[exp(x)] = exp(x),
+// all Taylor coefficients for k>=1 are identical between exp and exp_m1.
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
     taylor_exp(a, c);

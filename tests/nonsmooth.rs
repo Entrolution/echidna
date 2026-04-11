@@ -365,3 +365,42 @@ fn signum_records_to_tape() {
         tape.opcodes_slice()
     );
 }
+
+// ══════════════════════════════════════════════
+//  Bug hunt regression tests
+// ══════════════════════════════════════════════
+
+// ── #24: NaN switching value should not be smooth ──
+
+#[test]
+fn regression_24_nan_switching_value_is_not_smooth() {
+    use echidna::{KinkEntry, NonsmoothInfo};
+
+    let info = NonsmoothInfo {
+        kinks: vec![KinkEntry {
+            tape_index: 0,
+            opcode: OpCode::Abs,
+            switching_value: f64::NAN,
+            branch: 1,
+        }],
+    };
+    assert!(
+        !info.is_smooth(0.1),
+        "NaN switching value should mean not smooth"
+    );
+    assert!(
+        !info.active_kinks(0.1).is_empty(),
+        "NaN switching value should appear in active_kinks"
+    );
+}
+
+// ── #25: Fract is_nonsmooth ──
+
+#[test]
+fn regression_25_fract_is_nonsmooth() {
+    use echidna::opcode::is_nonsmooth;
+    assert!(
+        is_nonsmooth(OpCode::Fract),
+        "OpCode::Fract should be nonsmooth"
+    );
+}

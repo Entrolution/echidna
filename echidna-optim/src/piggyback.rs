@@ -253,7 +253,12 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
 
         if z_norm < tol && lam_norm < tol {
-            return Some((z_new, adj[m..].to_vec(), k + 1));
+            // One extra reverse pass with converged lambda_new to get consistent x_bar,
+            // matching the pattern in piggyback_adjoint_solve.
+            input[..m].copy_from_slice(&z_new[..m]);
+            step_tape.forward(&input);
+            let adj_final = step_tape.reverse_seeded(&lambda_new);
+            return Some((z_new, adj_final[m..].to_vec(), k + 1));
         }
 
         // Update z in the input buffer

@@ -234,3 +234,74 @@ fn normalization_strips_zeros() {
     assert_relative_eq!(l.leading_coefficient(), 1.0);
     assert_relative_eq!(l.value(), 1.0);
 }
+
+// ══════════════════════════════════════════════
+//  Bug hunt regression tests
+// ══════════════════════════════════════════════
+
+type L3 = Laurent<f64, 3>;
+
+// ── #12: Laurent Sub pole-order gap panic ──
+
+#[test]
+#[should_panic(expected = "pole-order gap")]
+fn regression_12_laurent_sub_pole_order_gap_panics() {
+    let a = L3::new([1.0, 0.0, 0.0], -5);
+    let b = L3::new([1.0, 0.0, 0.0], 0);
+    let _ = a - b; // pole-order gap = 5 > K-1 = 2, should panic
+}
+
+// ── #13: Laurent is_zero semantics ──
+
+#[test]
+fn regression_13_laurent_nonzero_with_positive_pole_order_is_not_zero() {
+    use num_traits::Zero;
+    let l = L3::new([1.0, 0.0, 0.0], 1);
+    assert!(
+        !l.is_zero(),
+        "Laurent with nonzero coefficients and pole_order>0 should not be zero"
+    );
+}
+
+// ── #21: Laurent max/min NaN ──
+
+#[test]
+fn regression_21_laurent_max_nan_returns_non_nan() {
+    let valid = L3::constant(5.0);
+    let nan = L3::constant(f64::NAN);
+    let r1 = valid.max(nan);
+    assert!(
+        !r1.value().is_nan(),
+        "max(valid, nan) should return valid"
+    );
+    let r2 = nan.max(valid);
+    assert!(
+        !r2.value().is_nan(),
+        "max(nan, valid) should return valid"
+    );
+}
+
+#[test]
+fn regression_21_laurent_min_nan_returns_non_nan() {
+    let valid = L3::constant(5.0);
+    let nan = L3::constant(f64::NAN);
+    let r1 = valid.min(nan);
+    assert!(
+        !r1.value().is_nan(),
+        "min(valid, nan) should return valid"
+    );
+    let r2 = nan.min(valid);
+    assert!(
+        !r2.value().is_nan(),
+        "min(nan, valid) should return valid"
+    );
+}
+
+// ── #22: Laurent powi pole_order overflow ──
+
+#[test]
+#[should_panic(expected = "pole_order overflow")]
+fn regression_22_laurent_powi_pole_order_overflow_panics() {
+    let l = L3::new([1.0, 0.0, 0.0], i32::MAX / 2 + 1);
+    let _ = l.powi(3); // pole_order * 3 overflows i32
+}

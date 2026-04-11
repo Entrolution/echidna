@@ -235,6 +235,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     }
 
     /// Is this Laurent value all-zero?
+    /// Uses IEEE 754 equality (−0.0 == 0.0), which is intentional for AD purposes.
     fn is_all_zero(&self) -> bool {
         self.coeffs.iter().all(|&c| c == F::zero())
     }
@@ -374,7 +375,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         taylor_ops::taylor_powi(&self.coeffs, n, &mut c, &mut s1, &mut s2);
         let mut l = Laurent {
             coeffs: c,
-            pole_order: self.pole_order * n,
+            pole_order: self.pole_order.checked_mul(n).expect("Laurent::powi: pole_order overflow"),
         };
         l.normalize();
         l
@@ -729,7 +730,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// Maximum of two values.
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.value() >= other.value() {
+        if self.value() >= other.value() || other.value().is_nan() {
             self
         } else {
             other
@@ -739,7 +740,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// Minimum of two values.
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.value() <= other.value() {
+        if self.value() <= other.value() || other.value().is_nan() {
             self
         } else {
             other

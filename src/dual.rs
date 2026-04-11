@@ -256,7 +256,8 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
         // d/dx atan2(y,x) = x/(x²+y²) dy - y/(x²+y²) dx
-        let denom = self.re * self.re + other.re * other.re;
+        let h = self.re.hypot(other.re);
+        let denom = h * h;
         if denom == F::zero() {
             return Dual {
                 re: self.re.atan2(other.re),

@@ -65,6 +65,19 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
     let mut func_evals = 1usize;
     let mut grad_norm = norm(&grad);
 
+    // NaN/Inf detection
+    if !grad_norm.is_finite() || !f_val.is_finite() {
+        return OptimResult {
+            x,
+            value: f_val,
+            gradient: grad,
+            gradient_norm: grad_norm,
+            iterations: 0,
+            func_evals,
+            termination: TerminationReason::NumericalError,
+        };
+    }
+
     // Check initial convergence
     if grad_norm < config.convergence.grad_tol {
         return OptimResult {
@@ -131,6 +144,19 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
             rho_hist.push(F::one() / sy);
             s_hist.push(s);
             y_hist.push(y);
+        }
+
+        // NaN/Inf detection
+        if !grad_norm.is_finite() || !f_val.is_finite() {
+            return OptimResult {
+                x,
+                value: f_val,
+                gradient: grad,
+                gradient_norm: grad_norm,
+                iterations: iter + 1,
+                func_evals,
+                termination: TerminationReason::NumericalError,
+            };
         }
 
         // Convergence checks
@@ -213,10 +239,12 @@ fn two_loop_recursion<F: Float>(
     if k > 0 {
         let sy = dot(&s_hist[k - 1], &y_hist[k - 1]);
         let yy = dot(&y_hist[k - 1], &y_hist[k - 1]);
-        if yy > F::zero() {
+        if yy > F::epsilon() {
             let gamma = sy / yy;
-            for v in r.iter_mut() {
-                *v = *v * gamma;
+            if gamma.is_finite() {
+                for v in r.iter_mut() {
+                    *v = *v * gamma;
+                }
             }
         }
     }
