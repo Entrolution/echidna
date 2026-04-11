@@ -26,7 +26,7 @@ use cudarc::nvrtc::compile_ptx;
 use super::{GpuBackend, GpuError, GpuTapeData};
 
 const KERNEL_SRC: &str = include_str!("kernels/tape_eval.cu");
-const TAYLOR_KERNEL_SRC: &str = include_str!("kernels/taylor_eval.cu");
+// taylor_eval.cu retired in favour of codegen (taylor_codegen.rs K=1..5)
 const BLOCK_SIZE: u32 = 256;
 
 // ── Macros to deduplicate f32/f64 CUDA dispatch methods ──
@@ -365,78 +365,6 @@ macro_rules! cuda_sparse_hessian_body {
     }};
 }
 
-macro_rules! cuda_taylor_fwd_2nd_body {
-    ($self:expr, $tape:expr, $primal_inputs:expr, $direction_seeds:expr, $batch_size:expr, $F:ty, $constants:ident, $kernel:ident) => {{
-        let s = &$self.stream;
-        let ni = $tape.num_inputs;
-        let nv = $tape.num_variables;
-        let no = $tape.num_outputs;
-        let total_in = ($batch_size * ni) as usize;
-
-        assert_eq!(
-            $primal_inputs.len(),
-            total_in,
-            "primal_inputs length mismatch"
-        );
-        assert_eq!(
-            $direction_seeds.len(),
-            total_in,
-            "direction_seeds length mismatch"
-        );
-
-        let d_primals = s.clone_htod($primal_inputs).map_err(cuda_err)?;
-        let d_seeds = s.clone_htod($direction_seeds).map_err(cuda_err)?;
-        let mut d_jets = s
-            .alloc_zeros::<$F>(($batch_size * nv * 3) as usize)
-            .map_err(cuda_err)?;
-        let mut d_jet_out = s
-            .alloc_zeros::<$F>(($batch_size * no * 3) as usize)
-            .map_err(cuda_err)?;
-
-        let cfg = LaunchConfig {
-            grid_dim: CudaContext::grid_dim($batch_size),
-            block_dim: CudaContext::block_dim(),
-            shared_mem_bytes: 0,
-        };
-
-        let mut builder = s.launch_builder(&$self.$kernel);
-        builder.arg(&$tape.opcodes);
-        builder.arg(&$tape.arg0);
-        builder.arg(&$tape.arg1);
-        builder.arg(&$tape.$constants);
-        builder.arg(&d_primals);
-        builder.arg(&d_seeds);
-        builder.arg(&mut d_jets);
-        builder.arg(&mut d_jet_out);
-        builder.arg(&$tape.output_indices);
-        builder.arg(&$tape.num_ops);
-        builder.arg(&ni);
-        builder.arg(&nv);
-        builder.arg(&no);
-        builder.arg(&$batch_size);
-        // SAFETY: All device buffers are correctly sized for `batch_size` elements,
-        // the kernel was compiled from our bundled source, and the launch config
-        // grid/block dimensions match the batch size.
-        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
-
-        s.synchronize().map_err(cuda_err)?;
-        let raw = s.clone_dtoh(&d_jet_out).map_err(cuda_err)?;
-
-        // Deinterleave [c0, c1, c2, c0, c1, c2, ...]
-        let total_out = ($batch_size * no) as usize;
-        let mut values = Vec::with_capacity(total_out);
-        let mut c1s = Vec::with_capacity(total_out);
-        let mut c2s = Vec::with_capacity(total_out);
-        for i in 0..total_out {
-            values.push(raw[i * 3]);
-            c1s.push(raw[i * 3 + 1]);
-            c2s.push(raw[i * 3 + 2]);
-        }
-
-        Ok(super::TaylorBatchResult { values, c1s, c2s })
-    }};
-}
-
 /// Convert any `Display` error into `GpuError::Other`.
 fn cuda_err(e: impl std::fmt::Display) -> GpuError {
     GpuError::Other(format!("{e}"))
@@ -479,13 +407,11 @@ pub struct CudaContext {
     reverse_f32: CudaFunction,
     tangent_fwd_f32: CudaFunction,
     tangent_rev_f32: CudaFunction,
-    taylor_fwd_2nd_f32: CudaFunction,
     // f64 kernels
     forward_f64: CudaFunction,
     reverse_f64: CudaFunction,
     tangent_fwd_f64: CudaFunction,
     tangent_rev_f64: CudaFunction,
-    taylor_fwd_2nd_f64: CudaFunction,
     // K-specialized Taylor forward kernels, compiled lazily on first use.
     // Index 0 = K=1, index 4 = K=5. Uses Mutex for interior mutability
     // since taylor_forward_kth_batch takes &self.
@@ -523,17 +449,6 @@ impl CudaContext {
         let tangent_fwd_f64 = module_f64.load_function("tangent_forward").ok()?;
         let tangent_rev_f64 = module_f64.load_function("tangent_reverse").ok()?;
 
-        // Compile Taylor forward 2nd-order kernels
-        let taylor_src_f32 = format!("#define FLOAT_TYPE float\n{}", TAYLOR_KERNEL_SRC);
-        let taylor_ptx_f32 = compile_ptx(&taylor_src_f32).ok()?;
-        let taylor_mod_f32 = ctx.load_module(taylor_ptx_f32).ok()?;
-        let taylor_fwd_2nd_f32 = taylor_mod_f32.load_function("taylor_forward_2nd").ok()?;
-
-        let taylor_src_f64 = format!("#define FLOAT_TYPE double\n{}", TAYLOR_KERNEL_SRC);
-        let taylor_ptx_f64 = compile_ptx(&taylor_src_f64).ok()?;
-        let taylor_mod_f64 = ctx.load_module(taylor_ptx_f64).ok()?;
-        let taylor_fwd_2nd_f64 = taylor_mod_f64.load_function("taylor_forward_2nd").ok()?;
-
         Some(CudaContext {
             ctx,
             stream,
@@ -541,12 +456,10 @@ impl CudaContext {
             reverse_f32,
             tangent_fwd_f32,
             tangent_rev_f32,
-            taylor_fwd_2nd_f32,
             forward_f64,
             reverse_f64,
             tangent_fwd_f64,
             tangent_rev_f64,
-            taylor_fwd_2nd_f64,
             #[cfg(feature = "stde")]
             taylor_fwd_kth_f32: Mutex::new([None, None, None, None, None]),
             #[cfg(feature = "stde")]
@@ -695,24 +608,19 @@ impl GpuBackend for CudaContext {
         cuda_sparse_hessian_body!(self, tape, tape_cpu, x, f32, hvp_batch)
     }
 
+    // taylor_forward_2nd_batch: uses default trait impl (delegates to kth_batch(order=3))
+
     #[cfg(feature = "stde")]
-    fn taylor_forward_2nd_batch(
+    fn taylor_forward_kth_batch(
         &self,
         tape: &CudaTapeBuffers,
         primal_inputs: &[f32],
         direction_seeds: &[f32],
         batch_size: u32,
-    ) -> Result<super::TaylorBatchResult<f32>, GpuError> {
-        cuda_taylor_fwd_2nd_body!(
-            self,
-            tape,
-            primal_inputs,
-            direction_seeds,
-            batch_size,
-            f32,
-            constants_f32,
-            taylor_fwd_2nd_f32
-        )
+        order: usize,
+    ) -> Result<super::TaylorKthBatchResult<f32>, GpuError> {
+        // Delegate to inherent method
+        self.taylor_forward_kth_batch(tape, primal_inputs, direction_seeds, batch_size, order)
     }
 }
 
@@ -743,6 +651,7 @@ impl CudaContext {
     }
 
     /// Batched second-order Taylor forward propagation (f64, CUDA only).
+    #[cfg(feature = "stde")]
     pub fn taylor_forward_2nd_batch_f64(
         &self,
         tape: &CudaTapeBuffersF64,
@@ -750,16 +659,14 @@ impl CudaContext {
         direction_seeds: &[f64],
         batch_size: u32,
     ) -> Result<super::TaylorBatchResult<f64>, GpuError> {
-        cuda_taylor_fwd_2nd_body!(
-            self,
-            tape,
-            primal_inputs,
-            direction_seeds,
-            batch_size,
-            f64,
-            constants_f64,
-            taylor_fwd_2nd_f64
-        )
+        let kth =
+            self.taylor_forward_kth_batch_f64(tape, primal_inputs, direction_seeds, batch_size, 3)?;
+        let mut coeffs = kth.coefficients.into_iter();
+        Ok(super::TaylorBatchResult {
+            values: coeffs.next().unwrap(),
+            c1s: coeffs.next().unwrap(),
+            c2s: coeffs.next().unwrap(),
+        })
     }
 
     // ── K-th order Taylor forward (lazy-compiled codegen kernels) ──

@@ -149,6 +149,9 @@ pub trait GpuBackend {
     ///
     /// Returns `TaylorBatchResult` with `values`, `c1s`, `c2s` each of size
     /// `[f32; batch_size * num_outputs]`.
+    /// Batched second-order Taylor forward propagation.
+    ///
+    /// Default implementation delegates to `taylor_forward_kth_batch(order=3)`.
     #[cfg(feature = "stde")]
     fn taylor_forward_2nd_batch(
         &self,
@@ -156,7 +159,36 @@ pub trait GpuBackend {
         primal_inputs: &[f32],
         direction_seeds: &[f32],
         batch_size: u32,
-    ) -> Result<TaylorBatchResult<f32>, GpuError>;
+    ) -> Result<TaylorBatchResult<f32>, GpuError> {
+        let kth =
+            self.taylor_forward_kth_batch(tape, primal_inputs, direction_seeds, batch_size, 3)?;
+        let mut coeffs = kth.coefficients.into_iter();
+        Ok(TaylorBatchResult {
+            values: coeffs.next().unwrap(),
+            c1s: coeffs.next().unwrap(),
+            c2s: coeffs.next().unwrap(),
+        })
+    }
+
+    /// Batched K-th order Taylor forward propagation.
+    ///
+    /// Supports `order` in 1..=5. Each batch element pushes one direction through
+    /// the tape, producing K Taylor coefficients (c0, c1, ..., c_{K-1}).
+    ///
+    /// `primal_inputs` is `[f32; batch_size * num_inputs]` — primals for each element.
+    /// `direction_seeds` is `[f32; batch_size * num_inputs]` — c1 seeds for each element.
+    ///
+    /// Returns `TaylorKthBatchResult` with `coefficients[k]` of size
+    /// `[f32; batch_size * num_outputs]` for each k in 0..order.
+    #[cfg(feature = "stde")]
+    fn taylor_forward_kth_batch(
+        &self,
+        tape: &Self::TapeBuffers,
+        primal_inputs: &[f32],
+        direction_seeds: &[f32],
+        batch_size: u32,
+        order: usize,
+    ) -> Result<TaylorKthBatchResult<f32>, GpuError>;
 }
 
 /// Result of a batched second-order Taylor forward propagation.

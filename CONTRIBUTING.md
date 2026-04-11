@@ -191,7 +191,7 @@ src/
 │   ├── cuda_backend.rs    # CudaContext (NVIDIA, f32+f64) [gpu-cuda]
 │   ├── stde_gpu.rs        # GPU-accelerated STDE functions [stde]
 │   ├── shaders/           # 5 WGSL compute shaders [gpu-wgpu]
-│   └── kernels/           # CUDA kernels (tape_eval.cu, taylor_eval.cu) [gpu-cuda]
+│   └── kernels/           # CUDA kernels (tape_eval.cu) [gpu-cuda]
 ├── faer_support.rs        # faer integration [faer]
 ├── nalgebra_support.rs    # nalgebra integration [nalgebra]
 ├── ndarray_support.rs     # ndarray integration [ndarray]

@@ -9,8 +9,8 @@ use std::fmt::Write;
 
 /// Generate a complete WGSL shader for K-th order Taylor forward propagation.
 ///
-/// The generated shader has the same bind group layout as `taylor_forward_2nd.wgsl`
-/// but works with K coefficients per jet instead of 3.
+/// The generated shader uses the standard Taylor bind group layout
+/// with K coefficients per jet (K=1..5).
 ///
 /// # Panics
 /// Panics if `k` is not in 1..=5.
