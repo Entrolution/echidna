@@ -211,6 +211,8 @@ fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usi
                 *v = *v * inv_norm;
             }
             // Move to rank position
+            // BUG-HUNT-NOTE: i == rank is a loop invariant (both start at 0, both increment on
+            // accept, neither changes on reject+swap_remove). This swap is defensive dead code.
             if i != rank {
                 columns.swap(i, rank);
             }

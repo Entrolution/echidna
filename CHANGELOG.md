@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-11
+
+### Fixed
+
+#### GPU Taylor kernels (CUDA + wgpu, codegen)
+- **POWI at x=0**: GPU now returns `jet_const(0)` for `0^n` (n>=2) instead of NaN from `ln(0)`. Negative exponents at x=0 correctly produce Inf.
+- **REM higher-order coefficients**: GPU REM now loads the full b jet and computes `r[k] = a[k] - q * b[k]`, matching CPU Taylor behavior for non-constant divisors.
+- **POWF a<=0 higher-order coefficients**: GPU now propagates explicit NaN for c2+ when base is non-positive, matching CPU `powf` IEEE semantics. Previously silently zeroed.
+- **POWF WGSL K=1 out-of-bounds**: guarded `r.v[1]` write with `if k > 1`, matching CUDA.
+- **ATAN2 b=0 higher-order coefficients**: GPU now computes full Taylor composition via `jet_div(b,a)` + `jet_atan` + negate, matching CPU for K>=3.
+- **`_sign` consistency**: CUDA codegen and `tape_eval.cu` now use `copysign(1, x)` matching Rust's `signum` for `-0.0`. WGSL uses `select` (cannot distinguish `-0.0`).
+- **u32 index overflow**: all CUDA kernel index arithmetic widened to `unsigned long long` to support batch_size * num_variables > 2^32.
+
+#### Core AD
+- **atan2 underflow**: `Dual`, `DualVec`, and `Reverse` now use `hypot` for the denominator in `atan2`, preventing underflow for very small inputs (~1e-200).
+- **taylor_cbrt**: uses `c.len()` (output length) for iteration, consistent with all other Taylor functions.
+- **Nonsmooth NaN consistency**: `is_smooth` and `active_kinks` now handle NaN switching values consistently (NaN = not smooth, appears in active kinks).
+- **Fract kink tracking**: `OpCode::Fract` added to `is_nonsmooth` and `forward_nonsmooth` for kink proximity detection.
+
+#### Laurent series
+- **Sub assertion parity**: `Laurent::Sub` now has the same pole-order gap assertion as `Add`, preventing silent truncation.
+- **`is_zero` semantics**: `Laurent::is_zero()` now checks all coefficients via `is_all_zero_pub()`, correctly returning `false` for series with `pole_order > 0` and nonzero coefficients.
+- **max/min NaN handling**: `Laurent::max/min` now return the non-NaN argument, matching `Dual`/`Reverse`/`BReverse`.
+- **powi pole_order overflow**: uses `checked_mul` instead of unchecked `i32` multiplication.
+
+#### echidna-optim
+- **Piggyback forward-adjoint stale x_bar**: `piggyback_forward_adjoint_solve` now performs a final reverse pass with the converged lambda, matching `piggyback_adjoint_solve` and eliminating O(tol) gradient bias.
+- **NaN gradient detection**: all three solvers (trust region, L-BFGS, Newton) now detect NaN/Inf in gradient or function value and terminate with `NumericalError`.
+- **Trust region negative predicted reduction**: rejects step and shrinks radius when the quadratic model predicts worsening, preventing spurious expansion.
+- **Steihaug CG tolerance**: uses relative tolerance (`sqrt(epsilon) * ||g||`) instead of absolute `epsilon`, improving CG convergence for both large and small gradients.
+- **Trust region radius shrink**: uses `0.25 * radius` (standard algorithm) instead of `0.25 * step_norm`.
+- **L-BFGS gamma overflow**: guards against subnormal `y^T y` causing infinite scaling.
+
+#### Bytecode tape
+- **`sparse_jacobian_par` custom ops**: forward-mode path now uses `forward_tangent_dual` for correct primal evaluation at fresh inputs.
+- **Deserialization validation**: validates structural consistency (lengths, bounds, opcode types) on deserialization, preventing panics from malformed tapes.
+- **Hessian custom ops**: `debug_assert!` at entry of `hessian_vec`, `sparse_hessian_vec`, and `sparse_jacobian_vec` warns about approximate second derivatives through custom ops.
+
+### Added
+- **Reentrant borrow guards**: `with_active_tape` and `with_active_btape` now detect reentrant calls via RAII guards, panicking instead of creating aliased `&mut` references.
+- **u32 overflow guard**: `debug_assert` on tape variable count prevents silent index wrapping.
+- 17 regression tests covering all fixed bugs.
+
 ## [0.7.0] - 2026-04-11
 
 ### Added

@@ -60,13 +60,15 @@ impl<F: Float> NonsmoothInfo<F> {
     pub fn active_kinks(&self, tol: F) -> Vec<&KinkEntry<F>> {
         self.kinks
             .iter()
-            .filter(|k| k.switching_value.abs() < tol)
+            .filter(|k| k.switching_value.abs() < tol || !k.switching_value.is_finite())
             .collect()
     }
 
     /// True if no kinks are active within the given tolerance.
     pub fn is_smooth(&self, tol: F) -> bool {
-        self.kinks.iter().all(|k| k.switching_value.abs() >= tol)
+        self.kinks
+            .iter()
+            .all(|k| k.switching_value.is_finite() && k.switching_value.abs() >= tol)
     }
 
     /// Branch signature: `(tape_index, branch)` pairs for all kinks.

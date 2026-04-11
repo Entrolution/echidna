@@ -152,6 +152,15 @@ impl<F: Float> super::BytecodeTape<F> {
                         },
                     });
                 }
+                OpCode::Fract => {
+                    // Kink at integer values, same as Floor/Ceil/Trunc.
+                    kinks.push(crate::nonsmooth::KinkEntry {
+                        tape_index: i as u32,
+                        opcode: op,
+                        switching_value: a - a.round(),
+                        branch: if a.fract() >= F::zero() { 1 } else { -1 },
+                    });
+                }
                 OpCode::Round => {
                     // Round has kinks at half-integers (0.5, 1.5, ...),
                     // not at integers. Shift by 0.5 to measure distance

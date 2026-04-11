@@ -272,7 +272,8 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        let denom = self.re * self.re + other.re * other.re;
+        let h = self.re.hypot(other.re);
+        let denom = h * h;
         if denom == F::zero() {
             return DualVec {
                 re: self.re.atan2(other.re),

@@ -647,15 +647,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         writeln!(s, "            }}").unwrap();
     }
 
-    // REM: d(a%b)/da = 1 a.e.; b is constant in Taylor mode — pass through a's jet
+    // REM: a % b = a - trunc(a[0]/b[0]) * b. Higher-order: r[k] = a[k] - q * b[k].
     writeln!(s, "            case 6u: {{").unwrap();
-    writeln!(s, "                let b_val = jets[j_base + b_idx * K];").unwrap();
-    writeln!(s, "                r = a;").unwrap();
-    writeln!(
-        s,
-        "                r.v[0] = a.v[0] - trunc(a.v[0] / b_val) * b_val;"
-    )
-    .unwrap();
+    writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
+    writeln!(s, "                let q = trunc(a.v[0] / b.v[0]);").unwrap();
+    writeln!(s, "                r.v[0] = a.v[0] - q * b.v[0];").unwrap();
+    for i in 1..k {
+        writeln!(s, "                r.v[{i}] = a.v[{i}] - q * b.v[{i}];").unwrap();
+    }
     writeln!(s, "            }}").unwrap();
 
     // POWF — guard a<=0 (ln(a) is NaN/Inf)
@@ -674,9 +673,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     )
     .unwrap();
     writeln!(s, "                    r.v[0] = val;").unwrap();
-    writeln!(s, "                    r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
+    if k > 1 {
+        writeln!(s, "                    r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
+    }
     for i in 2..k {
-        writeln!(s, "                    r.v[{i}] = 0.0;").unwrap();
+        // CPU powf with negative base produces NaN through exp(b*ln(negative)).
+        // Use explicit NaN to match CPU behavior regardless of whether val is finite.
+        writeln!(s, "                    r.v[{i}] = 0.0 / 0.0;").unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
@@ -696,9 +699,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         writeln!(s, "                        r.v[{i}] = 0.0;").unwrap();
     }
     writeln!(s, "                    }} else {{").unwrap();
-    writeln!(s, "                        let inv_a = 1.0 / a.v[0];").unwrap();
+    // b.v[0]==0, a.v[0]!=0: use atan2(a,b) = -atan(b/a) + pi/2*sign(a).
+    // Compute full Taylor composition: ratio=b/a (ratio.v[0]=0), c=atan(ratio), negate.
+    writeln!(s, "                        let ratio = jet_div(b, a);").unwrap();
+    writeln!(s, "                        let c = jet_atan(ratio);").unwrap();
     for i in 1..k {
-        writeln!(s, "                        r.v[{i}] = -b.v[{i}] * inv_a;").unwrap();
+        writeln!(s, "                        r.v[{i}] = -c.v[{i}];").unwrap();
     }
     writeln!(s, "                    }}").unwrap();
     writeln!(s, "                }} else {{").unwrap();
@@ -788,7 +794,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                    r = jet_const(1.0);").unwrap();
     writeln!(s, "                }} else if n == 1.0 {{").unwrap();
     writeln!(s, "                    r = a;").unwrap();
-    writeln!(s, "                }} else if a.v[0] < 0.0 {{").unwrap();
+    // a.v[0] == 0 with n>=2: 0^n = 0 and all Taylor coefficients are 0.
+    // For negative n (e.g. 0^-2 = Inf), fall through to exp-ln path which correctly produces Inf.
+    // CPU uses repeated squaring which can produce nonzero higher-order terms (e.g. (εt)^2=ε²t²),
+    // but the GPU jet_const(0) avoids the NaN from ln(0) and is correct for the primal.
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni >= 2 {{").unwrap();
+    writeln!(s, "                    r = jet_const(0.0);").unwrap();
+    writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(
         s,
         "                    let sf = select(1.0, -1.0, ni % 2 != 0);"
@@ -894,9 +906,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "            case 34u: {{ r = jet_acosh(a); }}").unwrap();
     writeln!(s, "            case 35u: {{ r = jet_atanh(a); }}").unwrap();
 
-    // Nonsmooth
+    // Nonsmooth — ABS: use signum (±1 including at 0) to match Rust's f64::signum
     writeln!(s, "            case 36u: {{").unwrap();
-    writeln!(s, "                let sg = sign(a.v[0]);").unwrap();
+    writeln!(
+        s,
+        "                let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);"
+    )
+    .unwrap();
     writeln!(s, "                r.v[0] = abs(a.v[0]);").unwrap();
     for i in 1..k {
         writeln!(s, "                r.v[{i}] = sg * a.v[{i}];").unwrap();
@@ -906,7 +922,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "            case 37u, 38u, 39u, 40u, 41u: {{").unwrap();
     writeln!(s, "                var val = 0.0f;").unwrap();
     writeln!(s, "                switch op {{").unwrap();
-    writeln!(s, "                    case 37u: {{ val = sign(a.v[0]); }}").unwrap();
+    writeln!(
+        s,
+        "                    case 37u: {{ val = select(sign(a.v[0]), 1.0, a.v[0] == 0.0); }}"
+    )
+    .unwrap();
     writeln!(
         s,
         "                    case 38u: {{ val = floor(a.v[0]); }}"
@@ -1013,9 +1033,10 @@ fn write_cuda_opcodes(s: &mut String) {
 }
 
 fn write_cuda_helpers(s: &mut String) {
+    // _sign matches Rust's f64::signum: +1 for +0, -1 for -0, NaN for NaN.
     writeln!(
         s,
-        "__device__ F _sign(F x) {{ return (x > (F)0) - (x < (F)0); }}
+        "__device__ F _sign(F x) {{ return (x != x) ? x : copysign((F)1, x); }}
 __device__ F _cbrt_f(F x) {{ return (x >= (F)0) ? pow(x, (F)(1.0/3.0)) : -pow(-x, (F)(1.0/3.0)); }}
 __device__ F _fract(F x) {{ return x - floor(x); }}
 "
@@ -1385,7 +1406,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     .unwrap();
     writeln!(s, "    if (bid >= batch_size) return;").unwrap();
     writeln!(s, "    const unsigned int K = {k};").unwrap();
-    writeln!(s, "    unsigned int j_base = bid * num_variables * K;").unwrap();
+    writeln!(
+        s,
+        "    unsigned long long j_base = (unsigned long long)bid * num_variables * K;"
+    )
+    .unwrap();
 
     // Initialize
     writeln!(s, "    for (unsigned int i = 0; i < num_variables; i++) {{").unwrap();
@@ -1397,7 +1422,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "    }}").unwrap();
 
     // Set inputs
-    writeln!(s, "    unsigned int in_base = bid * num_inputs;").unwrap();
+    writeln!(
+        s,
+        "    unsigned long long in_base = (unsigned long long)bid * num_inputs;"
+    )
+    .unwrap();
     writeln!(s, "    for (unsigned int i = 0; i < num_inputs; i++) {{").unwrap();
     writeln!(s, "        unsigned int off = j_base + i * K;").unwrap();
     writeln!(s, "        jets[off] = primal_inputs[in_base + i];").unwrap();
@@ -1448,11 +1477,22 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "        }}").unwrap();
     }
 
-    // REM: d(a%b)/da = 1 a.e.; b is constant in Taylor mode — pass through a's jet
+    // REM: a % b = a - trunc(a[0]/b[0]) * b. Higher-order: r[k] = a[k] - q * b[k].
     writeln!(s, "        case 6: {{").unwrap();
-    writeln!(s, "            F b_val = jets[j_base + b_idx * K];").unwrap();
-    writeln!(s, "            r = a;").unwrap();
-    writeln!(s, "            r.v[0] = fmod(a.v[0], b_val); break;").unwrap();
+    writeln!(
+        s,
+        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+    )
+    .unwrap();
+    for c in 0..k {
+        writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
+    }
+    writeln!(s, "            F q = trunc(a.v[0] / b.v[0]);").unwrap();
+    writeln!(s, "            r.v[0] = fmod(a.v[0], b.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "            r.v[{i}] = a.v[{i}] - q * b.v[{i}];").unwrap();
+    }
+    writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
     // POWF — guard a<=0 (ln(a) is NaN/Inf)
@@ -1482,7 +1522,9 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "                r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
     }
     for i in 2..k {
-        writeln!(s, "                r.v[{i}] = F(0);").unwrap();
+        // CPU powf with negative base produces NaN through exp(b*ln(negative)).
+        // Use explicit NaN to match CPU behavior regardless of whether val is finite.
+        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
     }
     writeln!(s, "            }} else {{").unwrap();
     writeln!(s, "                JetK lna = jet_ln(a);").unwrap();
@@ -1509,10 +1551,13 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     for i in 1..k {
         writeln!(s, "                    r.v[{i}] = F(0);").unwrap();
     }
+    // b.v[0]==0, a.v[0]!=0: use atan2(a,b) = -atan(b/a) + pi/2*sign(a).
+    // Compute full Taylor composition: ratio=b/a (ratio.v[0]=0), c=atan(ratio), negate.
     writeln!(s, "                }} else {{").unwrap();
-    writeln!(s, "                    F inv_a = F(1) / a.v[0];").unwrap();
+    writeln!(s, "                    JetK ratio = jet_div(b, a);").unwrap();
+    writeln!(s, "                    JetK c = jet_atan(ratio);").unwrap();
     for i in 1..k {
-        writeln!(s, "                    r.v[{i}] = -b.v[{i}] * inv_a;").unwrap();
+        writeln!(s, "                    r.v[{i}] = -c.v[{i}];").unwrap();
     }
     writeln!(s, "                }}").unwrap();
     writeln!(s, "            }} else {{").unwrap();
@@ -1595,7 +1640,13 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            F n = (F)ni;").unwrap();
     writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
     writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
-    writeln!(s, "            else if (a.v[0] < F(0)) {{").unwrap();
+    // a.v[0] == 0 with n>=2: 0^n = 0. For negative n, fall through to exp-ln (produces Inf).
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni >= 2) {{ r = jet_const(F(0)); }}"
+    )
+    .unwrap();
+    writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
     writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
     writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
     writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
@@ -1732,7 +1783,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "    }}").unwrap();
 
     // Write outputs
-    writeln!(s, "    unsigned int out_base = bid * num_outputs * K;").unwrap();
+    writeln!(
+        s,
+        "    unsigned long long out_base = (unsigned long long)bid * num_outputs * K;"
+    )
+    .unwrap();
     writeln!(s, "    for (unsigned int j = 0; j < num_outputs; j++) {{").unwrap();
     writeln!(s, "        unsigned int oi = output_indices[j];").unwrap();
     writeln!(s, "        unsigned int src = j_base + oi * K;").unwrap();

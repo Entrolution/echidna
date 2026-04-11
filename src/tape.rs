@@ -90,6 +90,10 @@ impl<F: Float> Tape<F> {
     /// whose adjoints should not be zeroed during the reverse sweep.
     #[inline]
     pub fn new_variable(&mut self, value: F) -> (u32, F) {
+        debug_assert!(
+            self.num_variables < u32::MAX - 1,
+            "tape variable count overflow: exceeded u32::MAX"
+        );
         let idx = self.num_variables;
         self.num_variables += 1;
         (idx, value)
@@ -98,6 +102,10 @@ impl<F: Float> Tape<F> {
     /// Record a unary operation: `result = f(operand)` with precomputed `multiplier = df/d(operand)`.
     #[inline]
     pub fn push_unary(&mut self, operand_idx: u32, multiplier: F) -> u32 {
+        debug_assert!(
+            self.num_variables < u32::MAX - 1,
+            "tape variable count overflow: exceeded u32::MAX"
+        );
         let result_idx = self.num_variables;
         self.num_variables += 1;
 
@@ -116,6 +124,10 @@ impl<F: Float> Tape<F> {
     /// Record a binary operation with precomputed partial derivatives.
     #[inline]
     pub fn push_binary(&mut self, lhs_idx: u32, lhs_mult: F, rhs_idx: u32, rhs_mult: F) -> u32 {
+        debug_assert!(
+            self.num_variables < u32::MAX - 1,
+            "tape variable count overflow: exceeded u32::MAX"
+        );
         let result_idx = self.num_variables;
         self.num_variables += 1;
 
@@ -243,9 +255,35 @@ impl<F: TapeThreadLocal> Tape<F> {
     }
 }
 
+thread_local! {
+    static TAPE_BORROWED: Cell<bool> = const { Cell::new(false) };
+}
+
+struct TapeBorrowGuard;
+
+impl TapeBorrowGuard {
+    fn new() -> Self {
+        TAPE_BORROWED.with(|b| {
+            assert!(
+                !b.get(),
+                "reentrant with_active_tape call detected — this would create aliased &mut references"
+            );
+            b.set(true);
+        });
+        TapeBorrowGuard
+    }
+}
+
+impl Drop for TapeBorrowGuard {
+    fn drop(&mut self) {
+        TAPE_BORROWED.with(|b| b.set(false));
+    }
+}
+
 /// Access the active tape for the current thread. Panics if no tape is active.
 #[inline]
 pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R) -> R {
+    let _guard = TapeBorrowGuard::new();
     F::cell().with(|cell| {
         let ptr = cell.get();
         assert!(
@@ -255,6 +293,8 @@ pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R
         // SAFETY: The TapeGuard guarantees the pointer is valid for the
         // duration of the closure-based API scope, and only one mutable
         // reference exists at a time (single-threaded access via thread-local).
+        // The TapeBorrowGuard above ensures no reentrant calls create aliased
+        // &mut references.
         let tape = unsafe { &mut *ptr };
         f(tape)
     })

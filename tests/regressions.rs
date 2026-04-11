@@ -843,3 +843,89 @@ mod phase5_laurent {
         let _ = a + b; // should panic
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Bug hunt Phase 4 regression tests
+// ════════════════════════════════════════════════════════════════════════
+
+// ── #16: taylor_cbrt negative base ──
+
+#[cfg(feature = "taylor")]
+mod regression_16 {
+    use echidna::Taylor;
+
+    #[test]
+    fn regression_taylor_cbrt_negative_base() {
+        let x = Taylor::<f64, 5>::variable(-8.0);
+        let r = x.cbrt();
+        assert!(
+            (r.coeffs[0] - (-2.0)).abs() < 1e-10,
+            "cbrt(-8) should be -2, got {}",
+            r.coeffs[0]
+        );
+        // Higher-order coefficients should be finite
+        for k in 1..5 {
+            assert!(
+                r.coeffs[k].is_finite(),
+                "cbrt coefficient {} should be finite, got {}",
+                k,
+                r.coeffs[k]
+            );
+        }
+    }
+}
+
+// ── #17: atan2 underflow with very small inputs ──
+
+mod regression_17 {
+    use echidna::Dual;
+
+    #[test]
+    fn regression_atan2_underflow_small_inputs() {
+        // With very small inputs, the derivative should be finite (not NaN or Inf).
+        // The value may be zero due to underflow protection, which is acceptable.
+        let y = Dual::new(1e-200_f64, 1.0);
+        let x = Dual::new(1e-200_f64, 0.0);
+        let r = y.atan2(x);
+        assert!(
+            r.eps.is_finite(),
+            "atan2 derivative should be finite for small inputs, got {}",
+            r.eps
+        );
+    }
+}
+
+// ── #28: hessian_vec debug_assert with custom ops ──
+
+#[cfg(all(debug_assertions, feature = "bytecode"))]
+mod regression_28 {
+    use echidna::bytecode_tape::BtapeGuard;
+    use echidna::{BReverse, BytecodeTape, CustomOp};
+    use std::sync::Arc;
+
+    struct Scale;
+    impl CustomOp<f64> for Scale {
+        fn eval(&self, a: f64, _b: f64) -> f64 {
+            2.0 * a
+        }
+        fn partials(&self, _a: f64, _b: f64, _r: f64) -> (f64, f64) {
+            (2.0, 0.0)
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "custom ops")]
+    fn regression_hessian_vec_panics_with_custom_ops() {
+        let x = [1.0_f64];
+        let mut tape = BytecodeTape::with_capacity(10);
+        let handle = tape.register_custom(Arc::new(Scale));
+        let idx = tape.new_input(x[0]);
+        let input = BReverse::from_tape(x[0], idx);
+        let _guard = BtapeGuard::new(&mut tape);
+        let output = input.custom_unary(handle, 2.0 * x[0]);
+        tape.set_output(output.index());
+
+        // hessian_vec should debug_assert because custom ops are present
+        let _ = tape.hessian_vec::<1>(&x);
+    }
+}

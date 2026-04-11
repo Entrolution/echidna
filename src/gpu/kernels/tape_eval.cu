@@ -63,8 +63,8 @@ typedef FLOAT_TYPE F;
 #define UNUSED 0xFFFFFFFFu
 
 // Math helpers — use the right precision
-// Match Rust's f64::signum: returns ±1 for all finite values (including ±0), NaN for NaN.
-__device__ F _sign(F x) { return (x != x) ? x : (x >= F(0)) ? F(1) : F(-1); }
+// Match Rust's f64::signum: +1 for +0, -1 for -0, NaN for NaN.
+__device__ F _sign(F x) { return (x != x) ? x : copysign(F(1), x); }
 __device__ F _cbrt(F x) { return copysign(pow(fabs(x), F(1.0/3.0)), x); }
 __device__ F _fract(F x) { return x - floor(x); }
 
@@ -89,8 +89,8 @@ extern "C" __global__ void forward_eval(
     unsigned int bid = blockIdx.x * blockDim.x + threadIdx.x;
     if (bid >= batch_size) return;
 
-    unsigned int v_base = bid * num_variables;
-    unsigned int in_base = bid * num_inputs;
+    unsigned long long v_base = (unsigned long long)bid * num_variables;
+    unsigned long long in_base = (unsigned long long)bid * num_inputs;
 
     // Initialize from constants
     for (unsigned int i = 0; i < num_variables; i++) {
@@ -164,7 +164,7 @@ extern "C" __global__ void forward_eval(
     }
 
     // Write outputs
-    unsigned int out_base = bid * num_outputs;
+    unsigned long long out_base = (unsigned long long)bid * num_outputs;
     for (unsigned int j = 0; j < num_outputs; j++) {
         outputs[out_base + j] = values[v_base + output_indices[j]];
     }
@@ -189,8 +189,8 @@ extern "C" __global__ void reverse_sweep(
     unsigned int bid = blockIdx.x * blockDim.x + threadIdx.x;
     if (bid >= batch_size) return;
 
-    unsigned int v_base = bid * num_variables;
-    unsigned int a_base = bid * num_variables;
+    unsigned long long v_base = (unsigned long long)bid * num_variables;
+    unsigned long long a_base = (unsigned long long)bid * num_variables;
 
     // Zero adjoints
     for (unsigned int i = 0; i < num_variables; i++) {
@@ -294,7 +294,7 @@ extern "C" __global__ void reverse_sweep(
     }
 
     // Write gradients
-    unsigned int g_base = bid * num_inputs;
+    unsigned long long g_base = (unsigned long long)bid * num_inputs;
     for (unsigned int i = 0; i < num_inputs; i++) {
         grad_out[g_base + i] = adjoints[a_base + i];
     }
@@ -323,8 +323,8 @@ extern "C" __global__ void tangent_forward(
     unsigned int bid = blockIdx.x * blockDim.x + threadIdx.x;
     if (bid >= batch_size) return;
 
-    unsigned int base = bid * num_variables;
-    unsigned int in_base = bid * num_inputs;
+    unsigned long long base = (unsigned long long)bid * num_variables;
+    unsigned long long in_base = (unsigned long long)bid * num_inputs;
 
     // Initialize
     for (unsigned int i = 0; i < num_variables; i++) {
@@ -422,7 +422,7 @@ extern "C" __global__ void tangent_forward(
     }
 
     // Write tangent outputs
-    unsigned int out_base = bid * num_outputs;
+    unsigned long long out_base = (unsigned long long)bid * num_outputs;
     for (unsigned int j = 0; j < num_outputs; j++) {
         tangent_outputs[out_base + j] = tangents[base + output_indices[j]];
     }
@@ -453,8 +453,8 @@ extern "C" __global__ void tangent_reverse(
     unsigned int bid = blockIdx.x * blockDim.x + threadIdx.x;
     if (bid >= batch_size) return;
 
-    unsigned int base = bid * num_variables;
-    unsigned int in_base = bid * num_inputs;
+    unsigned long long base = (unsigned long long)bid * num_variables;
+    unsigned long long in_base = (unsigned long long)bid * num_inputs;
 
     // Phase 1: Forward tangent pass
     for (unsigned int i = 0; i < num_variables; i++) {
@@ -670,7 +670,7 @@ extern "C" __global__ void tangent_reverse(
     }
 
     // Write gradient and HVP outputs
-    unsigned int g_base = bid * num_inputs;
+    unsigned long long g_base = (unsigned long long)bid * num_inputs;
     for (unsigned int i = 0; i < num_inputs; i++) {
         grad_out[g_base + i] = adj_re[base + i];
         hvp_out[g_base + i] = adj_eps[base + i];

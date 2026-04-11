@@ -210,13 +210,9 @@ impl<F: Float> super::BytecodeTape<F> {
                             }
                         })
                         .collect();
-                    // Forward tangent with F (not Dual) direction
-                    // We need to do forward_into first, then forward tangent
-                    // But forward_tangent uses self.values, so we need a workaround.
-                    // Use Dual<F> with tangent = direction.
                     let inputs: Vec<Dual<F>> = (0..n).map(|i| Dual::new(x[i], dir[i])).collect();
                     let mut dv = Vec::new();
-                    self.forward_tangent(&inputs, &mut dv);
+                    self.forward_tangent_dual(&inputs, &mut dv);
                     out_indices.iter().map(|&oi| dv[oi as usize].eps).collect()
                 })
                 .collect();

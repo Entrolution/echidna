@@ -46,6 +46,78 @@ impl<'de, F: Float + Deserialize<'de>> Deserialize<'de> for BytecodeTape<F> {
         }
 
         let data = TapeData::<F>::deserialize(deserializer)?;
+
+        let nv = data.num_variables as usize;
+        if data.opcodes.len() != data.arg_indices.len() {
+            return Err(serde::de::Error::custom(format!(
+                "opcodes.len() ({}) != arg_indices.len() ({})",
+                data.opcodes.len(),
+                data.arg_indices.len()
+            )));
+        }
+        if data.opcodes.len() != nv {
+            return Err(serde::de::Error::custom(format!(
+                "opcodes.len() ({}) != num_variables ({})",
+                data.opcodes.len(),
+                nv
+            )));
+        }
+        if data.values.len() != nv {
+            return Err(serde::de::Error::custom(format!(
+                "values.len() ({}) != num_variables ({})",
+                data.values.len(),
+                nv
+            )));
+        }
+        if data.num_inputs > data.num_variables {
+            return Err(serde::de::Error::custom(format!(
+                "num_inputs ({}) > num_variables ({})",
+                data.num_inputs, data.num_variables
+            )));
+        }
+        for i in 0..data.num_inputs as usize {
+            if data.opcodes[i] != OpCode::Input {
+                return Err(serde::de::Error::custom(format!(
+                    "opcodes[{}] should be Input but is {:?}",
+                    i, data.opcodes[i]
+                )));
+            }
+        }
+        if data.output_index != u32::MAX && data.output_index >= data.num_variables {
+            return Err(serde::de::Error::custom(format!(
+                "output_index ({}) >= num_variables ({})",
+                data.output_index, data.num_variables
+            )));
+        }
+        for (i, &oi) in data.output_indices.iter().enumerate() {
+            if oi >= data.num_variables {
+                return Err(serde::de::Error::custom(format!(
+                    "output_indices[{}] ({}) >= num_variables ({})",
+                    i, oi, data.num_variables
+                )));
+            }
+        }
+        for (i, &[a, b]) in data.arg_indices.iter().enumerate() {
+            if data.opcodes[i] != OpCode::Input
+                && data.opcodes[i] != OpCode::Const
+                && data.opcodes[i] != OpCode::Custom
+            {
+                if a >= data.num_variables {
+                    return Err(serde::de::Error::custom(format!(
+                        "arg_indices[{}][0] ({}) >= num_variables ({})",
+                        i, a, data.num_variables
+                    )));
+                }
+                // b may be UNUSED (0xFFFFFFFF) for unary ops, or a powi exponent
+                if b != u32::MAX && data.opcodes[i] != OpCode::Powi && b >= data.num_variables {
+                    return Err(serde::de::Error::custom(format!(
+                        "arg_indices[{}][1] ({}) >= num_variables ({})",
+                        i, b, data.num_variables
+                    )));
+                }
+            }
+        }
+
         Ok(BytecodeTape {
             opcodes: data.opcodes,
             arg_indices: data.arg_indices,

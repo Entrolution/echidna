@@ -507,3 +507,73 @@ fn forward_adjoint_non_convergent() {
     let result = piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12);
     assert!(result.is_none(), "should not converge for non-contraction");
 }
+
+// ============================================================
+// Bug hunt regression tests
+// ============================================================
+
+// ── #6: Piggyback forward-adjoint consistency ──
+// Verify that piggyback_forward_adjoint_solve produces x_bar consistent
+// with piggyback_adjoint_solve for the same problem.
+
+#[test]
+fn regression_6_forward_adjoint_vs_adjoint_consistency() {
+    // G([z0,z1], [x0,x1]) = [0.4*z0 + x0, 0.3*z1 + x1]
+    // z0* = x0/0.6, z1* = x1/0.7
+    let make_tape = || {
+        record_multi(
+            |v| {
+                let z0 = v[0];
+                let z1 = v[1];
+                let x0 = v[2];
+                let x1 = v[3];
+                let one = x0 / x0;
+                let pt4 = (one + one) / (one + one + one + one + one);
+                let pt3 =
+                    (one + one + one) / (one + one + one + one + one + one + one + one + one + one);
+                vec![pt4 * z0 + x0, pt3 * z1 + x1]
+            },
+            &[0.0_f64, 0.0, 1.2, 2.1],
+        )
+    };
+
+    let x = [1.2, 2.1];
+    let z_bar = [1.0, 0.5];
+
+    // Sequential: tangent solve to get z*, then adjoint
+    let (mut tape_seq, _) = make_tape();
+    let (z_star_seq, _, _) =
+        piggyback_tangent_solve(&tape_seq, &[0.0, 0.0], &x, &[1.0, 0.0], 2, 200, 1e-12)
+            .expect("tangent should converge");
+    let (x_bar_adj, _) =
+        piggyback_adjoint_solve(&mut tape_seq, &z_star_seq, &x, &z_bar, 2, 200, 1e-12)
+            .expect("adjoint should converge");
+
+    // Forward-adjoint interleaved
+    let (mut tape_fa, _) = make_tape();
+    let (z_star_fa, x_bar_fa, _) =
+        piggyback_forward_adjoint_solve(&mut tape_fa, &[0.0, 0.0], &x, &z_bar, 2, 200, 1e-12)
+            .expect("forward-adjoint should converge");
+
+    // z* should agree
+    for i in 0..2 {
+        assert!(
+            (z_star_fa[i] - z_star_seq[i]).abs() < 1e-8,
+            "z*[{}]: forward-adjoint={}, sequential={}",
+            i,
+            z_star_fa[i],
+            z_star_seq[i]
+        );
+    }
+
+    // x_bar should agree between the two methods
+    for j in 0..2 {
+        assert!(
+            (x_bar_fa[j] - x_bar_adj[j]).abs() < 1e-7,
+            "x_bar[{}]: forward-adjoint={}, adjoint={}",
+            j,
+            x_bar_fa[j],
+            x_bar_adj[j]
+        );
+    }
+}

@@ -167,6 +167,19 @@ fn roundtrip_tape_cbor() {
     }
 }
 
+// ── #26: Malformed tape deserialization returns error ──
+
+#[test]
+fn regression_26_malformed_tape_deserialization_returns_error() {
+    // Mismatched opcodes/arg_indices lengths: 2 opcodes but only 1 arg_indices entry
+    let json = r#"{"opcodes":[0,1],"arg_indices":[[0,0]],"values":[0.0,1.0],"num_inputs":1,"num_variables":2,"output_index":1,"output_indices":[1],"custom_ops":{},"custom_second_args":{}}"#;
+    let result: Result<echidna::BytecodeTape<f64>, _> = serde_json::from_str(json);
+    assert!(
+        result.is_err(),
+        "mismatched opcodes/arg_indices lengths should fail deserialization"
+    );
+}
+
 #[test]
 fn roundtrip_nonsmooth_info() {
     use num_traits::Float;

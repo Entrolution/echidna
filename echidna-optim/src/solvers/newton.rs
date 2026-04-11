@@ -63,6 +63,19 @@ pub fn newton<F: Float, O: Objective<F>>(
     let mut func_evals = 1usize;
     let mut grad_norm = norm(&grad);
 
+    // NaN/Inf detection
+    if !grad_norm.is_finite() || !f_val.is_finite() {
+        return OptimResult {
+            x,
+            value: f_val,
+            gradient: grad,
+            gradient_norm: grad_norm,
+            iterations: 0,
+            func_evals,
+            termination: TerminationReason::NumericalError,
+        };
+    }
+
     if grad_norm < config.convergence.grad_tol {
         return OptimResult {
             x,
@@ -127,6 +140,19 @@ pub fn newton<F: Float, O: Objective<F>>(
         grad = result.1;
         hess = result.2;
         grad_norm = norm(&grad);
+
+        // NaN/Inf detection
+        if !grad_norm.is_finite() || !f_val.is_finite() {
+            return OptimResult {
+                x,
+                value: f_val,
+                gradient: grad,
+                gradient_norm: grad_norm,
+                iterations: iter + 1,
+                func_evals,
+                termination: TerminationReason::NumericalError,
+            };
+        }
 
         // Convergence checks
         if grad_norm < config.convergence.grad_tol {

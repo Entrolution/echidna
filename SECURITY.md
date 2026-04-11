@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| >= 0.7.0 | Yes       |
-| < 0.7.0  | No        |
+| >= 0.8.0 | Yes       |
+| < 0.8.0  | No        |
 
-Only the latest minor release receives security updates. Versions prior to 0.6.0 have known correctness bugs including: silent NaN in Max/Min with NaN arguments (BReverse/bytecode), division by zero in atan2(0,0) derivatives, wrong powf exponent derivatives at b=0, GPU Taylor NaN for negative bases in powi/powf, and zeroed REM Taylor coefficients.
+Only the latest minor release receives security updates. Versions prior to 0.8.0 have known correctness bugs including: GPU Taylor coefficient errors for POWI at x=0, REM with non-constant divisors, POWF with negative base, and ATAN2 at b=0 for K>=3; silent NaN in Laurent max/min; piggyback forward-adjoint gradient bias; optimizer NaN non-detection; and trust region convergence issues.
 
 ## Reporting a Vulnerability
 

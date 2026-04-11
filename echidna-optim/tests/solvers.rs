@@ -902,3 +902,153 @@ fn trust_region_avoids_saddle() {
         y_expected
     );
 }
+
+// ============================================================
+// Bug hunt regression tests
+// ============================================================
+
+// ── #9: NaN gradient detection ──
+
+/// Objective that always returns NaN value and gradient.
+struct NanGradObj;
+
+impl Objective<f64> for NanGradObj {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn eval_grad(&mut self, _x: &[f64]) -> (f64, Vec<f64>) {
+        (f64::NAN, vec![f64::NAN; 2])
+    }
+
+    fn eval_hessian(&mut self, _x: &[f64]) -> (f64, Vec<f64>, Vec<Vec<f64>>) {
+        (f64::NAN, vec![f64::NAN; 2], vec![vec![f64::NAN; 2]; 2])
+    }
+
+    fn hvp(&mut self, _x: &[f64], v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        (vec![f64::NAN; 2], v.to_vec())
+    }
+}
+
+#[test]
+fn regression_9_trust_region_nan_gradient_terminates() {
+    let config = TrustRegionConfig::default();
+    let result = trust_region(&mut NanGradObj, &[1.0, 1.0], &config);
+    assert_eq!(
+        result.termination,
+        TerminationReason::NumericalError,
+        "Trust region should terminate with NumericalError on NaN gradient, got {:?}",
+        result.termination
+    );
+}
+
+#[test]
+fn regression_9_lbfgs_nan_gradient_terminates() {
+    let config = LbfgsConfig::default();
+    let result = lbfgs(&mut NanGradObj, &[1.0, 1.0], &config);
+    assert_eq!(
+        result.termination,
+        TerminationReason::NumericalError,
+        "L-BFGS should terminate with NumericalError on NaN gradient, got {:?}",
+        result.termination
+    );
+}
+
+#[test]
+fn regression_9_newton_nan_gradient_terminates() {
+    let config = NewtonConfig::default();
+    let result = newton(&mut NanGradObj, &[1.0, 1.0], &config);
+    assert_eq!(
+        result.termination,
+        TerminationReason::NumericalError,
+        "Newton should terminate with NumericalError on NaN gradient, got {:?}",
+        result.termination
+    );
+}
+
+// ── #10: Negative predicted reduction ──
+
+/// f(x) = -x^2 : negative-definite Hessian. Trust region should handle this
+/// without expanding the radius (predicted reduction would be negative).
+struct NegDefQuadratic;
+
+impl Objective<f64> for NegDefQuadratic {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn eval_grad(&mut self, x: &[f64]) -> (f64, Vec<f64>) {
+        let f = -(x[0] * x[0] + x[1] * x[1]);
+        let g = vec![-2.0 * x[0], -2.0 * x[1]];
+        (f, g)
+    }
+
+    fn hvp(&mut self, x: &[f64], v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let g = vec![-2.0 * x[0], -2.0 * x[1]];
+        let hv = vec![-2.0 * v[0], -2.0 * v[1]];
+        (g, hv)
+    }
+}
+
+#[test]
+fn regression_10_trust_region_negative_predicted_reduction() {
+    // f(x) = -x^2 has no local minimum (it's concave). The trust-region solver
+    // should terminate sensibly (not loop forever or produce NaN).
+    let config = TrustRegionConfig {
+        convergence: ConvergenceParams {
+            max_iter: 50,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let result = trust_region(&mut NegDefQuadratic, &[1.0, 1.0], &config);
+    // Should terminate without panicking. We don't require a specific reason
+    // since there is no local minimum, but the result must be finite.
+    assert!(
+        result.value.is_finite(),
+        "Trust region on concave f should produce finite value, got {}",
+        result.value
+    );
+    for (i, &xi) in result.x.iter().enumerate() {
+        assert!(xi.is_finite(), "x[{}] should be finite, got {}", i, xi);
+    }
+}
+
+// ── #27: L-BFGS gamma overflow on flat objective ──
+
+/// Very flat objective: f(x) = epsilon * sum(x_i^2). Gradients are tiny,
+/// which can cause gamma = y^T s / (y^T y) to overflow when y is near-zero.
+struct VeryFlatQuadratic;
+
+impl Objective<f64> for VeryFlatQuadratic {
+    fn dim(&self) -> usize {
+        2
+    }
+
+    fn eval_grad(&mut self, x: &[f64]) -> (f64, Vec<f64>) {
+        let eps = 1e-30;
+        let f = eps * 0.5 * x.iter().map(|&xi| xi * xi).sum::<f64>();
+        let g: Vec<f64> = x.iter().map(|&xi| eps * xi).collect();
+        (f, g)
+    }
+}
+
+#[test]
+fn regression_27_lbfgs_gamma_overflow_flat_objective() {
+    let config = LbfgsConfig {
+        convergence: ConvergenceParams {
+            max_iter: 50,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let result = lbfgs(&mut VeryFlatQuadratic, &[1.0, 1.0], &config);
+    // Should terminate without NaN values
+    assert!(
+        !result.value.is_nan(),
+        "L-BFGS on very flat objective should not produce NaN value"
+    );
+    for (i, &xi) in result.x.iter().enumerate() {
+        assert!(!xi.is_nan(), "x[{}] should not be NaN", i);
+    }
+}

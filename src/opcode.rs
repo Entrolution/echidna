@@ -127,10 +127,11 @@ pub enum OpCode {
 ///
 /// Includes both operations with nontrivial subdifferentials (`Abs`, `Min`,
 /// `Max` — where the two sides of the kink have different derivatives) and
-/// step-function operations (`Signum`, `Floor`, `Ceil`, `Round`, `Trunc` —
-/// where both sides have zero derivative but the value is discontinuous).
+/// step-function operations (`Signum`, `Floor`, `Ceil`, `Round`, `Trunc`,
+/// `Fract` — where both sides have zero derivative, or in `Fract`'s case
+/// identical derivative, but the value is discontinuous).
 ///
-/// All eight ops are tracked for kink proximity detection via
+/// All nine ops are tracked for kink proximity detection via
 /// [`NonsmoothInfo::active_kinks`](crate::nonsmooth::NonsmoothInfo::active_kinks).
 /// Use [`has_nontrivial_subdifferential`] to distinguish the subset that
 /// contributes distinct limiting Jacobians for Clarke enumeration.
@@ -147,6 +148,7 @@ pub fn is_nonsmooth(op: OpCode) -> bool {
             | OpCode::Ceil
             | OpCode::Round
             | OpCode::Trunc
+            | OpCode::Fract
     )
 }
 
@@ -173,6 +175,7 @@ pub fn has_nontrivial_subdifferential(op: OpCode) -> bool {
 /// - `Max`: `sign >= 0` → `(1, 0)` (first arg wins), `sign < 0` → `(0, 1)`
 /// - `Min`: `sign >= 0` → `(1, 0)` (first arg wins), `sign < 0` → `(0, 1)`
 /// - `Signum`, `Floor`, `Ceil`, `Round`, `Trunc`: `(0, 0)` regardless of sign
+/// - `Fract`: `(1, 0)` regardless of sign (derivative is 1 on both sides)
 #[inline]
 pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8) -> (T, T) {
     let zero = T::zero();
@@ -194,6 +197,11 @@ pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8)
         }
         OpCode::Signum | OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
             (zero, zero)
+        }
+        OpCode::Fract => {
+            // fract(x) = x - floor(x); derivative is 1 on both sides of the
+            // integer discontinuity.
+            (one, zero)
         }
         _ => reverse_partials(op, a, b, r),
     }
