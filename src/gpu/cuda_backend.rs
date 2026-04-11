@@ -16,7 +16,7 @@
 //! let results = ctx.forward_batch(&tape_bufs, &[1.0f32, 2.0, 3.0, 4.0], 2).unwrap();
 //! ```
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cudarc::driver::{
     CudaContext as CudarContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
@@ -486,6 +486,13 @@ pub struct CudaContext {
     tangent_fwd_f64: CudaFunction,
     tangent_rev_f64: CudaFunction,
     taylor_fwd_2nd_f64: CudaFunction,
+    // K-specialized Taylor forward kernels, compiled lazily on first use.
+    // Index 0 = K=1, index 4 = K=5. Uses Mutex for interior mutability
+    // since taylor_forward_kth_batch takes &self.
+    #[cfg(feature = "stde")]
+    taylor_fwd_kth_f32: Mutex<[Option<CudaFunction>; 5]>,
+    #[cfg(feature = "stde")]
+    taylor_fwd_kth_f64: Mutex<[Option<CudaFunction>; 5]>,
 }
 
 impl CudaContext {
@@ -540,6 +547,10 @@ impl CudaContext {
             tangent_fwd_f64,
             tangent_rev_f64,
             taylor_fwd_2nd_f64,
+            #[cfg(feature = "stde")]
+            taylor_fwd_kth_f32: Mutex::new([None, None, None, None, None]),
+            #[cfg(feature = "stde")]
+            taylor_fwd_kth_f64: Mutex::new([None, None, None, None, None]),
         })
     }
 
@@ -749,6 +760,233 @@ impl CudaContext {
             constants_f64,
             taylor_fwd_2nd_f64
         )
+    }
+
+    // ── K-th order Taylor forward (lazy-compiled codegen kernels) ──
+
+    /// Lazily compile and cache the K-specialized Taylor forward kernel.
+    ///
+    /// Uses double-checked locking: the mutex is released during PTX
+    /// compilation to avoid blocking concurrent callers.
+    #[cfg(feature = "stde")]
+    fn get_taylor_kth_kernel(
+        &self,
+        order: usize,
+        f32_mode: bool,
+    ) -> Result<CudaFunction, GpuError> {
+        let mutex = if f32_mode {
+            &self.taylor_fwd_kth_f32
+        } else {
+            &self.taylor_fwd_kth_f64
+        };
+
+        // Fast path: already compiled
+        {
+            let kernels = mutex.lock().map_err(|e| GpuError::Other(e.to_string()))?;
+            if let Some(ref func) = kernels[order - 1] {
+                return Ok(func.clone());
+            }
+        } // lock released before compilation
+
+        // Slow path: compile outside the lock
+        let float_type = if f32_mode { "float" } else { "double" };
+        let src = format!(
+            "#define FLOAT_TYPE {float_type}\n{}",
+            super::taylor_codegen::generate_taylor_cuda(order)
+        );
+        let ptx = compile_ptx(&src).map_err(cuda_err)?;
+        let module = self.ctx.load_module(ptx).map_err(cuda_err)?;
+        let func = module
+            .load_function("taylor_forward_kth")
+            .map_err(cuda_err)?;
+
+        // Re-acquire lock and cache (another thread may have beaten us)
+        let mut kernels = mutex.lock().map_err(|e| GpuError::Other(e.to_string()))?;
+        if kernels[order - 1].is_none() {
+            kernels[order - 1] = Some(func.clone());
+        }
+        Ok(kernels[order - 1].as_ref().unwrap().clone())
+    }
+
+    /// Batched K-th order Taylor forward propagation (f32).
+    ///
+    /// Supports `order` in 1..=5. Kernels are compiled lazily on first use.
+    /// Returns K coefficient vectors, where `coefficients[k]` has
+    /// `batch_size * num_outputs` elements.
+    #[cfg(feature = "stde")]
+    pub fn taylor_forward_kth_batch(
+        &self,
+        tape: &CudaTapeBuffers,
+        primal_inputs: &[f32],
+        direction_seeds: &[f32],
+        batch_size: u32,
+        order: usize,
+    ) -> Result<super::TaylorKthBatchResult<f32>, GpuError> {
+        if !(1..=5).contains(&order) {
+            return Err(GpuError::Other(format!(
+                "unsupported Taylor order {order}, must be 1..=5"
+            )));
+        }
+        let k = order as u32;
+        let s = &self.stream;
+        let ni = tape.num_inputs;
+        let nv = tape.num_variables;
+        let no = tape.num_outputs;
+        let total_in = (batch_size * ni) as usize;
+
+        assert_eq!(
+            primal_inputs.len(),
+            total_in,
+            "primal_inputs length mismatch"
+        );
+        assert_eq!(
+            direction_seeds.len(),
+            total_in,
+            "direction_seeds length mismatch"
+        );
+
+        let kernel = self.get_taylor_kth_kernel(order, true)?;
+
+        let d_primals = s.clone_htod(primal_inputs).map_err(cuda_err)?;
+        let d_seeds = s.clone_htod(direction_seeds).map_err(cuda_err)?;
+        let mut d_jets = s
+            .alloc_zeros::<f32>((batch_size * nv * k) as usize)
+            .map_err(cuda_err)?;
+        let mut d_jet_out = s
+            .alloc_zeros::<f32>((batch_size * no * k) as usize)
+            .map_err(cuda_err)?;
+
+        let cfg = LaunchConfig {
+            grid_dim: Self::grid_dim(batch_size),
+            block_dim: Self::block_dim(),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = s.launch_builder(&kernel);
+        builder.arg(&tape.opcodes);
+        builder.arg(&tape.arg0);
+        builder.arg(&tape.arg1);
+        builder.arg(&tape.constants_f32);
+        builder.arg(&d_primals);
+        builder.arg(&d_seeds);
+        builder.arg(&mut d_jets);
+        builder.arg(&mut d_jet_out);
+        builder.arg(&tape.output_indices);
+        builder.arg(&tape.num_ops);
+        builder.arg(&ni);
+        builder.arg(&nv);
+        builder.arg(&no);
+        builder.arg(&batch_size);
+        // SAFETY: All device buffers are correctly sized, kernel compiled from our
+        // codegen source, grid/block dimensions match batch size.
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
+
+        s.synchronize().map_err(cuda_err)?;
+        let raw = s.clone_dtoh(&d_jet_out).map_err(cuda_err)?;
+
+        // Deinterleave: raw is [c0, c1, ..., c_{K-1}] per output per batch element
+        let total_out = (batch_size * no) as usize;
+        let mut coefficients: Vec<Vec<f32>> =
+            (0..order).map(|_| Vec::with_capacity(total_out)).collect();
+        for i in 0..total_out {
+            for c in 0..order {
+                coefficients[c].push(raw[i * order + c]);
+            }
+        }
+
+        Ok(super::TaylorKthBatchResult {
+            coefficients,
+            order,
+        })
+    }
+
+    /// Batched K-th order Taylor forward propagation (f64, CUDA only).
+    ///
+    /// Supports `order` in 1..=5. Kernels are compiled lazily on first use.
+    #[cfg(feature = "stde")]
+    pub fn taylor_forward_kth_batch_f64(
+        &self,
+        tape: &CudaTapeBuffersF64,
+        primal_inputs: &[f64],
+        direction_seeds: &[f64],
+        batch_size: u32,
+        order: usize,
+    ) -> Result<super::TaylorKthBatchResult<f64>, GpuError> {
+        if !(1..=5).contains(&order) {
+            return Err(GpuError::Other(format!(
+                "unsupported Taylor order {order}, must be 1..=5"
+            )));
+        }
+        let k = order as u32;
+        let s = &self.stream;
+        let ni = tape.num_inputs;
+        let nv = tape.num_variables;
+        let no = tape.num_outputs;
+        let total_in = (batch_size * ni) as usize;
+
+        assert_eq!(
+            primal_inputs.len(),
+            total_in,
+            "primal_inputs length mismatch"
+        );
+        assert_eq!(
+            direction_seeds.len(),
+            total_in,
+            "direction_seeds length mismatch"
+        );
+
+        let kernel = self.get_taylor_kth_kernel(order, false)?;
+
+        let d_primals = s.clone_htod(primal_inputs).map_err(cuda_err)?;
+        let d_seeds = s.clone_htod(direction_seeds).map_err(cuda_err)?;
+        let mut d_jets = s
+            .alloc_zeros::<f64>((batch_size * nv * k) as usize)
+            .map_err(cuda_err)?;
+        let mut d_jet_out = s
+            .alloc_zeros::<f64>((batch_size * no * k) as usize)
+            .map_err(cuda_err)?;
+
+        let cfg = LaunchConfig {
+            grid_dim: Self::grid_dim(batch_size),
+            block_dim: Self::block_dim(),
+            shared_mem_bytes: 0,
+        };
+
+        let mut builder = s.launch_builder(&kernel);
+        builder.arg(&tape.opcodes);
+        builder.arg(&tape.arg0);
+        builder.arg(&tape.arg1);
+        builder.arg(&tape.constants_f64);
+        builder.arg(&d_primals);
+        builder.arg(&d_seeds);
+        builder.arg(&mut d_jets);
+        builder.arg(&mut d_jet_out);
+        builder.arg(&tape.output_indices);
+        builder.arg(&tape.num_ops);
+        builder.arg(&ni);
+        builder.arg(&nv);
+        builder.arg(&no);
+        builder.arg(&batch_size);
+        // SAFETY: All device buffers are correctly sized, kernel compiled from our
+        // codegen source, grid/block dimensions match batch size.
+        unsafe { builder.launch(cfg) }.map_err(cuda_err)?;
+
+        s.synchronize().map_err(cuda_err)?;
+        let raw = s.clone_dtoh(&d_jet_out).map_err(cuda_err)?;
+
+        let total_out = (batch_size * no) as usize;
+        let mut coefficients: Vec<Vec<f64>> =
+            (0..order).map(|_| Vec::with_capacity(total_out)).collect();
+        for i in 0..total_out {
+            for c in 0..order {
+                coefficients[c].push(raw[i * order + c]);
+            }
+        }
+
+        Ok(super::TaylorKthBatchResult {
+            coefficients,
+            order,
+        })
     }
 
     // ── f64 operations ──
