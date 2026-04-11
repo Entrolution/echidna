@@ -8,6 +8,7 @@ use simba::scalar::{ComplexField, Field, RealField, SubsetOf};
 use simba::simd::{PrimitiveSimdValue, SimdValue};
 
 use crate::dual::Dual;
+use crate::dual_vec::DualVec;
 use crate::float::Float;
 use crate::reverse::Reverse;
 use crate::tape::TapeThreadLocal;
@@ -57,6 +58,47 @@ impl<F: Float> SimdValue for Dual<F> {
 
 impl<F: Float> PrimitiveSimdValue for Dual<F> {}
 
+impl<F: Float, const N: usize> SimdValue for DualVec<F, N> {
+    const LANES: usize = 1;
+    type Element = Self;
+    type SimdBool = bool;
+
+    #[inline(always)]
+    fn splat(val: Self::Element) -> Self {
+        val
+    }
+    #[inline(always)]
+    fn extract(&self, _: usize) -> Self::Element {
+        *self
+    }
+    #[inline(always)]
+    // SAFETY: This is a single-lane (LANES=1) scalar type, so the lane index
+    // is always 0 and the operation is trivially safe regardless of input.
+    unsafe fn extract_unchecked(&self, _: usize) -> Self::Element {
+        *self
+    }
+    #[inline(always)]
+    fn replace(&mut self, _: usize, val: Self::Element) {
+        *self = val;
+    }
+    #[inline(always)]
+    // SAFETY: This is a single-lane (LANES=1) scalar type, so the lane index
+    // is always 0 and the operation is trivially safe regardless of input.
+    unsafe fn replace_unchecked(&mut self, _: usize, val: Self::Element) {
+        *self = val;
+    }
+    #[inline(always)]
+    fn select(self, cond: Self::SimdBool, other: Self) -> Self {
+        if cond {
+            self
+        } else {
+            other
+        }
+    }
+}
+
+impl<F: Float, const N: usize> PrimitiveSimdValue for DualVec<F, N> {}
+
 impl<F: Float + TapeThreadLocal> SimdValue for Reverse<F> {
     const LANES: usize = 1;
     type Element = Self;
@@ -103,6 +145,7 @@ impl<F: Float + TapeThreadLocal> PrimitiveSimdValue for Reverse<F> {}
 // ══════════════════════════════════════════════
 
 impl<F: Float> Field for Dual<F> {}
+impl<F: Float, const N: usize> Field for DualVec<F, N> {}
 impl<F: Float + TapeThreadLocal> Field for Reverse<F> {}
 
 // ══════════════════════════════════════════════
@@ -187,6 +230,87 @@ impl SubsetOf<Dual<f64>> for f32 {
     #[inline]
     fn is_in_subset(element: &Dual<f64>) -> bool {
         element.eps == 0.0
+    }
+}
+
+// Identity: DualVec<F, N> ⊂ DualVec<F, N>
+impl<F: Float, const N: usize> SubsetOf<DualVec<F, N>> for DualVec<F, N> {
+    #[inline]
+    fn to_superset(&self) -> DualVec<F, N> {
+        *self
+    }
+    #[inline]
+    fn from_superset_unchecked(element: &DualVec<F, N>) -> Self {
+        *element
+    }
+    #[inline]
+    fn is_in_subset(_: &DualVec<F, N>) -> bool {
+        true
+    }
+}
+
+// f64 ⊂ DualVec<f64, N>  (lossless: f64 → constant dual vector)
+impl<const N: usize> SubsetOf<DualVec<f64, N>> for f64 {
+    #[inline]
+    fn to_superset(&self) -> DualVec<f64, N> {
+        DualVec::constant(*self)
+    }
+    #[inline]
+    fn from_superset_unchecked(element: &DualVec<f64, N>) -> Self {
+        element.re
+    }
+    #[inline]
+    fn is_in_subset(element: &DualVec<f64, N>) -> bool {
+        element.eps.into_iter().all(|e| e == 0.0)
+    }
+}
+
+// f32 ⊂ DualVec<f32, N>  (lossless: f32 → constant dual vector)
+impl<const N: usize> SubsetOf<DualVec<f32, N>> for f32 {
+    #[inline]
+    fn to_superset(&self) -> DualVec<f32, N> {
+        DualVec::constant(*self)
+    }
+    #[inline]
+    fn from_superset_unchecked(element: &DualVec<f32, N>) -> Self {
+        element.re
+    }
+    #[inline]
+    fn is_in_subset(element: &DualVec<f32, N>) -> bool {
+        element.eps.into_iter().all(|e| e == 0.0)
+    }
+}
+
+// f64 ⊂ DualVec<f32, N>  (lossy: f64 → f32 → constant dual vector)
+// Required by ComplexField: SupersetOf<f64>
+impl<const N: usize> SubsetOf<DualVec<f32, N>> for f64 {
+    #[inline]
+    fn to_superset(&self) -> DualVec<f32, N> {
+        DualVec::constant(*self as f32)
+    }
+    #[inline]
+    fn from_superset_unchecked(element: &DualVec<f32, N>) -> Self {
+        element.re as f64
+    }
+    #[inline]
+    fn is_in_subset(element: &DualVec<f32, N>) -> bool {
+        element.eps.into_iter().all(|e| e == 0.0)
+    }
+}
+
+// f32 ⊂ DualVec<f64, N>  (lossless: f32 → f64 → constant dual vector)
+impl<const N: usize> SubsetOf<DualVec<f64, N>> for f32 {
+    #[inline]
+    fn to_superset(&self) -> DualVec<f64, N> {
+        DualVec::constant(*self as f64)
+    }
+    #[inline]
+    fn from_superset_unchecked(element: &DualVec<f64, N>) -> Self {
+        element.re as f32
+    }
+    #[inline]
+    fn is_in_subset(element: &DualVec<f64, N>) -> bool {
+        element.eps.into_iter().all(|e| e == 0.0)
     }
 }
 
@@ -308,6 +432,53 @@ where
 }
 
 impl<F: Float> UlpsEq for Dual<F>
+where
+    F: UlpsEq<Epsilon = F>,
+{
+    #[inline]
+    fn default_max_ulps() -> u32 {
+        F::default_max_ulps()
+    }
+
+    #[inline]
+    fn ulps_eq(&self, other: &Self, epsilon: Self, max_ulps: u32) -> bool {
+        self.re.ulps_eq(&other.re, epsilon.re, max_ulps)
+    }
+}
+
+impl<F: Float, const N: usize> AbsDiffEq for DualVec<F, N>
+where
+    F: AbsDiffEq<Epsilon = F>,
+{
+    type Epsilon = Self;
+
+    #[inline]
+    fn default_epsilon() -> Self {
+        DualVec::constant(F::default_epsilon())
+    }
+
+    #[inline]
+    fn abs_diff_eq(&self, other: &Self, epsilon: Self) -> bool {
+        self.re.abs_diff_eq(&other.re, epsilon.re)
+    }
+}
+
+impl<F: Float, const N: usize> RelativeEq for DualVec<F, N>
+where
+    F: RelativeEq<Epsilon = F>,
+{
+    #[inline]
+    fn default_max_relative() -> Self {
+        DualVec::constant(F::default_max_relative())
+    }
+
+    #[inline]
+    fn relative_eq(&self, other: &Self, epsilon: Self, max_relative: Self) -> bool {
+        self.re.relative_eq(&other.re, epsilon.re, max_relative.re)
+    }
+}
+
+impl<F: Float, const N: usize> UlpsEq for DualVec<F, N>
 where
     F: UlpsEq<Epsilon = F>,
 {
@@ -697,6 +868,334 @@ macro_rules! impl_real_field_dual {
 
 impl_real_field_dual!(f32);
 impl_real_field_dual!(f64);
+
+// ══════════════════════════════════════════════
+//  ComplexField for DualVec<F, N>
+// ══════════════════════════════════════════════
+
+// We implement ComplexField concretely for f32 and f64 to satisfy all trait
+// bounds (SubsetOf conversions require concrete types). Use a macro to avoid
+// duplication.
+
+macro_rules! impl_complex_field_dual_vec {
+    ($f:ty) => {
+        impl<const N: usize> ComplexField for DualVec<$f, N> {
+            type RealField = Self;
+
+            #[inline]
+            fn from_real(re: Self::RealField) -> Self {
+                re
+            }
+            #[inline]
+            fn real(self) -> Self::RealField {
+                self
+            }
+            #[inline]
+            fn imaginary(self) -> Self::RealField {
+                Self::zero()
+            }
+            #[inline]
+            fn modulus(self) -> Self::RealField {
+                DualVec::abs(self)
+            }
+            #[inline]
+            fn modulus_squared(self) -> Self::RealField {
+                self * self
+            }
+            #[inline]
+            fn argument(self) -> Self::RealField {
+                if self.re >= <$f>::zero() {
+                    Self::zero()
+                } else {
+                    Self::pi()
+                }
+            }
+            #[inline]
+            fn norm1(self) -> Self::RealField {
+                DualVec::abs(self)
+            }
+            #[inline]
+            fn scale(self, factor: Self::RealField) -> Self {
+                self * factor
+            }
+            #[inline]
+            fn unscale(self, factor: Self::RealField) -> Self {
+                self / factor
+            }
+            #[inline]
+            fn floor(self) -> Self {
+                DualVec::floor(self)
+            }
+            #[inline]
+            fn ceil(self) -> Self {
+                DualVec::ceil(self)
+            }
+            #[inline]
+            fn round(self) -> Self {
+                DualVec::round(self)
+            }
+            #[inline]
+            fn trunc(self) -> Self {
+                DualVec::trunc(self)
+            }
+            #[inline]
+            fn fract(self) -> Self {
+                DualVec::fract(self)
+            }
+            #[inline]
+            fn mul_add(self, a: Self, b: Self) -> Self {
+                DualVec::mul_add(self, a, b)
+            }
+            #[inline]
+            fn abs(self) -> Self::RealField {
+                DualVec::abs(self)
+            }
+            #[inline]
+            fn hypot(self, other: Self) -> Self::RealField {
+                DualVec::hypot(self, other)
+            }
+            #[inline]
+            fn recip(self) -> Self {
+                DualVec::recip(self)
+            }
+            #[inline]
+            fn conjugate(self) -> Self {
+                self // real type
+            }
+            #[inline]
+            fn sin(self) -> Self {
+                DualVec::sin(self)
+            }
+            #[inline]
+            fn cos(self) -> Self {
+                DualVec::cos(self)
+            }
+            #[inline]
+            fn sin_cos(self) -> (Self, Self) {
+                DualVec::sin_cos(self)
+            }
+            #[inline]
+            fn tan(self) -> Self {
+                DualVec::tan(self)
+            }
+            #[inline]
+            fn asin(self) -> Self {
+                DualVec::asin(self)
+            }
+            #[inline]
+            fn acos(self) -> Self {
+                DualVec::acos(self)
+            }
+            #[inline]
+            fn atan(self) -> Self {
+                DualVec::atan(self)
+            }
+            #[inline]
+            fn sinh(self) -> Self {
+                DualVec::sinh(self)
+            }
+            #[inline]
+            fn cosh(self) -> Self {
+                DualVec::cosh(self)
+            }
+            #[inline]
+            fn tanh(self) -> Self {
+                DualVec::tanh(self)
+            }
+            #[inline]
+            fn asinh(self) -> Self {
+                DualVec::asinh(self)
+            }
+            #[inline]
+            fn acosh(self) -> Self {
+                DualVec::acosh(self)
+            }
+            #[inline]
+            fn atanh(self) -> Self {
+                DualVec::atanh(self)
+            }
+            #[inline]
+            fn log(self, base: Self::RealField) -> Self {
+                DualVec::log(self, base)
+            }
+            #[inline]
+            fn log2(self) -> Self {
+                DualVec::log2(self)
+            }
+            #[inline]
+            fn log10(self) -> Self {
+                DualVec::log10(self)
+            }
+            #[inline]
+            fn ln(self) -> Self {
+                DualVec::ln(self)
+            }
+            #[inline]
+            fn ln_1p(self) -> Self {
+                DualVec::ln_1p(self)
+            }
+            #[inline]
+            fn sqrt(self) -> Self {
+                DualVec::sqrt(self)
+            }
+            #[inline]
+            fn exp(self) -> Self {
+                DualVec::exp(self)
+            }
+            #[inline]
+            fn exp2(self) -> Self {
+                DualVec::exp2(self)
+            }
+            #[inline]
+            fn exp_m1(self) -> Self {
+                DualVec::exp_m1(self)
+            }
+            #[inline]
+            fn powi(self, n: i32) -> Self {
+                DualVec::powi(self, n)
+            }
+            #[inline]
+            fn powf(self, n: Self::RealField) -> Self {
+                DualVec::powf(self, n)
+            }
+            #[inline]
+            fn powc(self, n: Self) -> Self {
+                DualVec::powf(self, n)
+            }
+            #[inline]
+            fn cbrt(self) -> Self {
+                DualVec::cbrt(self)
+            }
+            #[inline]
+            fn is_finite(&self) -> bool {
+                self.re.is_finite()
+            }
+            #[inline]
+            fn try_sqrt(self) -> Option<Self> {
+                if self.re >= <$f>::zero() {
+                    Some(DualVec::sqrt(self))
+                } else {
+                    None
+                }
+            }
+        }
+    };
+}
+
+impl_complex_field_dual_vec!(f32);
+impl_complex_field_dual_vec!(f64);
+
+// ══════════════════════════════════════════════
+//  RealField for DualVec<F, N>
+// ══════════════════════════════════════════════
+
+macro_rules! impl_real_field_dual_vec {
+    ($f:ty) => {
+        impl<const N: usize> RealField for DualVec<$f, N> {
+            #[inline]
+            fn is_sign_positive(&self) -> bool {
+                self.re.is_sign_positive()
+            }
+            #[inline]
+            fn is_sign_negative(&self) -> bool {
+                self.re.is_sign_negative()
+            }
+            #[inline]
+            fn copysign(self, sign: Self) -> Self {
+                DualVec::abs(self) * DualVec::signum(sign)
+            }
+            #[inline]
+            fn max(self, other: Self) -> Self {
+                DualVec::max(self, other)
+            }
+            #[inline]
+            fn min(self, other: Self) -> Self {
+                DualVec::min(self, other)
+            }
+            #[inline]
+            fn clamp(self, min: Self, max: Self) -> Self {
+                DualVec::max(DualVec::min(self, max), min)
+            }
+            #[inline]
+            fn atan2(self, other: Self) -> Self {
+                DualVec::atan2(self, other)
+            }
+            #[inline]
+            fn min_value() -> Option<Self> {
+                Some(DualVec::constant(<$f>::MIN))
+            }
+            #[inline]
+            fn max_value() -> Option<Self> {
+                Some(DualVec::constant(<$f>::MAX))
+            }
+
+            // ── Constants ──
+            #[inline]
+            fn pi() -> Self {
+                DualVec::constant(<$f>::PI())
+            }
+            #[inline]
+            fn two_pi() -> Self {
+                DualVec::constant(<$f>::TAU())
+            }
+            #[inline]
+            fn frac_pi_2() -> Self {
+                DualVec::constant(<$f>::FRAC_PI_2())
+            }
+            #[inline]
+            fn frac_pi_3() -> Self {
+                DualVec::constant(<$f>::FRAC_PI_3())
+            }
+            #[inline]
+            fn frac_pi_4() -> Self {
+                DualVec::constant(<$f>::FRAC_PI_4())
+            }
+            #[inline]
+            fn frac_pi_6() -> Self {
+                DualVec::constant(<$f>::FRAC_PI_6())
+            }
+            #[inline]
+            fn frac_pi_8() -> Self {
+                DualVec::constant(<$f>::FRAC_PI_8())
+            }
+            #[inline]
+            fn frac_1_pi() -> Self {
+                DualVec::constant(<$f>::FRAC_1_PI())
+            }
+            #[inline]
+            fn frac_2_pi() -> Self {
+                DualVec::constant(<$f>::FRAC_2_PI())
+            }
+            #[inline]
+            fn frac_2_sqrt_pi() -> Self {
+                DualVec::constant(<$f>::FRAC_2_SQRT_PI())
+            }
+            #[inline]
+            fn e() -> Self {
+                DualVec::constant(<$f>::E())
+            }
+            #[inline]
+            fn log2_e() -> Self {
+                DualVec::constant(<$f>::LOG2_E())
+            }
+            #[inline]
+            fn log10_e() -> Self {
+                DualVec::constant(<$f>::LOG10_E())
+            }
+            #[inline]
+            fn ln_2() -> Self {
+                DualVec::constant(<$f>::LN_2())
+            }
+            #[inline]
+            fn ln_10() -> Self {
+                DualVec::constant(<$f>::LN_10())
+            }
+        }
+    };
+}
+
+impl_real_field_dual_vec!(f32);
+impl_real_field_dual_vec!(f64);
 
 // ══════════════════════════════════════════════
 //  ComplexField for Reverse<F>
