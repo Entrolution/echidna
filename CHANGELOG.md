@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-11
+
+### Added
+
+- **CUDA kth-order Taylor evaluation**: `CudaContext::taylor_forward_kth_batch` and `taylor_forward_kth_batch_f64` support K=1..5 Taylor jet evaluation, bringing CUDA to parity with wgpu. Kernels are lazy-compiled on first use via `taylor_codegen::generate_taylor_cuda`.
+- **`taylor_forward_kth_batch` on `GpuBackend` trait**: promoted from inherent method to trait method, enabling generic GPU STDE code to use arbitrary-order Taylor evaluation on either backend.
+- **`taylor_forward_2nd_batch` default trait impl**: delegates to `taylor_forward_kth_batch(order=3)`, eliminating duplicated logic across both backends.
+- **CUDA Taylor opcode test parity**: `gpu_stde.rs` refactored with `opcode_tests_for_backend!` macro to run all per-opcode Taylor tests on both wgpu and CUDA.
+
+### Removed
+
+- **Handwritten `taylor_eval.cu`** (527 lines): replaced by codegen K=3 output. The CUDA backend now uses `taylor_codegen::generate_taylor_cuda` for all Taylor kernels.
+- **Handwritten `taylor_forward_2nd.wgsl`** (570 lines): replaced by codegen K=3 output. The wgpu backend now uses `taylor_codegen::generate_taylor_wgsl` for all Taylor shaders.
+- **`cuda_taylor_fwd_2nd_body!` macro**: no longer needed since `taylor_forward_2nd_batch` delegates to the kth-order path.
+
+### Changed
+
+- **`TrustRegionConfig`** (echidna-optim): new `min_radius: F` field added in 0.6.0 (breaking for direct struct construction; `Default` impls provide it).
+
 ## [0.6.0] - 2026-04-11
 
 ### Fixed
