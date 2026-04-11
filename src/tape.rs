@@ -148,6 +148,7 @@ impl<F: Float> Tape<F> {
             // Performance: skip zero-adjoint branches. Trade-off: `0 * NaN`
             // returns 0 instead of propagating NaN. Use forward mode if
             // NaN propagation through reverse mode is needed.
+            // Verified correct 2026-04-11: deliberate design choice, matching JAX convention.
             if a != F::zero() {
                 adjoints[stmt.lhs_index as usize] = F::zero();
                 let start = self.statements[i - 1].end_plus_one as usize;

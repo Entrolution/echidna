@@ -366,7 +366,15 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     #[inline]
     pub fn abs(self) -> Self {
         let mut coeffs = self.coeffs;
-        let sign = self.coeffs[0].signum();
+        // Use first nonzero coefficient's sign to determine the branch direction
+        // at zero, avoiding signum(+0.0) = 0 which would annihilate the jet.
+        let sign = if self.coeffs[0] != F::zero() {
+            self.coeffs[0].signum()
+        } else if let Some(k) = (1..K).find(|&k| self.coeffs[k] != F::zero()) {
+            self.coeffs[k].signum()
+        } else {
+            F::one()
+        };
         for c in &mut coeffs {
             *c = *c * sign;
         }

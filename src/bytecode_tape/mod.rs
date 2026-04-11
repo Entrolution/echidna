@@ -154,6 +154,10 @@ impl<F: Float> BytecodeTape<F> {
     /// Register a new input variable. Returns its index.
     #[inline]
     pub fn new_input(&mut self, value: F) -> u32 {
+        debug_assert!(
+            self.num_variables < u32::MAX,
+            "tape variable count overflow"
+        );
         let idx = self.num_variables;
         self.num_variables += 1;
         self.num_inputs += 1;
@@ -166,6 +170,10 @@ impl<F: Float> BytecodeTape<F> {
     /// Register a scalar constant. Returns its index.
     #[inline]
     pub fn push_const(&mut self, value: F) -> u32 {
+        debug_assert!(
+            self.num_variables < u32::MAX,
+            "tape variable count overflow"
+        );
         let idx = self.num_variables;
         self.num_variables += 1;
         self.opcodes.push(OpCode::Const);
@@ -208,6 +216,10 @@ impl<F: Float> BytecodeTape<F> {
             }
         }
 
+        debug_assert!(
+            self.num_variables < u32::MAX,
+            "tape variable count overflow"
+        );
         let idx = self.num_variables;
         self.num_variables += 1;
         self.opcodes.push(op);

@@ -589,6 +589,12 @@ impl CudaContext {
 impl GpuBackend for CudaContext {
     type TapeBuffers = CudaTapeBuffers;
 
+    /// # Panics
+    ///
+    /// Panics if CUDA device memory allocation fails (e.g., OOM). The
+    /// `GpuBackend` trait returns `Self::TapeBuffers` (not `Result`),
+    /// preventing graceful error handling. Use `upload_tape_f64` for
+    /// the `Result`-returning f64 variant.
     fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
         let s = &self.stream;
         CudaTapeBuffers {

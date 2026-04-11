@@ -416,7 +416,7 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
             self,
             other,
             OpCode::Max,
-            if self.value >= other.value {
+            if self.value >= other.value || other.value.is_nan() {
                 self.value
             } else {
                 other.value
@@ -429,7 +429,7 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
             self,
             other,
             OpCode::Min,
-            if self.value <= other.value {
+            if self.value <= other.value || other.value.is_nan() {
                 self.value
             } else {
                 other.value

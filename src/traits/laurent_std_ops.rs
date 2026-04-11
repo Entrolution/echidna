@@ -12,6 +12,13 @@ use crate::taylor_ops;
 //  Laurent<F, K> ↔ Laurent<F, K>
 // ══════════════════════════════════════════════
 
+/// # Truncation behavior
+///
+/// When the pole-order gap between the two operands exceeds `K - 1`, the
+/// lower-order coefficients of the smaller-magnitude operand are silently
+/// truncated to fit the fixed-size `[F; K]` array. This is inherent to the
+/// fixed-width Laurent representation and cannot be avoided without dynamic
+/// allocation.
 impl<F: Float, const K: usize> Add for Laurent<F, K> {
     type Output = Self;
     #[inline]
@@ -22,6 +29,12 @@ impl<F: Float, const K: usize> Add for Laurent<F, K> {
         // Align both to p_out by shifting
         let shift1 = (p1 - p_out) as usize;
         let shift2 = (p2 - p_out) as usize;
+        assert!(
+            shift1 < K && shift2 < K,
+            "Laurent Add: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
+            shift1.max(shift2),
+            K - 1,
+        );
 
         let a: [F; K] = std::array::from_fn(|i| {
             if i >= shift1 && i - shift1 < K {

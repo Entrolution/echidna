@@ -25,7 +25,7 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
     let mut lu: Vec<Vec<F>> = a.to_vec();
     let mut perm: Vec<usize> = (0..n).collect();
 
-    let eps = F::from(1e-12).unwrap_or_else(|| F::epsilon());
+    let eps = F::epsilon().sqrt();
 
     for col in 0..n {
         // Find pivot

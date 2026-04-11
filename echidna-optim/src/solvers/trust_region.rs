@@ -11,6 +11,9 @@ pub struct TrustRegionConfig<F> {
     pub initial_radius: F,
     /// Maximum trust-region radius (default: 100.0).
     pub max_radius: F,
+    /// Minimum trust-region radius (default: `F::epsilon()`).
+    /// Solver returns `NumericalError` if radius shrinks below this.
+    pub min_radius: F,
     /// Acceptance threshold for the ratio of actual to predicted reduction (default: 0.1).
     pub eta: F,
     /// Maximum CG iterations per trust-region subproblem (default: 2 * dim).
@@ -25,6 +28,7 @@ impl Default for TrustRegionConfig<f64> {
         TrustRegionConfig {
             initial_radius: 1.0,
             max_radius: 100.0,
+            min_radius: f64::EPSILON,
             eta: 0.1,
             max_cg_iter: 0,
             convergence: ConvergenceParams::default(),
@@ -37,6 +41,7 @@ impl Default for TrustRegionConfig<f32> {
         TrustRegionConfig {
             initial_radius: 1.0,
             max_radius: 100.0,
+            min_radius: f32::EPSILON,
             eta: 0.1,
             max_cg_iter: 0,
             convergence: ConvergenceParams::default(),
@@ -104,7 +109,9 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         let step = steihaug_cg(obj, &x, &grad, radius, max_cg, &mut func_evals);
 
         // Predicted reduction: -g^T s - 0.5 * s^T H s
-        // We need H*s for the predicted reduction; get it via hvp
+        // Note: this recomputes H*s outside of CG. For stateful objectives (e.g.,
+        // stochastic HVP estimators), this may diverge from the H*s used inside
+        // steihaug_cg. A future optimization could return gs/shs from CG directly.
         let (_, hvp_result) = obj.hvp(&x, &step);
         func_evals += 1;
         let gs = dot(&grad, &step);
@@ -135,7 +142,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
 
         // Update trust-region radius
         if rho < quarter {
-            radius = quarter * step_norm;
+            radius = (quarter * step_norm).max(config.min_radius);
         } else if rho > three_quarter && (step_norm - radius).abs() < F::epsilon() * radius {
             // Step was on the boundary and rho is good — expand
             radius = (two * radius).min(config.max_radius);
@@ -284,6 +291,9 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
 /// Solves `||s + tau * d||^2 = radius^2` for the positive root.
 fn boundary_tau<F: Float>(s: &[F], d: &[F], radius: F) -> F {
     let dd = dot(d, d);
+    if dd < F::epsilon() {
+        return F::zero();
+    }
     let sd = dot(s, d);
     let ss = dot(s, s);
     let two = F::one() + F::one();

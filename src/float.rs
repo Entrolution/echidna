@@ -23,7 +23,17 @@ use crate::bytecode_tape::BtapeThreadLocal;
 /// Implemented by primitive types (`f32`, `f64`) and by `Dual<F>`, which enables
 /// nested forward-mode: `Dual<Dual<f64>>` for second-order derivatives.
 pub trait Float:
-    NumFloat + FloatConst + FromPrimitive + Copy + Send + Sync + Default + Debug + Display + IsAllZero + 'static
+    NumFloat
+    + FloatConst
+    + FromPrimitive
+    + Copy
+    + Send
+    + Sync
+    + Default
+    + Debug
+    + Display
+    + IsAllZero
+    + 'static
 {
 }
 

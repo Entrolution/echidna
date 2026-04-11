@@ -69,10 +69,8 @@ mod phase1 {
 
     #[test]
     fn record_multi_mixed_constant() {
-        let (mut tape, vals) = record_multi(
-            |x| vec![x[0] * x[0], BReverse::constant(99.0)],
-            &[3.0],
-        );
+        let (mut tape, vals) =
+            record_multi(|x| vec![x[0] * x[0], BReverse::constant(99.0)], &[3.0]);
         assert_eq!(vals[0], 9.0);
         assert_eq!(vals[1], 99.0);
         // Verify gradient of first (non-constant) output works
@@ -118,7 +116,10 @@ mod phase2 {
         );
         let y = x.powi(3);
         // f''(-2) = 6*(-2) = -12, lives in eps.eps for nested dual
-        assert!(!y.eps.eps.is_nan(), "nested powi second derivative should not be NaN");
+        assert!(
+            !y.eps.eps.is_nan(),
+            "nested powi second derivative should not be NaN"
+        );
         assert!((y.eps.eps - (-12.0)).abs() < 1e-10);
     }
 
@@ -139,7 +140,10 @@ mod phase2 {
         let (mut tape, val) = echidna::record(|x| x[0].powi(0), &[0.0]);
         assert_eq!(val, 1.0);
         let grad = tape.gradient(&[0.0]);
-        assert!(!grad[0].is_nan(), "tape powi(0) gradient should be 0, not NaN");
+        assert!(
+            !grad[0].is_nan(),
+            "tape powi(0) gradient should be 0, not NaN"
+        );
         assert_eq!(grad[0], 0.0);
     }
 
@@ -149,7 +153,10 @@ mod phase2 {
         use echidna::Taylor;
         let t = Taylor::<f64, 4>::variable(0.0).powi(10);
         assert_eq!(t.coeffs[0], 0.0);
-        assert!(!t.coeffs[1].is_nan(), "taylor powi(10) at zero should not produce NaN");
+        assert!(
+            !t.coeffs[1].is_nan(),
+            "taylor powi(10) at zero should not produce NaN"
+        );
         // All derivatives of x^10 at x=0 are zero for orders 1-3
         assert_eq!(t.coeffs[1], 0.0);
         assert_eq!(t.coeffs[2], 0.0);
@@ -162,10 +169,16 @@ mod phase2 {
         use echidna::Taylor;
         let t = Taylor::<f64, 4>::variable(-8.0).cbrt();
         assert!((t.coeffs[0] - (-2.0)).abs() < 1e-12, "cbrt(-8) = -2");
-        assert!(!t.coeffs[1].is_nan(), "cbrt derivative of negative value should not be NaN");
+        assert!(
+            !t.coeffs[1].is_nan(),
+            "cbrt derivative of negative value should not be NaN"
+        );
         // Cross-validate derivative against finite differences
         let fd = super::finite_diff(|x| x.cbrt(), -8.0);
-        assert!((t.coeffs[1] - fd).abs() < 1e-4, "cbrt derivative should match FD");
+        assert!(
+            (t.coeffs[1] - fd).abs() < 1e-4,
+            "cbrt derivative should match FD"
+        );
     }
 
     #[cfg(feature = "bytecode")]
@@ -175,7 +188,10 @@ mod phase2 {
         let (mut tape, val) = echidna::record(|x| x[0].hypot(x[1]), &[0.0, 0.0]);
         assert_eq!(val, 0.0);
         let grad = tape.gradient(&[0.0, 0.0]);
-        assert!(!grad[0].is_nan(), "hypot(0,0) gradient should be 0, not NaN");
+        assert!(
+            !grad[0].is_nan(),
+            "hypot(0,0) gradient should be 0, not NaN"
+        );
         assert_eq!(grad[0], 0.0);
         assert_eq!(grad[1], 0.0);
     }
@@ -206,7 +222,10 @@ mod phase3_taylor {
         let t = a.atan2(b);
         let half_pi = std::f64::consts::FRAC_PI_2;
         assert!((t.coeffs[0] - half_pi).abs() < 1e-12, "atan2(1,0) = pi/2");
-        assert!(!t.coeffs[1].is_nan(), "atan2 derivative at b=0 should not be NaN");
+        assert!(
+            !t.coeffs[1].is_nan(),
+            "atan2 derivative at b=0 should not be NaN"
+        );
         assert_eq!(t.coeffs[1], 0.0, "d/da atan2(a,0) = 0 for a > 0");
     }
 }
@@ -233,7 +252,10 @@ mod phase3_laurent {
         let l = Laurent::<f64, 4>::variable(0.0);
         assert_ne!(l.pole_order(), 0);
         let result = l.log2();
-        assert!(result.value().is_nan(), "log2 of series with zero should be NaN");
+        assert!(
+            result.value().is_nan(),
+            "log2 of series with zero should be NaN"
+        );
     }
 
     #[test]
@@ -323,7 +345,10 @@ mod phase4 {
         let x = DualVec::<f64, 2>::with_tangent(0.0, 0);
         let y = x.powi(0);
         assert_eq!(y.re, 1.0);
-        assert!(!y.eps[0].is_nan(), "DualVec powi(0) eps should be 0, not NaN");
+        assert!(
+            !y.eps[0].is_nan(),
+            "DualVec powi(0) eps should be 0, not NaN"
+        );
         assert_eq!(y.eps[0], 0.0);
     }
 
@@ -414,7 +439,10 @@ mod phase1c_laurent {
     fn laurent_log10_pole_is_nan() {
         let l = Laurent::<f64, 4>::variable(0.0); // pole_order = 1
         let result = l.log10();
-        assert!(result.value().is_nan(), "log10 of series with zero should be NaN");
+        assert!(
+            result.value().is_nan(),
+            "log10 of series with zero should be NaN"
+        );
     }
 
     #[test]
@@ -493,5 +521,325 @@ mod rem_coverage {
         let grad = tape.gradient(&[7.0, 3.0]);
         assert_eq!(grad[0], 1.0, "d(a%b)/da = 1");
         assert_eq!(grad[1], -2.0, "d(a%b)/db = -trunc(7/3) = -2");
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Phase 5: Bug hunt 2 — 2026-04-10
+//
+// Batch 1: Core NaN & edge-case handling (B1, B3, B4, B11, B12)
+// ════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "bytecode")]
+mod phase5 {
+    use echidna::{record, BReverse};
+    use num_traits::Float;
+
+    // ── B1: BReverse/opcode Max/Min NaN handling ──
+
+    #[test]
+    fn breverse_max_with_nan() {
+        // max(5.0, NaN) should return 5.0, not NaN
+        let (mut tape, val) = record(|x: &[BReverse<f64>]| x[0].max(x[1]), &[5.0, f64::NAN]);
+        assert_eq!(val, 5.0, "max(5, NaN) should be 5");
+        let grad = tape.gradient(&[5.0, f64::NAN]);
+        assert_eq!(grad[0], 1.0, "gradient flows through the non-NaN arg");
+    }
+
+    #[test]
+    fn breverse_min_with_nan() {
+        // min(5.0, NaN) should return 5.0, not NaN
+        let (mut tape, val) = record(|x: &[BReverse<f64>]| x[0].min(x[1]), &[5.0, f64::NAN]);
+        assert_eq!(val, 5.0, "min(5, NaN) should be 5");
+        let grad = tape.gradient(&[5.0, f64::NAN]);
+        assert_eq!(grad[0], 1.0, "gradient flows through the non-NaN arg");
+    }
+
+    #[test]
+    fn opcode_max_nan_re_eval() {
+        // Record with normal values, then re-evaluate with NaN
+        let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0].max(x[1]), &[3.0, 4.0]);
+        tape.forward(&[5.0, f64::NAN]);
+        let grad = tape.gradient(&[5.0, f64::NAN]);
+        assert_eq!(grad[0], 1.0, "after re-eval, gradient through non-NaN arg");
+    }
+
+    // ── B3: atan2(0,0) derivative should not be NaN ──
+
+    #[test]
+    fn atan2_zero_zero_dual() {
+        use echidna::Dual;
+        let y = Dual::new(0.0_f64, 1.0);
+        let x = Dual::new(0.0_f64, 0.0);
+        let r = y.atan2(x);
+        assert!(
+            r.eps.is_finite(),
+            "atan2(0,0) dual derivative must be finite, got {}",
+            r.eps
+        );
+    }
+
+    #[test]
+    fn atan2_zero_zero_reverse() {
+        let g = echidna::api::grad(|x| x[0].atan2(x[1]), &[0.0_f64, 0.0]);
+        assert!(
+            g[0].is_finite(),
+            "atan2(0,0) reverse dy must be finite, got {}",
+            g[0]
+        );
+        assert!(
+            g[1].is_finite(),
+            "atan2(0,0) reverse dx must be finite, got {}",
+            g[1]
+        );
+    }
+
+    #[test]
+    fn atan2_zero_zero_breverse() {
+        let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0].atan2(x[1]), &[0.0, 0.0]);
+        let grad = tape.gradient(&[0.0, 0.0]);
+        assert!(grad[0].is_finite(), "atan2(0,0) breverse dy must be finite");
+        assert!(grad[1].is_finite(), "atan2(0,0) breverse dx must be finite");
+    }
+
+    // ── B4: powf(0,0) derivative should be 0, not NaN ──
+
+    #[test]
+    fn powf_zero_zero_dual() {
+        use echidna::Dual;
+        let x = Dual::new(0.0_f64, 1.0);
+        let n = Dual::new(0.0_f64, 0.0);
+        let r = x.powf(n);
+        assert_eq!(r.re, 1.0, "0^0 = 1");
+        assert_eq!(r.eps, 0.0, "d/dx(x^0) at x=0 = 0");
+    }
+
+    #[test]
+    fn powf_zero_zero_reverse() {
+        let g = echidna::api::grad(|x| x[0].powf(x[1]), &[0.0_f64, 0.0]);
+        assert!(
+            g[0].is_finite(),
+            "powf(0,0) reverse dx must be finite, got {}",
+            g[0]
+        );
+        assert!(
+            g[1].is_finite(),
+            "powf(0,0) reverse dy must be finite, got {}",
+            g[1]
+        );
+    }
+
+    #[test]
+    fn powf_positive_base_zero_exp_dual() {
+        // d/dy(x^y) at (2, 0) should be ln(2) ≈ 0.693
+        use echidna::Dual;
+        let x = Dual::new(2.0_f64, 0.0);
+        let n = Dual::new(0.0_f64, 1.0); // seed derivative w.r.t. exponent
+        let r = x.powf(n);
+        assert_eq!(r.re, 1.0, "2^0 = 1");
+        assert!(
+            (r.eps - 2.0_f64.ln()).abs() < 1e-12,
+            "d/dy(2^y) at y=0 = ln(2), got {}",
+            r.eps
+        );
+    }
+
+    #[test]
+    fn powf_positive_base_zero_exp_reverse() {
+        let g = echidna::api::grad(|x| x[0].powf(x[1]), &[2.0_f64, 0.0]);
+        assert_eq!(g[0], 0.0, "d/dx(x^0) = 0");
+        assert!(
+            (g[1] - 2.0_f64.ln()).abs() < 1e-12,
+            "d/dy(2^y) at y=0 = ln(2), got {}",
+            g[1]
+        );
+    }
+
+    #[test]
+    fn powf_positive_base_zero_exp_breverse() {
+        let (mut tape, val) = record(|x: &[BReverse<f64>]| x[0].powf(x[1]), &[2.0, 0.0]);
+        assert_eq!(val, 1.0, "2^0 = 1");
+        let grad = tape.gradient(&[2.0, 0.0]);
+        assert_eq!(grad[0], 0.0, "d/dx(x^0) = 0 via breverse");
+        assert!(
+            (grad[1] - 2.0_f64.ln()).abs() < 1e-12,
+            "d/dy(2^y) at y=0 = ln(2) via breverse, got {}",
+            grad[1]
+        );
+    }
+
+    // ── B11: Reverse powf(0, 2) derivative should be 0 ──
+
+    #[test]
+    fn powf_zero_base_reverse() {
+        // d/dx(x^2) at x=0 should be 0
+        let g = echidna::api::grad(|x| x[0].powf(x[1]), &[0.0_f64, 2.0]);
+        assert_eq!(g[0], 0.0, "d/dx(x^2) at x=0 should be 0");
+    }
+
+    #[test]
+    fn powf_zero_base_breverse() {
+        let (mut tape, val) = record(|x: &[BReverse<f64>]| x[0].powf(x[1]), &[0.0, 2.0]);
+        assert_eq!(val, 0.0, "0^2 = 0");
+        let grad = tape.gradient(&[0.0, 2.0]);
+        assert_eq!(grad[0], 0.0, "d/dx(x^2) at x=0 via breverse should be 0");
+    }
+
+    // ── B5: Checkpoint thinning produces uniform spacing ──
+
+    #[test]
+    fn checkpoint_thinning_online() {
+        // Exercise the actual online checkpointing path with enough steps to
+        // trigger multiple thinning rounds (num_steps=50, 3 checkpoint slots).
+        // Compare against non-checkpointed gradient.
+        let x0 = [0.5_f64, 1.0];
+        let num_steps = 50;
+
+        let step = |x: &[BReverse<f64>]| {
+            let half = BReverse::constant(0.5_f64);
+            vec![
+                x[0] * half + x[1].sin() * half,
+                x[0].cos() * half + x[1] * half,
+            ]
+        };
+        let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+
+        let g_online = echidna::grad_checkpointed_online(
+            step,
+            |_, step_idx| step_idx >= num_steps,
+            loss,
+            &x0,
+            3, // small budget forces many thinning rounds
+        );
+        let g_ref = echidna::grad_checkpointed(step, loss, &x0, num_steps, num_steps);
+
+        for i in 0..2 {
+            assert!(
+                (g_online[i] - g_ref[i]).abs() < 1e-10,
+                "B5 thinning regression at {}: online={}, ref={}",
+                i,
+                g_online[i],
+                g_ref[i]
+            );
+        }
+    }
+
+    // ── B15: Abs has zero Hessian in sparse pattern ──
+
+    #[test]
+    fn sparse_hessian_abs_no_diagonal() {
+        // f(x) = |x|, Hessian should be zero (or empty pattern)
+        let (tape, _) = record(|x: &[BReverse<f64>]| x[0].abs(), &[1.0]);
+        let (_value, _grad, pattern, hess_vals) = tape.sparse_hessian(&[1.0]);
+        // The pattern should have no entries (d²|x|/dx² = 0 a.e.)
+        assert!(
+            pattern.rows.is_empty(),
+            "sparse Hessian of |x| should have no structural entries, got {} entries",
+            pattern.rows.len()
+        );
+        assert!(hess_vals.is_empty(), "Hessian values should be empty");
+    }
+
+    #[test]
+    fn sparse_hessian_abs_composition() {
+        // f(x) = x * |x| has f''(x) = 2*signum(x) ≠ 0, so the Hessian pattern
+        // must still include the (0,0) entry even with Abs as ZeroDerivative.
+        // The Mul node's BinaryNonlinear classification captures this.
+        let (tape, _) = record(|x: &[BReverse<f64>]| x[0] * x[0].abs(), &[1.0]);
+        let (_value, _grad, pattern, hess_vals) = tape.sparse_hessian(&[1.0]);
+        assert!(
+            !pattern.rows.is_empty(),
+            "sparse Hessian of x*|x| should have structural entries"
+        );
+        // f''(1) = 2*signum(1) = 2
+        assert!(
+            (hess_vals[0] - 2.0).abs() < 1e-10,
+            "d²(x*|x|)/dx² at x=1 should be 2, got {}",
+            hess_vals[0]
+        );
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Phase 5 continued: Taylor/Laurent edge cases (B6, B7, B8)
+// ════════════════════════════════════════════════════════════════════════
+
+#[cfg(feature = "taylor")]
+mod phase5_taylor {
+    use echidna::Taylor;
+
+    // ── B6: abs(0) should not zero the entire jet ──
+
+    #[test]
+    fn taylor_abs_zero_positive_approach() {
+        // f(t) = t, so a = [0, 1, 0]. abs(f(t)) should have c[1] = +1
+        let t = Taylor::<f64, 3>::new([0.0, 1.0, 0.0]);
+        let r = t.abs();
+        assert_eq!(r.coeffs[0], 0.0, "abs(0) = 0");
+        assert_eq!(
+            r.coeffs[1], 1.0,
+            "d/dt |t| at t=0+ should be +1, got {}",
+            r.coeffs[1]
+        );
+    }
+
+    #[test]
+    fn taylor_abs_zero_negative_approach() {
+        // f(t) = -t, so a = [0, -1, 0]. abs(f(t)) should have c[1] = +1 (sign flipped)
+        let t = Taylor::<f64, 3>::new([0.0, -1.0, 0.0]);
+        let r = t.abs();
+        assert_eq!(r.coeffs[0], 0.0, "abs(0) = 0");
+        assert_eq!(
+            r.coeffs[1], 1.0,
+            "d/dt |-t| at t=0 should be +1, got {}",
+            r.coeffs[1]
+        );
+    }
+
+    // ── B7: taylor_cbrt at zero should not produce NaN ──
+
+    #[test]
+    fn taylor_cbrt_zero() {
+        let t = Taylor::<f64, 3>::new([0.0, 1.0, 0.0]);
+        let r = t.cbrt();
+        assert_eq!(r.coeffs[0], 0.0, "cbrt(0) = 0");
+        // cbrt'(0) = Inf, so c[1] should be Inf (not NaN)
+        assert!(
+            r.coeffs[1].is_infinite(),
+            "cbrt'(0) should be Inf, got {}",
+            r.coeffs[1]
+        );
+        assert!(!r.coeffs[1].is_nan(), "cbrt'(0) should not be NaN");
+    }
+
+    // ── B8: taylor_sqrt at zero returns Inf (not NaN) ──
+
+    #[test]
+    fn taylor_sqrt_zero() {
+        let t = Taylor::<f64, 3>::new([0.0, 1.0, 0.0]);
+        let r = t.sqrt();
+        assert_eq!(r.coeffs[0], 0.0, "sqrt(0) = 0");
+        // sqrt'(0) = 1/(2*sqrt(0)) = Inf
+        assert!(
+            r.coeffs[1].is_infinite(),
+            "sqrt'(0) should be Inf, got {}",
+            r.coeffs[1]
+        );
+        assert!(!r.coeffs[1].is_nan(), "sqrt'(0) should not be NaN");
+    }
+}
+
+#[cfg(feature = "laurent")]
+mod phase5_laurent {
+    // ── B9: Laurent Add panics on large pole-order gap ──
+
+    #[test]
+    #[should_panic(expected = "pole-order gap")]
+    fn laurent_add_truncation_panics() {
+        use echidna::Laurent;
+        // Pole orders -5 and 0 with K=4: gap=5 > K-1=3, should panic
+        let a = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], -5);
+        let b = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], 0);
+        let _ = a + b; // should panic
     }
 }

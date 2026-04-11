@@ -61,7 +61,8 @@ typedef FLOAT_TYPE F;
 #define OP_FRACT  42u
 
 // ── Math helpers ──
-__device__ F _sign(F x) { return (x > F(0)) - (x < F(0)); }
+// Match Rust's signum: ±1 for all finite values (including ±0), NaN for NaN.
+__device__ F _sign(F x) { return (x != x) ? x : (x >= F(0)) ? F(1) : F(-1); }
 __device__ F _cbrt_f(F x) { return copysign(pow(fabs(x), F(1.0/3.0)), x); }
 __device__ F _fract(F x) { return x - floor(x); }
 
@@ -328,23 +329,47 @@ extern "C" __global__ void taylor_forward_2nd(
                 r = jet_div(a, b); break;
             }
             case OP_REM: {
+                // d(a%b)/da = 1 a.e.; b is constant in Taylor mode
                 F bval = jets[j_base + bi * 3u];
-                r = Jet3(fmod(a.c0, bval), F(0), F(0)); break;
+                r = Jet3(fmod(a.c0, bval), a.c1, a.c2); break;
             }
             case OP_POWF: {
                 unsigned int b_off = j_base + bi * 3u;
                 Jet3 b(jets[b_off], jets[b_off+1u], jets[b_off+2u]);
-                Jet3 lna = jet_ln(a);
-                Jet3 product = jet_mul(b, lna);
-                r = jet_exp(product);
-                r.c0 = pow(a.c0, b.c0); break;
+                if (a.c0 <= F(0)) {
+                    // Fallback: primal + first-order chain rule (c2 conservative zero)
+                    r.c0 = pow(a.c0, b.c0);
+                    F da = b.c0 * pow(a.c0, b.c0 - F(1));
+                    F db = (r.c0 == F(0)) ? F(0) : r.c0 * log(fabs(a.c0));
+                    r.c1 = da * a.c1 + db * b.c1;
+                    r.c2 = F(0);
+                } else {
+                    Jet3 lna = jet_ln(a);
+                    Jet3 product = jet_mul(b, lna);
+                    r = jet_exp(product);
+                    r.c0 = pow(a.c0, b.c0);
+                }
+                break;
             }
             case OP_ATAN2: {
                 unsigned int b_off = j_base + bi * 3u;
                 Jet3 b(jets[b_off], jets[b_off+1u], jets[b_off+2u]);
-                Jet3 ratio = jet_div(a, b);
-                Jet3 at = jet_atan(ratio);
-                r = Jet3(atan2(a.c0, b.c0), at.c1, at.c2); break;
+                if (b.c0 == F(0)) {
+                    // Direct formula: d(atan2)/da = b/(a²+b²) = 0, d(atan2)/db = -a/(a²+b²)
+                    r.c0 = atan2(a.c0, b.c0);
+                    if (a.c0 == F(0)) {
+                        r.c1 = F(0); r.c2 = F(0);
+                    } else {
+                        F inv_a = F(1) / a.c0;
+                        r.c1 = -b.c1 * inv_a;
+                        r.c2 = -b.c2 * inv_a;
+                    }
+                } else {
+                    Jet3 ratio = jet_div(a, b);
+                    Jet3 at = jet_atan(ratio);
+                    r = Jet3(atan2(a.c0, b.c0), at.c1, at.c2);
+                }
+                break;
             }
             case OP_HYPOT: {
                 unsigned int b_off = j_base + bi * 3u;
@@ -371,6 +396,9 @@ extern "C" __global__ void taylor_forward_2nd(
             case OP_RECIP: r = jet_recip(a); break;
             case OP_SQRT: r = jet_sqrt(a); break;
             case OP_CBRT: {
+                if (a.c0 == F(0)) {
+                    r = Jet3(F(0), F(1.0/0.0), F(1.0/0.0)); break;
+                }
                 F s = _sign(a.c0);
                 Jet3 abs_a(fabs(a.c0), s*a.c1, s*a.c2);
                 Jet3 lna = jet_ln(abs_a);
@@ -385,6 +413,15 @@ extern "C" __global__ void taylor_forward_2nd(
                     r = Jet3(F(1), F(0), F(0));
                 } else if (n == 1) {
                     r = a;
+                } else if (a.c0 < F(0)) {
+                    // Negative base: sign(a)^n * exp(n * ln(|a|))
+                    F sf = (n % 2 == 0) ? F(1) : F(-1);
+                    Jet3 abs_a(fabs(a.c0), _sign(a.c0)*a.c1, _sign(a.c0)*a.c2);
+                    Jet3 lna = jet_ln(abs_a);
+                    Jet3 nlna = jet_scale(lna, fn);
+                    Jet3 e = jet_exp(nlna);
+                    r = Jet3(sf*e.c0, sf*e.c1, sf*e.c2);
+                    r.c0 = pow(a.c0, fn);
                 } else {
                     Jet3 lna = jet_ln(a);
                     Jet3 nlna = jet_scale(lna, fn);

@@ -174,8 +174,11 @@ pub fn piggyback_adjoint_solve<F: Float>(
             return None;
         }
         if norm < tol {
-            // adj[m..] = G_x^T · λ* (already computed with the converged λ)
-            return Some((adj[m..].to_vec(), k + 1));
+            // One extra reverse pass with converged lambda to get consistent x_bar.
+            // Without this, adj[m..] uses the pre-convergence lambda, introducing
+            // O(tol * ||G_x||) error.
+            let adj_final = step_tape.reverse_seeded(&lambda_new);
+            return Some((adj_final[m..].to_vec(), k + 1));
         }
 
         lambda = lambda_new;

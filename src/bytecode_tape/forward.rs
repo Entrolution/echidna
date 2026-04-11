@@ -57,6 +57,12 @@ impl<F: Float> super::BytecodeTape<F> {
             "wrong number of inputs"
         );
 
+        debug_assert!(
+            self.opcodes[..self.num_inputs as usize]
+                .iter()
+                .all(|&op| op == OpCode::Input),
+            "input slots must be contiguous Input opcodes at the start of the tape"
+        );
         for (i, &v) in inputs.iter().enumerate() {
             self.values[i] = v;
         }

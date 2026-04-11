@@ -617,7 +617,15 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     #[inline]
     pub fn abs(self) -> Self {
         Self::unary_op(&self, |a, c| {
-            let sign = a[0].signum();
+            // Use first nonzero coefficient's sign to determine the branch direction
+            // at zero, avoiding signum(+0.0) = 0 which would annihilate the jet.
+            let sign = if a[0] != F::zero() {
+                a[0].signum()
+            } else if let Some(k) = (1..a.len()).find(|&k| a[k] != F::zero()) {
+                a[k].signum()
+            } else {
+                F::one()
+            };
             for k in 0..c.len() {
                 c[k] = a[k] * sign;
             }

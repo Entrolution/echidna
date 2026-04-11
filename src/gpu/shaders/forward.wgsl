@@ -83,11 +83,18 @@ fn cbrt_f32(x: f32) -> f32 {
 }
 
 fn expm1_f32(x: f32) -> f32 {
-    // For small |x|, exp(x)-1 loses precision, but f32 limits make this acceptable.
+    // Avoid catastrophic cancellation for small |x|
+    if abs(x) < 1e-4 {
+        return x + 0.5 * x * x;
+    }
     return exp(x) - 1.0;
 }
 
 fn ln1p_f32(x: f32) -> f32 {
+    // Avoid catastrophic cancellation for small |x|
+    if abs(x) < 1e-4 {
+        return x - 0.5 * x * x;
+    }
     return log(1.0 + x);
 }
 

@@ -227,6 +227,7 @@ macro_rules! impl_taylor_scalar_ops {
         impl<const K: usize> Rem<Taylor<$f, K>> for $f {
             type Output = Taylor<$f, K>;
             #[inline]
+            #[allow(clippy::suspicious_arithmetic_impl)]
             fn rem(self, rhs: Taylor<$f, K>) -> Taylor<$f, K> {
                 // scalar % b(t) = scalar - trunc(scalar/b[0]) * b(t)
                 let q = (self / rhs.coeffs[0]).trunc();

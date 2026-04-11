@@ -232,16 +232,18 @@ fn classify_op(op: OpCode) -> OpClass {
         | OpCode::Tanh
         | OpCode::Asinh
         | OpCode::Acosh
-        | OpCode::Atanh
-        | OpCode::Abs => OpClass::UnaryNonlinear,
+        | OpCode::Atanh => OpClass::UnaryNonlinear,
 
         // Binary nonlinear: cross-derivatives between operands
         OpCode::Mul | OpCode::Div | OpCode::Powf | OpCode::Atan2 | OpCode::Hypot => {
             OpClass::BinaryNonlinear
         }
 
-        // Zero derivative (piecewise constant or discontinuous)
-        OpCode::Signum
+        // Zero derivative (piecewise constant or discontinuous).
+        // Abs is included here: d²|x|/dx² = 0 a.e. (the kink at zero has measure
+        // zero and does not contribute structural Hessian entries).
+        OpCode::Abs
+        | OpCode::Signum
         | OpCode::Floor
         | OpCode::Ceil
         | OpCode::Round

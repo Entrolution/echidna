@@ -89,7 +89,10 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn powi(self, n: i32) -> Self {
         if n == 0 {
-            return Dual { re: F::one(), eps: F::zero() };
+            return Dual {
+                re: F::one(),
+                eps: F::zero(),
+            };
         }
         let val = self.re.powi(n);
         let deriv = if n == i32::MIN {
@@ -105,6 +108,18 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn powf(self, n: Self) -> Self {
         // d/dx (x^y) = y * x^(y-1) * dx + x^y * ln(x) * dy
+        if n.re == F::zero() {
+            // a^0 = 1, d/da(a^0) = 0, d/db(a^b)|_{b=0} = ln(a) (for a > 0)
+            let dy = if self.re > F::zero() {
+                self.re.ln()
+            } else {
+                F::zero()
+            };
+            return Dual {
+                re: F::one(),
+                eps: dy * n.eps,
+            };
+        }
         let val = self.re.powf(n.re);
         let dx = if self.re == F::zero() {
             // Avoid 0/0: use n*x^(n-1) form which IEEE handles correctly
@@ -118,7 +133,10 @@ impl<F: Float> Dual<F> {
         } else {
             val * self.re.ln() * n.eps
         };
-        Dual { re: val, eps: dx + dy }
+        Dual {
+            re: val,
+            eps: dx + dy,
+        }
     }
 
     // ── Exp/Log ──
@@ -239,6 +257,12 @@ impl<F: Float> Dual<F> {
     pub fn atan2(self, other: Self) -> Self {
         // d/dx atan2(y,x) = x/(x²+y²) dy - y/(x²+y²) dx
         let denom = self.re * self.re + other.re * other.re;
+        if denom == F::zero() {
+            return Dual {
+                re: self.re.atan2(other.re),
+                eps: F::zero(),
+            };
+        }
         Dual {
             re: self.re.atan2(other.re),
             eps: (other.re * self.eps - self.re * other.eps) / denom,

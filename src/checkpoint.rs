@@ -159,8 +159,10 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 
         // Thin when buffer is full.
         if buffer.len() >= num_checkpoints {
-            // Keep buffer[0] (pinned). Among buffer[1..], keep even-indexed entries.
-            let tail: Vec<(usize, Vec<F>)> = buffer[1..].iter().step_by(2).cloned().collect();
+            // Keep buffer[0] (pinned). Among buffer[1..], skip the first (closest to
+            // buffer[0]) and keep every other entry to maintain uniform spacing.
+            let tail: Vec<(usize, Vec<F>)> =
+                buffer[1..].iter().skip(1).step_by(2).cloned().collect();
             buffer.truncate(1);
             buffer.extend(tail);
             spacing *= 2;
