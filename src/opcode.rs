@@ -321,6 +321,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let inv = one / b;
             (inv, -r * inv)
         }
+        // a % b = a - b*trunc(a/b). Treating trunc as piecewise-constant (zero derivative a.e.):
+        // d/da = 1, d/db = -trunc(a/b). Matches Rust's truncation-based remainder.
         OpCode::Rem => (one, -(a / b).trunc()),
         OpCode::Powf => {
             // d/da a^b = b * a^(b-1)
@@ -343,7 +345,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Atan2 => {
             // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            // Use hypot to avoid overflow when a or b is large
+            // Use hypot to avoid overflow when a or b is large.
+            // At the origin (a=b=0), the gradient is mathematically undefined;
+            // returning (0, 0) is a defensible convention (matches JAX/PyTorch).
             let h = a.hypot(b);
             if h == zero {
                 (zero, zero)
@@ -382,6 +386,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let inv = one / a;
             (-inv * inv, zero)
         }
+        // sqrt'(x) = 1/(2√x) and cbrt'(x) = 1/(3x^{2/3}) are mathematically
+        // singular at x=0, producing IEEE inf. This is the correct answer.
         OpCode::Sqrt => {
             let two = one + one;
             (one / (two * r), zero)
@@ -466,6 +472,10 @@ pub fn powi_exp_decode_raw(b_idx: u32) -> i32 {
 }
 
 /// Encode a `powi` exponent as a value that can be stored in `arg_indices[1]`.
+///
+/// This is a bit-preserving reinterpretation (`i32 as u32`), NOT a numeric
+/// conversion. The round-trip `powi_exp_decode_raw(powi_exp_encode(n)) == n`
+/// holds for all i32 values including negatives and `i32::MIN`.
 #[inline]
 #[must_use]
 pub fn powi_exp_encode(exp: i32) -> u32 {

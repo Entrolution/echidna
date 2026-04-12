@@ -1223,6 +1223,7 @@ fn powf_forward_partial_underflow() {
 #[test]
 fn powf_reverse_partial_underflow_tape() {
     use echidna::{record, BReverse};
+    use num_traits::Float; // powf is on the Float trait
     let two_const = 2.0f64;
     let (mut tape, _) = record(
         |x: &[BReverse<f64>]| x[0].powf(BReverse::constant(two_const)),

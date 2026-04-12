@@ -36,6 +36,8 @@ impl<F: Float> super::BytecodeTape<F> {
     ) {
         for i in (0..self.opcodes.len()).rev() {
             let adj = adjoints[i];
+            // Skip zero adjoints for performance. Trade-off: suppresses NaN propagation
+            // via 0*NaN (JAX convention). See tape.rs reverse_sweep for full rationale.
             if adj == F::zero() {
                 continue;
             }

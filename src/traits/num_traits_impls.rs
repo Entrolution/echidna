@@ -786,6 +786,8 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         let h = self.value.hypot(other.value);
         let denom = h * h;
         if denom == F::zero() {
+            // At the origin, atan2 gradient is mathematically undefined.
+            // Returning a constant (zero gradient) matches JAX/PyTorch convention.
             return Reverse::constant(self.value.atan2(other.value));
         }
         let dx = other.value / denom;
