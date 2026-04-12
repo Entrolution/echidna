@@ -42,18 +42,15 @@
 
 - [x] Review-fix: Phase 2 commit
 
-## Phase 3: Medium-severity STDE/optim fixes
+## Phase 3: Medium-severity STDE/optim fixes ✓
 
-- [ ] Fix #9: Guard estimate_weighted against zero w_sum
-  - Add `if w_sum == F::zero() { return EstimatorResult { estimate: F::zero(), ... }; }` before line 97 in `pipeline.rs`
-  - Or check `w_sum > F::zero()` before computing denom
-  - Test: Add test with all-zero weights
+- [x] Fix #9: Guard estimate_weighted against zero w_sum
+  - Added `w_sum > F::zero()` guard before `w_sum2 / w_sum` division in pipeline.rs
 
-- [ ] Fix #10: Clamp Welford variance to non-negative
-  - Add `.max(F::zero())` before sqrt in `types.rs:78` and `pipeline.rs:102`
-  - Test: Add test with nearly-identical samples checking non-NaN SE
+- [x] Fix #10: Clamp Welford variance to non-negative
+  - Added `.max(F::zero())` on variance in types.rs (WelfordAccumulator) and pipeline.rs (estimate_weighted)
 
-- [ ] Review-fix: Phase 3 commit
+- [x] Review-fix: Phase 3 commit
 
 ## Phase 4: Low-severity fixes
 

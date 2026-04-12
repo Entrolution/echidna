@@ -74,7 +74,7 @@ impl<F: Float> WelfordAccumulator<F> {
     pub(super) fn finalize(&self) -> (F, F, F) {
         let nf = F::from(self.count).unwrap();
         if self.count > 1 {
-            let var = self.m2 / (nf - F::one());
+            let var = (self.m2 / (nf - F::one())).max(F::zero());
             (self.mean, var, (var / nf).sqrt())
         } else {
             (self.mean, F::zero(), F::zero())
