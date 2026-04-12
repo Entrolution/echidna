@@ -802,7 +802,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 3 {{").unwrap();
     writeln!(s, "                    r = jet_mul(jet_mul(a, a), a);").unwrap();
     writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 4 {{").unwrap();
-    writeln!(s, "                    r = jet_mul(jet_mul(a, a), jet_mul(a, a));").unwrap();
+    writeln!(
+        s,
+        "                    r = jet_mul(jet_mul(a, a), jet_mul(a, a));"
+    )
+    .unwrap();
     writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(
         s,

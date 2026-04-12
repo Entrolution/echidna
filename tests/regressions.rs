@@ -2,11 +2,11 @@
 //!
 //! Each test targets a specific finding and prevents regressions.
 
-use echidna::Dual;
 #[cfg(feature = "taylor")]
 use echidna::taylor::Taylor;
 #[cfg(feature = "taylor")]
 use echidna::taylor_dyn::{TaylorDyn, TaylorDynGuard};
+use echidna::Dual;
 
 type Dual64 = Dual<f64>;
 
@@ -1130,16 +1130,32 @@ fn taylor_dyn_max_nan_guard() {
     let nan = TaylorDyn::constant(f64::NAN);
 
     let r = valid.max(nan);
-    assert_eq!(r.value(), 5.0, "TaylorDyn max(valid, NaN) should return valid");
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn max(valid, NaN) should return valid"
+    );
 
     let r = nan.max(valid);
-    assert_eq!(r.value(), 5.0, "TaylorDyn max(NaN, valid) should return valid");
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn max(NaN, valid) should return valid"
+    );
 
     let r = valid.min(nan);
-    assert_eq!(r.value(), 5.0, "TaylorDyn min(valid, NaN) should return valid");
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn min(valid, NaN) should return valid"
+    );
 
     let r = nan.min(valid);
-    assert_eq!(r.value(), 5.0, "TaylorDyn min(NaN, valid) should return valid");
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn min(NaN, valid) should return valid"
+    );
 }
 
 #[cfg(feature = "taylor")]
@@ -1148,7 +1164,10 @@ fn taylor_acosh_near_domain_boundary() {
     // acosh at x₀ = 1 + 1e-10 — cancellation-safe form should preserve precision
     let x = Taylor::<f64, 3>::new([1.0 + 1e-10, 1.0, 0.0]);
     let r = x.acosh();
-    assert!(r.coeffs[0].is_finite(), "acosh primal should be finite near x=1");
+    assert!(
+        r.coeffs[0].is_finite(),
+        "acosh primal should be finite near x=1"
+    );
     assert!(
         r.coeffs[1].is_finite() && r.coeffs[1] > 0.0,
         "acosh first Taylor coeff should be positive and finite near x=1, got {}",
@@ -1184,10 +1203,7 @@ fn div_forward_partial_small_denominator() {
 fn div_reverse_partial_via_tape() {
     // Same test through bytecode tape reverse mode
     use echidna::{record, BReverse};
-    let (mut tape, _) = record(
-        |x: &[BReverse<f64>]| x[0] / x[1],
-        &[1e-308, 1e-155],
-    );
+    let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0] / x[1], &[1e-308, 1e-155]);
     let grad = tape.gradient(&[1e-308, 1e-155]);
     assert!(
         grad[1].is_finite(),
