@@ -445,11 +445,10 @@ pub fn taylor_powf<F: Float>(
     // Fix c[0] for better primal accuracy (use direct powf instead of exp(b*ln(a))).
     // Higher coefficients c[1..] were computed using the exp-ln path's c[0], which
     // may differ from the patched value by sub-ULP rounding. This is a deliberate
-    // tradeoff: exact primal vs perfectly consistent jet coefficients.
-    // Verified correct 2026-04-11: the discrepancy is O(ULP) for well-conditioned inputs.
-    // BUG-HUNT-NOTE: Patching c[0] = a[0].powf(b[0]) after exp-ln recurrence introduces
-    // O(ULP) inconsistency with c[1..K] which used exp(b[0]*ln(a[0])) as c[0]. This is
-    // an intentional precision tradeoff: direct powf is more accurate for c[0].
+    // Intentional precision tradeoff: patching c[0] with direct powf is more accurate
+    // than the exp-ln roundtrip, but c[1..K] were computed using the exp-ln c[0] value.
+    // The inconsistency is O(ULP) for well-conditioned inputs and does not affect
+    // derivative correctness beyond rounding.
     c[0] = a[0].powf(b[0]);
 }
 
@@ -572,8 +571,8 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
         taylor_ln(c, scratch1);
         taylor_scale(scratch1, third, scratch2);
         taylor_exp(scratch2, c);
-        // BUG-HUNT-NOTE: Same O(ULP) primal-patch tradeoff as taylor_powf. The
-        // negate-all-coefficients approach (-cbrt(-a) = cbrt(a)) is mathematically exact.
+        // Same O(ULP) primal-patch tradeoff as taylor_powf (see comment there).
+        // The negate-all-coefficients approach uses cbrt(a) = -cbrt(-a), which is exact.
         c[0] = a[0].cbrt();
         for ci in c.iter_mut().skip(1) {
             *ci = -*ci;
@@ -602,9 +601,10 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 /// NOTE (verified correct): The recurrence uses `exp(a\[0\])` for `c\[1..\]` (via `taylor_exp`),
 /// then patches `c\[0\]` to `exp_m1(a\[0\])`. This is correct because derivatives of `exp(x)-1`
 /// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
-// BUG-HUNT-NOTE: Higher-order coefficients correctly use exp(a[0]) as c[0] in the
-// recurrence, not exp_m1(a[0]). Since d/dx[exp(x)-1] = d/dx[exp(x)] = exp(x),
-// all Taylor coefficients for k>=1 are identical between exp and exp_m1.
+///
+/// The recurrence correctly uses `c[0] = exp(a[0])` (not `exp_m1(a[0])`) to compute
+/// `c[1..K]`, because `d/dx[exp(x)-1] = exp(x)` — the higher-order Taylor coefficients
+/// of `exp(x)-1` are identical to those of `exp(x)`. Only `c[0]` is patched afterward.
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
     taylor_exp(a, c);
