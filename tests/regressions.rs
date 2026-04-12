@@ -2,6 +2,10 @@
 //!
 //! Each test targets a specific finding and prevents regressions.
 
+#[cfg(feature = "taylor")]
+use echidna::taylor::Taylor;
+#[cfg(feature = "taylor")]
+use echidna::taylor_dyn::{TaylorDyn, TaylorDynGuard};
 use echidna::Dual;
 
 type Dual64 = Dual<f64>;
@@ -1088,4 +1092,163 @@ mod boundary_taylor {
             r.coeffs[1]
         );
     }
+}
+
+// ══════════════════════════════════════════════════════
+//  Cycle 5 Phase 1: Correctness fixes
+// ══════════════════════════════════════════════════════
+
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_max_nan_guard() {
+    let valid = Taylor::<f64, 3>::new([5.0, 1.0, 0.0]);
+    let nan = Taylor::<f64, 3>::new([f64::NAN, 1.0, 0.0]);
+
+    // max(valid, NaN) should return valid
+    let r = valid.max(nan);
+    assert_eq!(r.coeffs[0], 5.0, "max(valid, NaN) should return valid");
+
+    // max(NaN, valid) should return valid
+    let r = nan.max(valid);
+    assert_eq!(r.coeffs[0], 5.0, "max(NaN, valid) should return valid");
+
+    // min(valid, NaN) should return valid
+    let r = valid.min(nan);
+    assert_eq!(r.coeffs[0], 5.0, "min(valid, NaN) should return valid");
+
+    // min(NaN, valid) should return valid
+    let r = nan.min(valid);
+    assert_eq!(r.coeffs[0], 5.0, "min(NaN, valid) should return valid");
+}
+
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_dyn_max_nan_guard() {
+    let _guard = TaylorDynGuard::<f64>::new(3);
+
+    let valid = TaylorDyn::variable(5.0);
+    let nan = TaylorDyn::constant(f64::NAN);
+
+    let r = valid.max(nan);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn max(valid, NaN) should return valid"
+    );
+
+    let r = nan.max(valid);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn max(NaN, valid) should return valid"
+    );
+
+    let r = valid.min(nan);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn min(valid, NaN) should return valid"
+    );
+
+    let r = nan.min(valid);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn min(NaN, valid) should return valid"
+    );
+}
+
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_acosh_near_domain_boundary() {
+    // acosh at x₀ = 1 + 1e-10 — cancellation-safe form should preserve precision
+    let x = Taylor::<f64, 3>::new([1.0 + 1e-10, 1.0, 0.0]);
+    let r = x.acosh();
+    assert!(
+        r.coeffs[0].is_finite(),
+        "acosh primal should be finite near x=1"
+    );
+    assert!(
+        r.coeffs[1].is_finite() && r.coeffs[1] > 0.0,
+        "acosh first Taylor coeff should be positive and finite near x=1, got {}",
+        r.coeffs[1]
+    );
+    // Compare with asin at the equivalent point for similar precision
+    let y = Taylor::<f64, 3>::new([1.0 - 1e-10, 1.0, 0.0]);
+    let asin_r = y.asin();
+    // Both should have similar magnitudes of first coefficient
+    assert!(
+        (r.coeffs[1].ln() - asin_r.coeffs[1].ln()).abs() < 2.0,
+        "acosh and asin should have similar-magnitude derivatives near their boundaries"
+    );
+}
+
+#[test]
+fn div_forward_partial_small_denominator() {
+    // d/db(a/b) at b = 1e-155 should not overflow to inf
+    let a = Dual64::new(1e-308, 0.0);
+    let b = Dual64::new(1e-155, 1.0);
+    let r = a / b;
+    // d/db(a/b) = -a/b² = -1e-308 / 1e-310 = -1e2 (approximately)
+    // With the old formula -a * (1/b)² the intermediate (1/b)² overflows
+    assert!(
+        r.eps.is_finite(),
+        "d/db(a/b) should be finite for small b when a is also small, got {}",
+        r.eps
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn div_reverse_partial_via_tape() {
+    // Same test through bytecode tape reverse mode
+    use echidna::{record, BReverse};
+    let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0] / x[1], &[1e-308, 1e-155]);
+    let grad = tape.gradient(&[1e-308, 1e-155]);
+    assert!(
+        grad[1].is_finite(),
+        "tape gradient d/db(a/b) should be finite, got {}",
+        grad[1]
+    );
+    // Should be approximately -a/b² = -1e-308/1e-310 ≈ -100
+    assert!(
+        (grad[1] + 100.0).abs() < 10.0,
+        "tape gradient d/db should be ≈ -100, got {}",
+        grad[1]
+    );
+}
+
+#[test]
+fn powf_forward_partial_underflow() {
+    // d/da(a^2) at a = 1e-200: r = a² underflows to 0, but derivative 2a = 2e-200 is nonzero
+    let a = Dual64::new(1e-200, 1.0);
+    let r = a.powf(Dual64::new(2.0, 0.0));
+    assert!(
+        r.eps != 0.0,
+        "d/da(a^2) at a=1e-200 should be nonzero, got {}",
+        r.eps
+    );
+    assert!(
+        (r.eps - 2e-200).abs() < 1e-210,
+        "d/da(a^2) at a=1e-200 should be ≈ 2e-200, got {}",
+        r.eps
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn powf_reverse_partial_underflow_tape() {
+    use echidna::{record, BReverse};
+    use num_traits::Float; // powf is on the Float trait
+    let two_const = 2.0f64;
+    let (mut tape, _) = record(
+        |x: &[BReverse<f64>]| x[0].powf(BReverse::constant(two_const)),
+        &[1e-200],
+    );
+    let grad = tape.gradient(&[1e-200]);
+    assert!(
+        grad[0] != 0.0,
+        "tape gradient d/da(a^2) at a=1e-200 should be nonzero, got {}",
+        grad[0]
+    );
 }

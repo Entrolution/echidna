@@ -87,13 +87,17 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     }
 
     /// Get the k-th derivative: `k! × coeffs[k]`.
+    ///
+    /// Interleaves multiplication with the coefficient to extend the
+    /// representable range (avoids computing k! as a standalone intermediate
+    /// which overflows f64 at k=171 and f32 at k=35).
     #[inline]
     pub fn derivative(&self, k: usize) -> F {
-        let mut factorial = F::one();
+        let mut result = self.coeffs[k];
         for i in 2..=k {
-            factorial = factorial * F::from(i).unwrap();
+            result = result * F::from(i).unwrap();
         }
-        self.coeffs[k] * factorial
+        result
     }
 
     /// Evaluate the Taylor polynomial at point `h` via Horner's method.
@@ -446,7 +450,8 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     /// Maximum of two values.
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.coeffs[0] >= other.coeffs[0] {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmax semantics)
+        if self.coeffs[0] >= other.coeffs[0] || other.coeffs[0].is_nan() {
             self
         } else {
             other
@@ -456,7 +461,8 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     /// Minimum of two values.
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.coeffs[0] <= other.coeffs[0] {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmin semantics)
+        if self.coeffs[0] <= other.coeffs[0] || other.coeffs[0].is_nan() {
             self
         } else {
             other

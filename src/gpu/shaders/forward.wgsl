@@ -150,10 +150,10 @@ fn log10_f32(x: f32) -> f32 {
 
 fn signum_f32(x: f32) -> f32 {
     // Match Rust's f32::signum: returns ±1 for all finite values (including ±0),
-    // NaN for NaN. WGSL can't distinguish ±0, so we return 1.0 for x >= 0.
+    // NaN for NaN. Use bitcast to check sign bit for -0.0 handling.
     if x != x { return x; }  // NaN passthrough
-    if x >= 0.0 { return 1.0; }
-    return -1.0;
+    if (bitcast<u32>(x) & 0x80000000u) != 0u { return -1.0; }
+    return 1.0;
 }
 
 fn powi_f32(base: f32, exp_bits: u32) -> f32 {

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-04-12
+
+### Fixed
+
+#### Core AD (all modes)
+- **atan derivative overflow**: `1/(1+x²)` overflows to 0 for `|x| > ~1.34e154` (f64). Now uses `(1/x)²/(1+(1/x)²)` for large inputs across Dual, DualVec, Reverse, and bytecode reverse_partials.
+- **powf derivative underflow**: when `x^b` underflows to 0 but `x ≠ 0`, the derivative `b·x^b/x` silently returned 0. Now falls back to direct `b·x^(b-1)` computation. Fixed in all 4 AD modes.
+- **powi(i32::MIN) f32 precision**: converting `i32::MIN - 1` to f32 rounds the exponent. Now uses `x^n/x` to compute `x^(n-1)` without float conversion. Fixed across 7 code sites (dual, dual_vec, Reverse, opcode, bytecode reverse, bytecode tangent, cross-country).
+- **taylor_acosh cancellation**: `a²-1` near `a=1` suffered catastrophic cancellation. Replaced with factored form `(a-1)(a+1)`, matching sister functions asin/atanh.
+- **Taylor/TaylorDyn max/min NaN handling**: `max(valid, NaN)` returned NaN instead of the valid value. Added IEEE 754 fmax/fmin NaN guard matching Dual/Laurent implementations.
+- **Taylor::derivative factorial overflow**: standalone `k!` computation overflows f64 at k=171. Now interleaves multiplication with the coefficient, extending the usable range.
+
+#### GPU (WGSL + CUDA codegen)
+- **WGSL u32 index overflow**: `forward_batch`, `gradient_batch`, and `hvp_batch` now assert `batch_size × num_variables ≤ u32::MAX` before GPU dispatch. Previously, large workloads silently produced corrupted results.
+- **POWI Taylor codegen at x=0**: `0^n` for n=2,3,4 now uses repeated `jet_mul` instead of `jet_const(0)`, preserving higher-order Taylor coefficients (e.g., Hessian of `x²` at zero). Both WGSL and CUDA codegen.
+- **WGSL abs reverse NaN divergence**: `abs` reverse derivative returned 0 for NaN inputs instead of propagating NaN. Now matches CUDA/CPU behavior.
+- **WGSL signum(-0.0)**: now uses `bitcast<u32>` sign-bit check to correctly return -1 for negative zero, matching Rust's `f32::signum`.
+
+#### Checkpointing
+- **Revolve checkpoint memory budget**: `revolve_schedule` produced O(num_steps) checkpoint positions instead of O(num_checkpoints). Forward pass now truncates to the budget. Gradients were always correct; only memory usage was affected. Fixed in all 3 call sites (standard, hints, disk).
+
+#### STDE
+- **diagonal_kth_order_const f32 guard**: const-generic variant now rejects k ≥ 13 for f32, matching the dynamic version's precision guard.
+- **Weighted estimator finiteness**: `estimate_weighted` now asserts sample finiteness, matching `WelfordAccumulator` behavior.
+- **Factorial guard comment**: corrected misleading "overflows f64 for k > 20" (actual overflow is k=171; precision loss begins at k=19).
+
+#### echidna-optim
+- **Trust region boundary_tau cancellation**: quadratic formula now uses Vieta's formula to avoid catastrophic cancellation when `|b| ≈ √discriminant`.
+- **L-BFGS step vector cancellation**: `s = (x + α·d) - x` replaced with `s = α·d` to avoid cancellation when `‖x‖ ≫ α·‖d‖`.
+
+### Added
+- 9 new regression tests covering all fixed issues.
+- Clarifying comments at 8 code sites frequently flagged as false positives during review (zero-adjoint skip, primal patching, powi encoding, Rem derivative, atan2 at origin, sqrt/cbrt singularity, custom op linearization).
+
 ## [0.8.1] - 2026-04-12
 
 ### Fixed

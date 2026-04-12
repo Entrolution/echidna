@@ -24,7 +24,11 @@ impl<F: Float> super::BytecodeTape<F> {
     /// `forward_tangent_dual` which calls `CustomOp::eval_dual`.
     pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
-            // First-order chain rule: evaluate on primals, convert partials to T.
+            // First-order linearization of custom ops: result + da*(a - a₀) + db*(b - b₀).
+            // Primal part is exact (a₀ matches self.values from forward()), tangent part
+            // is the correct first-order chain rule. Chained custom ops stay exact because
+            // each op's primal matches self.values[i] (computed by the preceding forward()).
+            // For full second-order accuracy through custom ops, use forward_tangent_dual.
             let [a_idx, cb_idx] = self.arg_indices[i];
             let a_primal = self.values[a_idx as usize];
             let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
@@ -192,7 +196,7 @@ impl<F: Float> super::BytecodeTape<F> {
                             T::zero()
                         } else if exp == i32::MIN {
                             let n = T::from(exp).unwrap();
-                            n * a.powf(T::from(exp as i64 - 1).unwrap())
+                            n * tangent_vals[i] / a
                         } else {
                             let n = T::from(exp).unwrap();
                             n * a.powi(exp - 1)

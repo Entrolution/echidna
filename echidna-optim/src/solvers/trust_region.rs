@@ -342,19 +342,36 @@ fn boundary_tau<F: Float>(s: &[F], d: &[F], radius: F) -> F {
         return F::zero();
     }
 
-    // We want the positive root
+    // Use numerically stable quadratic formula (Vieta's) to avoid
+    // catastrophic cancellation when |b| ≈ sqrt(disc).
     let sqrt_disc = disc.sqrt();
-    let tau1 = (F::zero() - b + sqrt_disc) / (two * a);
-    let tau2 = (F::zero() - b - sqrt_disc) / (two * a);
-
-    if tau1 > F::zero() {
-        if tau2 > F::zero() {
-            tau1.min(tau2)
-        } else {
-            tau1
-        }
+    // Compute the root with larger magnitude first (no cancellation)
+    let neg_b = F::zero() - b;
+    let r_large = if neg_b >= F::zero() {
+        (neg_b + sqrt_disc) / (two * a)
     } else {
-        tau2.max(F::zero())
+        (neg_b - sqrt_disc) / (two * a)
+    };
+    // Second root via Vieta's formula: tau1 * tau2 = c / a
+    let r_small = if r_large.abs() < F::epsilon() {
+        F::zero()
+    } else {
+        c / (a * r_large)
+    };
+
+    let (tau1, tau2) = if r_large < r_small {
+        (r_large, r_small)
+    } else {
+        (r_small, r_large)
+    };
+
+    // Return smallest positive root
+    if tau1 > F::zero() {
+        tau1
+    } else if tau2 > F::zero() {
+        tau2
+    } else {
+        F::zero()
     }
 }
 
@@ -498,5 +515,26 @@ mod tests {
                 result.x[i]
             );
         }
+    }
+
+    #[test]
+    fn boundary_tau_nearly_parallel() {
+        // When s is near the trust-region boundary and d is nearly parallel,
+        // c ≈ 0 so disc ≈ b², making (-b + sqrt(disc)) suffer cancellation.
+        // Vieta's formula avoids this.
+        let s = [1.0 - 1e-14, 0.0]; // very close to boundary
+        let d = [1.0, 1e-10]; // nearly parallel to s
+        let radius = 1.0;
+        let tau = boundary_tau(&s, &d, radius);
+        // tau should satisfy ||s + tau*d|| ≈ radius
+        let norm_sq = (s[0] + tau * d[0]).powi(2) + (s[1] + tau * d[1]).powi(2);
+        assert!(
+            (norm_sq.sqrt() - radius).abs() < 1e-10,
+            "||s + tau*d|| = {}, expected {}, tau = {}",
+            norm_sq.sqrt(),
+            radius,
+            tau
+        );
+        assert!(tau > 0.0, "tau should be positive, got {}", tau);
     }
 }

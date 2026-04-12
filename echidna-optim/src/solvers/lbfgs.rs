@@ -122,10 +122,11 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
         let mut s = vec![F::zero(); n];
         let mut y = vec![F::zero(); n];
         for i in 0..n {
-            let x_new_i = x[i] + ls.alpha * d[i];
-            s[i] = x_new_i - x[i];
+            // Compute s = alpha * d directly instead of (x + alpha*d) - x
+            // to avoid cancellation when ||x|| >> alpha*||d||
+            s[i] = ls.alpha * d[i];
             y[i] = ls.gradient[i] - grad[i];
-            x[i] = x_new_i;
+            x[i] = x[i] + s[i];
         }
 
         let f_prev = f_val;

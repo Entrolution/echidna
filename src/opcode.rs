@@ -316,9 +316,13 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         OpCode::Sub => (one, -one),
         OpCode::Mul => (b, a),
         OpCode::Div => {
+            // d/da(a/b) = 1/b, d/db(a/b) = -a/b² = -(a/b)/b = -r/b
+            // Using -r/b avoids squaring 1/b which overflows when |b| < ~1e-154
             let inv = one / b;
-            (inv, -a * inv * inv)
+            (inv, -r * inv)
         }
+        // a % b = a - b*trunc(a/b). Treating trunc as piecewise-constant (zero derivative a.e.):
+        // d/da = 1, d/db = -trunc(a/b). Matches Rust's truncation-based remainder.
         OpCode::Rem => (one, -(a / b).trunc()),
         OpCode::Powf => {
             // d/da a^b = b * a^(b-1)
@@ -328,7 +332,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                 let db = if a > zero { a.ln() } else { zero };
                 (zero, db)
             } else {
-                let da = if a == zero {
+                let da = if a == zero || r == zero {
+                    // Direct powf avoids 0/0 when a=0 and catches underflow
+                    // when r=a^b underflows to 0 but a!=0
                     b * a.powf(b - one)
                 } else {
                     b * r / a
@@ -339,7 +345,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Atan2 => {
             // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            // Use hypot to avoid overflow when a or b is large
+            // Use hypot to avoid overflow when a or b is large.
+            // At the origin (a=b=0), the gradient is mathematically undefined;
+            // returning (0, 0) is a defensible convention (matches JAX/PyTorch).
             let h = a.hypot(b);
             if h == zero {
                 (zero, zero)
@@ -378,6 +386,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let inv = one / a;
             (-inv * inv, zero)
         }
+        // sqrt'(x) = 1/(2√x) and cbrt'(x) = 1/(3x^{2/3}) are mathematically
+        // singular at x=0, producing IEEE inf. This is the correct answer.
         OpCode::Sqrt => {
             let two = one + one;
             (one / (two * r), zero)
@@ -391,9 +401,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             if exp == 0 {
                 (zero, zero) // d/dx(x^0) = 0
             } else if exp == i32::MIN {
-                // exp - 1 would overflow i32; use powf fallback
+                // exp - 1 would overflow i32; use r/a to avoid precision loss
                 let n = T::from(exp).unwrap();
-                (n * a.powf(T::from(exp as i64 - 1).unwrap()), zero)
+                (n * r / a, zero)
             } else {
                 let n = T::from(exp).unwrap();
                 (n * a.powi(exp - 1), zero)
@@ -418,7 +428,16 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Asin => (one / ((one - a) * (one + a)).sqrt(), zero),
         OpCode::Acos => (-one / ((one - a) * (one + a)).sqrt(), zero),
-        OpCode::Atan => (one / (one + a * a), zero),
+        OpCode::Atan => {
+            // For large |a|, use (1/a)²/(1+(1/a)²) to avoid 1+a² overflow
+            let da = if a.abs() > T::from(1e8).unwrap() {
+                let inv = one / a;
+                inv * inv / (one + inv * inv)
+            } else {
+                one / (one + a * a)
+            };
+            (da, zero)
+        }
 
         // Hyperbolic
         OpCode::Sinh => (a.cosh(), zero),
@@ -453,6 +472,10 @@ pub fn powi_exp_decode_raw(b_idx: u32) -> i32 {
 }
 
 /// Encode a `powi` exponent as a value that can be stored in `arg_indices[1]`.
+///
+/// This is a bit-preserving reinterpretation (`i32 as u32`), NOT a numeric
+/// conversion. The round-trip `powi_exp_decode_raw(powi_exp_encode(n)) == n`
+/// holds for all i32 values including negatives and `i32::MIN`.
 #[inline]
 #[must_use]
 pub fn powi_exp_encode(exp: i32) -> u32 {

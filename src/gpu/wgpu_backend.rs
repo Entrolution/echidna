@@ -605,6 +605,12 @@ impl GpuBackend for WgpuContext {
             "inputs length must be batch_size * num_inputs"
         );
 
+        // Guard against u32 overflow in WGSL index arithmetic: batch_id * num_vars
+        assert!(
+            (batch_size as u64) * (num_variables as u64) <= u32::MAX as u64,
+            "batch_size * num_variables overflows u32 in WGSL shader index arithmetic"
+        );
+
         // Create per-dispatch meta uniform with batch_size
         let meta = TapeMeta {
             num_ops: tape.num_ops,
@@ -747,6 +753,12 @@ impl GpuBackend for WgpuContext {
             inputs.len(),
             (batch_size * num_inputs) as usize,
             "inputs length must be batch_size * num_inputs"
+        );
+
+        // Guard against u32 overflow in WGSL index arithmetic: batch_id * num_vars
+        assert!(
+            (batch_size as u64) * (num_variables as u64) <= u32::MAX as u64,
+            "batch_size * num_variables overflows u32 in WGSL shader index arithmetic"
         );
 
         // Create per-dispatch meta uniform
@@ -1159,6 +1171,12 @@ impl GpuBackend for WgpuContext {
 
         assert_eq!(x.len(), ni as usize);
         assert_eq!(tangent_dirs.len(), (batch_size * ni) as usize);
+
+        // Guard against u32 overflow in WGSL index arithmetic
+        assert!(
+            (batch_size as u64) * (nv as u64) <= u32::MAX as u64,
+            "batch_size * num_variables overflows u32 in WGSL shader index arithmetic"
+        );
 
         // Build primal inputs: same x replicated for each batch element
         let mut primal_inputs = Vec::with_capacity((batch_size * ni) as usize);

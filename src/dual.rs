@@ -96,8 +96,9 @@ impl<F: Float> Dual<F> {
         }
         let val = self.re.powi(n);
         let deriv = if n == i32::MIN {
-            // n - 1 would overflow i32; fall back to powf
-            F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap())
+            // n - 1 would overflow i32; use x^n / x to avoid precision loss
+            // from converting n-1 to float (which rounds for f32)
+            F::from(n).unwrap() * val / self.re
         } else {
             F::from(n).unwrap() * self.re.powi(n - 1)
         };
@@ -121,8 +122,9 @@ impl<F: Float> Dual<F> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx = if self.re == F::zero() {
-            // Avoid 0/0: use n*x^(n-1) form which IEEE handles correctly
+        let dx = if self.re == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.re * self.re.powf(n.re - F::one()) * self.eps
         } else {
             n.re * val / self.re * self.eps
@@ -249,7 +251,15 @@ impl<F: Float> Dual<F> {
     /// Arctangent.
     #[inline]
     pub fn atan(self) -> Self {
-        self.chain(self.re.atan(), F::one() / (F::one() + self.re * self.re))
+        // For large |x|, 1 + x² overflows to inf, producing 1/inf = 0.
+        // Use 1/x² form instead, which avoids the overflow.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv * inv / (F::one() + inv * inv)
+        } else {
+            F::one() / (F::one() + self.re * self.re)
+        };
+        self.chain(self.re.atan(), deriv)
     }
 
     /// Two-argument arctangent.

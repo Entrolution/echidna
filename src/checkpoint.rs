@@ -48,12 +48,13 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
     let num_checkpoints = num_checkpoints.max(1).min(num_steps);
 
     // Compute optimal checkpoint positions using Revolve schedule.
-    // Note: the position set is O(num_steps) while checkpoint *states* are O(num_checkpoints).
-    let checkpoint_positions: HashSet<usize> = revolve_schedule(num_steps, num_checkpoints)
-        .into_iter()
-        .collect();
+    // The recursive schedule may produce more positions than num_checkpoints;
+    // take only the first num_checkpoints to enforce the memory budget.
+    let mut all_positions = revolve_schedule(num_steps, num_checkpoints);
+    all_positions.truncate(num_checkpoints);
+    let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
-    // -- Forward pass: run all steps, saving checkpoints --
+    // -- Forward pass: run all steps, saving at most num_checkpoints states --
     let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::with_capacity(num_checkpoints + 1);
     checkpoints.push((0, x0.to_vec()));
 
@@ -256,7 +257,8 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
         let sub_steps = end - start;
         let sub_slots = slot_alloc[i];
         if sub_steps > 1 && sub_slots > 0 {
-            let sub_positions = revolve_schedule(sub_steps, sub_slots);
+            let mut sub_positions = revolve_schedule(sub_steps, sub_slots);
+            sub_positions.truncate(sub_slots);
             // Shift positions to global coordinates.
             all_positions.extend(sub_positions.iter().map(|&p| p + start));
         }
@@ -374,10 +376,10 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 
     let num_checkpoints = num_checkpoints.max(1).min(num_steps);
 
-    // Compute optimal checkpoint positions using Revolve schedule.
-    let checkpoint_positions: HashSet<usize> = revolve_schedule(num_steps, num_checkpoints)
-        .into_iter()
-        .collect();
+    // Compute optimal checkpoint positions; truncate to enforce memory budget.
+    let mut all_positions = revolve_schedule(num_steps, num_checkpoints);
+    all_positions.truncate(num_checkpoints);
+    let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
     // Drop guard ensures cleanup even on panic.
     let mut guard = DiskCheckpointGuard { files: Vec::new() };

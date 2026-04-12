@@ -651,7 +651,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         }
         let val = self.value.powi(n);
         let deriv = if n == i32::MIN {
-            F::from(n).unwrap() * self.value.powf(F::from(n as i64 - 1).unwrap())
+            F::from(n).unwrap() * val / self.value
         } else {
             F::from(n).unwrap() * self.value.powi(n - 1)
         };
@@ -669,7 +669,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
             return rev_binary(self, n, F::one(), F::zero(), dy);
         }
         let val = self.value.powf(n.value);
-        let dx = if self.value == F::zero() {
+        let dx = if self.value == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.value * self.value.powf(n.value - F::one())
         } else {
             n.value * val / self.value
@@ -770,17 +772,22 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn atan(self) -> Self {
-        rev_unary(
-            self,
-            self.value.atan(),
-            F::one() / (F::one() + self.value * self.value),
-        )
+        // For large |x|, use (1/x)²/(1+(1/x)²) to avoid 1+x² overflow
+        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.value;
+            inv * inv / (F::one() + inv * inv)
+        } else {
+            F::one() / (F::one() + self.value * self.value)
+        };
+        rev_unary(self, self.value.atan(), deriv)
     }
 
     fn atan2(self, other: Self) -> Self {
         let h = self.value.hypot(other.value);
         let denom = h * h;
         if denom == F::zero() {
+            // At the origin, atan2 gradient is mathematically undefined.
+            // Returning a constant (zero gradient) matches JAX/PyTorch convention.
             return Reverse::constant(self.value.atan2(other.value));
         }
         let dx = other.value / denom;

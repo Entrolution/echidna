@@ -4,11 +4,12 @@
 
 | Version | Supported |
 |---------|-----------|
-| >= 0.8.1 | Yes       |
+| >= 0.8.2 | Yes       |
+| 0.8.1    | No — atan derivative overflow for large inputs; powf derivative underflow; WGSL u32 index overflow on large workloads; Revolve checkpoint exceeds memory budget |
 | 0.8.0    | No — GPU cbrt HVP second derivative is wrong; asin/acos/atanh lose precision near domain boundaries; CUDA Taylor codegen truncates 64-bit offsets |
 | < 0.8.0  | No        |
 
-Only the latest patch release receives security updates. Version 0.8.0 has known correctness bugs including: GPU cbrt Hessian-vector product off by r² factor; catastrophic cancellation in asin/acos/atanh derivatives near ±1 (all AD modes and GPU shaders); CUDA Taylor codegen silently truncating 64-bit offsets to u32; bytecode atan2 overflow for large inputs; and `debug_assert!` guards on custom ops in Hessian stripped in release builds. Versions prior to 0.8.0 have additional known issues documented in the changelog.
+Only the latest patch release receives security updates. Version 0.8.1 has known numerical correctness bugs including: atan derivative silently returns 0 for |x| > 1.34e154; powf derivative silently returns 0 when x^b underflows; WGSL forward/reverse/hvp batch dispatch produces corrupted results when batch_size × num_variables > 2³²; Taylor max/min returns NaN instead of valid value; and Revolve checkpointing uses O(num_steps) memory instead of O(num_checkpoints). Versions prior to 0.8.0 have additional known issues documented in the changelog.
 
 ## Reporting a Vulnerability
 

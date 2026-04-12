@@ -378,9 +378,9 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     c[0] = a[0].acosh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = a² - 1
+    // scratch2 = a² - 1  (factored form avoids cancellation near a[0]=1)
     scratch2[..n].copy_from_slice(&scratch1[..n]);
-    scratch2[0] = scratch1[0] - F::one();
+    scratch2[0] = (a[0] - F::one()) * (a[0] + F::one());
     // scratch1 = sqrt(a² - 1)
     taylor_sqrt(scratch2, scratch1);
     // scratch2 = 1/sqrt(a² - 1)
@@ -583,6 +583,7 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
         taylor_ln(a, scratch1);
         taylor_scale(scratch1, third, scratch2);
         taylor_exp(scratch2, c);
+        // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
         c[0] = a[0].cbrt();
     }
 }
@@ -593,6 +594,7 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     let ln2 = F::from(2.0).unwrap().ln();
     taylor_scale(a, ln2, scratch);
     taylor_exp(scratch, c);
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].exp2();
 }
 
@@ -616,6 +618,7 @@ pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
 pub fn taylor_log2<F: Float>(a: &[F], c: &mut [F]) {
     taylor_ln(a, c);
     let inv_ln2 = F::one() / F::from(2.0).unwrap().ln();
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].log2();
     for ck in c[1..].iter_mut() {
         *ck = *ck * inv_ln2;
@@ -627,6 +630,7 @@ pub fn taylor_log2<F: Float>(a: &[F], c: &mut [F]) {
 pub fn taylor_log10<F: Float>(a: &[F], c: &mut [F]) {
     taylor_ln(a, c);
     let inv_ln10 = F::one() / F::from(10.0).unwrap().ln();
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].log10();
     for ck in c[1..].iter_mut() {
         *ck = *ck * inv_ln10;
@@ -642,6 +646,7 @@ pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     scratch[1..n].copy_from_slice(&a[1..n]);
     scratch[0] = F::one() + a[0];
     taylor_ln(scratch, c);
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].ln_1p();
 }
 
