@@ -328,7 +328,10 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Inverse hyperbolic tangent.
     #[inline]
     pub fn atanh(self) -> Self {
-        self.chain(self.re.atanh(), F::one() / ((F::one() - self.re) * (F::one() + self.re)))
+        self.chain(
+            self.re.atanh(),
+            F::one() / ((F::one() - self.re) * (F::one() + self.re)),
+        )
     }
 
     // -- Misc --
