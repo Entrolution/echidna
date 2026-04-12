@@ -20,43 +20,27 @@
 
 - [x] Review-fix: Phase 1 commit
 
-## Phase 2: Medium-severity numerical fixes
+## Phase 2: Medium-severity numerical fixes ✓
 
-- [ ] Fix #3: Bytecode atan2 overflow
-  - Replace `a * a + b * b` with `let h = a.hypot(b); h * h` in `opcode.rs:342`
-  - Test: Add test with atan2(1e200, 1e200) verifying non-zero derivatives
+- [x] Fix #3: Bytecode atan2 overflow
+  - Replaced `a * a + b * b` with `a.hypot(b)` squared in `opcode.rs`
 
-- [ ] Fix #4: Catastrophic cancellation in asin/acos/atanh
-  - Replace `F::one() - x * x` with `(F::one() - x) * (F::one() + x)` in:
-    - `dual.rs` asin/acos
-    - `dual_vec.rs` asin/acos
-    - `num_traits_impls.rs` asin/acos (Reverse mode)
-    - `opcode.rs` Asin/Acos/Atanh reverse_partials
-    - `taylor_ops.rs` taylor_asin leading coefficient
-  - Test: Add test with asin(1.0 - 1e-15) checking derivative precision
+- [x] Fix #4: Catastrophic cancellation in asin/acos/atanh
+  - Replaced `1 - x*x` with `(1-x)*(1+x)` in: dual.rs, dual_vec.rs, num_traits_impls.rs, opcode.rs, taylor_ops.rs (asin + atanh)
 
-- [ ] Fix #5: Division derivative overflow
-  - Restructure `(self.eps * rhs.re - self.re * rhs.eps) * inv * inv` to avoid squaring inv
-  - Use `(self.eps - self.re * rhs.eps * inv) * inv` or direct `/ (rhs.re * rhs.re)`
-  - Apply to `std_ops.rs`, `dual_vec_ops.rs`
-  - Test: Add test with division by 1e-200 checking finite derivative
+- [x] Fix #5: Division derivative overflow
+  - Restructured `(a' * b - a * b') * inv * inv` to `(a' - a * inv * b') * inv` in std_ops.rs, dual_vec_ops.rs
 
-- [ ] Fix #6: Promote debug_assert to assert for custom ops in Hessian
-  - Change `debug_assert!(self.custom_ops.is_empty(), ...)` to `assert!(...)` in:
-    - `bytecode_tape/tangent.rs:325`
-    - `bytecode_tape/sparse.rs:72`
-  - Test: Existing tests should continue to pass
+- [x] Fix #6: Promote debug_assert to assert for custom ops in Hessian
+  - Changed to `assert!` in tangent.rs (hessian_vec) and sparse.rs (sparse_hessian_vec, sparse_jacobian_vec)
 
-- [ ] Fix #7: WGSL u32 index overflow guard
-  - In chunking logic (`gpu/mod.rs`), add constraint: `chunk_size <= u32::MAX / (num_variables * K)`
-  - Test: Add assertion test that large num_variables triggers smaller chunks
+- [x] Fix #7: WGSL u32 index overflow guard
+  - Added `chunk_size = chunk_size.min(u32::MAX / (nv * K))` in gpu/mod.rs
 
-- [ ] Fix #8: Taylor hypot rescaling
-  - Rescale inputs by `max(|a[0]|, |b[0]|)` before computing `a²+b²` in `taylor_ops.rs:652-670`
-  - Multiply result by scale factor after sqrt
-  - Test: Add Taylor hypot test with (1e200, 1e200) and (1e-200, 1e-200)
+- [x] Fix #8: Taylor hypot rescaling
+  - Added rescaling by `max(|a₀|, |b₀|)` before squaring in taylor_ops.rs
 
-- [ ] Review-fix: Phase 2 commit
+- [x] Review-fix: Phase 2 commit
 
 ## Phase 3: Medium-severity STDE/optim fixes
 

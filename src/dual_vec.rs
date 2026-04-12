@@ -250,7 +250,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     pub fn asin(self) -> Self {
         self.chain(
             self.re.asin(),
-            F::one() / (F::one() - self.re * self.re).sqrt(),
+            F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
         )
     }
 
@@ -259,7 +259,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     pub fn acos(self) -> Self {
         self.chain(
             self.re.acos(),
-            -F::one() / (F::one() - self.re * self.re).sqrt(),
+            -F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
         )
     }
 
@@ -328,7 +328,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Inverse hyperbolic tangent.
     #[inline]
     pub fn atanh(self) -> Self {
-        self.chain(self.re.atanh(), F::one() / (F::one() - self.re * self.re))
+        self.chain(self.re.atanh(), F::one() / ((F::one() - self.re) * (F::one() + self.re)))
     }
 
     // -- Misc --

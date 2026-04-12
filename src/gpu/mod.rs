@@ -434,6 +434,13 @@ pub fn taylor_forward_2nd_batch_chunked<B: GpuBackend>(
     let dispatch_limit = MAX_WORKGROUPS_PER_DIM * TAYLOR_WORKGROUP_SIZE;
     chunk_size = chunk_size.min(dispatch_limit);
 
+    // Cap chunk_size so that WGSL u32 index `bid * nv * K` cannot overflow.
+    // K=3 for second-order Taylor jets.
+    let nv_k = (num_variables as u64) * 3;
+    if nv_k > 0 {
+        chunk_size = chunk_size.min(u32::MAX as u64 / nv_k);
+    }
+
     let chunk_size = chunk_size as u32;
 
     // If everything fits in one chunk, dispatch directly

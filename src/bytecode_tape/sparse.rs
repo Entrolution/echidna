@@ -69,7 +69,7 @@ impl<F: Float> super::BytecodeTape<F> {
         &self,
         x: &[F],
     ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
-        debug_assert!(
+        assert!(
             self.custom_ops.is_empty(),
             "sparse_hessian_vec: custom ops produce approximate (first-order) second derivatives; \
              use eval_forward with Dual<Dual<F>> for exact Hessians through custom ops"
@@ -306,7 +306,7 @@ impl<F: Float> super::BytecodeTape<F> {
         &mut self,
         x: &[F],
     ) -> (Vec<F>, crate::sparse::JacobianSparsityPattern, Vec<F>) {
-        debug_assert!(
+        assert!(
             self.custom_ops.is_empty(),
             "sparse_jacobian_vec: custom ops produce approximate (first-order) derivatives; \
              use eval_forward with Dual<F> for exact Jacobians through custom ops"

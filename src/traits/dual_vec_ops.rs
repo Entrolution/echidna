@@ -47,7 +47,7 @@ impl<F: Float, const N: usize> Div for DualVec<F, N> {
         let inv = F::one() / rhs.re;
         DualVec {
             re: self.re * inv,
-            eps: std::array::from_fn(|k| (self.eps[k] * rhs.re - self.re * rhs.eps[k]) * inv * inv),
+            eps: std::array::from_fn(|k| (self.eps[k] - self.re * inv * rhs.eps[k]) * inv),
         }
     }
 }

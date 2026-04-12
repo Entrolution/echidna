@@ -321,7 +321,7 @@ impl<F: Float> super::BytecodeTape<F> {
     /// derivatives through custom ops, use `hessian` instead, which calls
     /// `CustomOp::eval_dual` / `CustomOp::partials_dual`.
     pub fn hessian_vec<const N: usize>(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
-        debug_assert!(
+        assert!(
             self.custom_ops.is_empty(),
             "hessian_vec: custom ops produce approximate (first-order) second derivatives; \
              use eval_forward with Dual<Dual<F>> for exact Hessians through custom ops"
