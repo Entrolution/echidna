@@ -669,7 +669,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
             return rev_binary(self, n, F::one(), F::zero(), dy);
         }
         let val = self.value.powf(n.value);
-        let dx = if self.value == F::zero() {
+        let dx = if self.value == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.value * self.value.powf(n.value - F::one())
         } else {
             n.value * val / self.value

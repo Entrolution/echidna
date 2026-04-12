@@ -112,6 +112,11 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
     const { assert!(ORDER >= 3, "ORDER must be >= 3 (k=ORDER-1 >= 2)") }
 
     let k = ORDER - 1;
+    // f32 mantissa (23 bits) cannot represent k! exactly for k >= 13
+    assert!(
+        k < 13 || std::mem::size_of::<F>() > 4,
+        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
+    );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 

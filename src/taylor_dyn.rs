@@ -685,7 +685,8 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Maximum of two values.
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.value >= other.value {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmax semantics)
+        if self.value >= other.value || other.value.is_nan() {
             self
         } else {
             other
@@ -695,7 +696,8 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Minimum of two values.
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.value <= other.value {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmin semantics)
+        if self.value <= other.value || other.value.is_nan() {
             self
         } else {
             other

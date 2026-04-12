@@ -140,7 +140,9 @@ impl<F: Float, const N: usize> DualVec<F, N> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx_factor = if self.re == F::zero() {
+        let dx_factor = if self.re == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.re * self.re.powf(n.re - F::one())
         } else {
             n.re * val / self.re

@@ -316,8 +316,10 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         OpCode::Sub => (one, -one),
         OpCode::Mul => (b, a),
         OpCode::Div => {
+            // d/da(a/b) = 1/b, d/db(a/b) = -a/b² = -(a/b)/b = -r/b
+            // Using -r/b avoids squaring 1/b which overflows when |b| < ~1e-154
             let inv = one / b;
-            (inv, -a * inv * inv)
+            (inv, -r * inv)
         }
         OpCode::Rem => (one, -(a / b).trunc()),
         OpCode::Powf => {
@@ -328,7 +330,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                 let db = if a > zero { a.ln() } else { zero };
                 (zero, db)
             } else {
-                let da = if a == zero {
+                let da = if a == zero || r == zero {
+                    // Direct powf avoids 0/0 when a=0 and catches underflow
+                    // when r=a^b underflows to 0 but a!=0
                     b * a.powf(b - one)
                 } else {
                     b * r / a

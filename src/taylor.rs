@@ -446,7 +446,8 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     /// Maximum of two values.
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.coeffs[0] >= other.coeffs[0] {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmax semantics)
+        if self.coeffs[0] >= other.coeffs[0] || other.coeffs[0].is_nan() {
             self
         } else {
             other
@@ -456,7 +457,8 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     /// Minimum of two values.
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.coeffs[0] <= other.coeffs[0] {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmin semantics)
+        if self.coeffs[0] <= other.coeffs[0] || other.coeffs[0].is_nan() {
             self
         } else {
             other

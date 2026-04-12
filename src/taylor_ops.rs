@@ -378,9 +378,9 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     c[0] = a[0].acosh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = a² - 1
+    // scratch2 = a² - 1  (factored form avoids cancellation near a[0]=1)
     scratch2[..n].copy_from_slice(&scratch1[..n]);
-    scratch2[0] = scratch1[0] - F::one();
+    scratch2[0] = (a[0] - F::one()) * (a[0] + F::one());
     // scratch1 = sqrt(a² - 1)
     taylor_sqrt(scratch2, scratch1);
     // scratch2 = 1/sqrt(a² - 1)
