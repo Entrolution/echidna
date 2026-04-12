@@ -65,7 +65,7 @@ impl<F: Float> super::BytecodeTape<F> {
                             F::zero()
                         } else if exp == i32::MIN {
                             let n = F::from(exp).unwrap();
-                            n * a.powf(F::from(exp as i64 - 1).unwrap())
+                            n * values[i] / a
                         } else {
                             let n = F::from(exp).unwrap();
                             n * a.powi(exp - 1)

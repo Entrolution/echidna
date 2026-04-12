@@ -259,11 +259,13 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
         } else {
             with_active_arena(|arena: &mut TaylorArena<F>| arena.coeffs(self.index)[k])
         };
-        let mut factorial = F::one();
+        // Interleave k! multiplication with coefficient to avoid standalone
+        // factorial overflow (f64 overflows at k=171, f32 at k=35)
+        let mut result = ck;
         for i in 2..=k {
-            factorial = factorial * F::from(i).unwrap();
+            result = result * F::from(i).unwrap();
         }
-        ck * factorial
+        result
     }
 
     // ── Operation helpers ──

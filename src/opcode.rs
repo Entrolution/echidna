@@ -395,9 +395,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             if exp == 0 {
                 (zero, zero) // d/dx(x^0) = 0
             } else if exp == i32::MIN {
-                // exp - 1 would overflow i32; use powf fallback
+                // exp - 1 would overflow i32; use r/a to avoid precision loss
                 let n = T::from(exp).unwrap();
-                (n * a.powf(T::from(exp as i64 - 1).unwrap()), zero)
+                (n * r / a, zero)
             } else {
                 let n = T::from(exp).unwrap();
                 (n * a.powi(exp - 1), zero)
@@ -422,7 +422,16 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Asin => (one / ((one - a) * (one + a)).sqrt(), zero),
         OpCode::Acos => (-one / ((one - a) * (one + a)).sqrt(), zero),
-        OpCode::Atan => (one / (one + a * a), zero),
+        OpCode::Atan => {
+            // For large |a|, use (1/a)²/(1+(1/a)²) to avoid 1+a² overflow
+            let da = if a.abs() > T::from(1e8).unwrap() {
+                let inv = one / a;
+                inv * inv / (one + inv * inv)
+            } else {
+                one / (one + a * a)
+            };
+            (da, zero)
+        }
 
         // Hyperbolic
         OpCode::Sinh => (a.cosh(), zero),

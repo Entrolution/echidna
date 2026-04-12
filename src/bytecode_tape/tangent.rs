@@ -192,7 +192,7 @@ impl<F: Float> super::BytecodeTape<F> {
                             T::zero()
                         } else if exp == i32::MIN {
                             let n = T::from(exp).unwrap();
-                            n * a.powf(T::from(exp as i64 - 1).unwrap())
+                            n * tangent_vals[i] / a
                         } else {
                             let n = T::from(exp).unwrap();
                             n * a.powi(exp - 1)

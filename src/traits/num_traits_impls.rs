@@ -651,7 +651,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         }
         let val = self.value.powi(n);
         let deriv = if n == i32::MIN {
-            F::from(n).unwrap() * self.value.powf(F::from(n as i64 - 1).unwrap())
+            F::from(n).unwrap() * val / self.value
         } else {
             F::from(n).unwrap() * self.value.powi(n - 1)
         };
@@ -772,11 +772,14 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn atan(self) -> Self {
-        rev_unary(
-            self,
-            self.value.atan(),
-            F::one() / (F::one() + self.value * self.value),
-        )
+        // For large |x|, use (1/x)²/(1+(1/x)²) to avoid 1+x² overflow
+        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.value;
+            inv * inv / (F::one() + inv * inv)
+        } else {
+            F::one() / (F::one() + self.value * self.value)
+        };
+        rev_unary(self, self.value.atan(), deriv)
     }
 
     fn atan2(self, other: Self) -> Self {
