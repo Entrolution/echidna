@@ -41,7 +41,7 @@ pub fn laplacian_gpu<B: GpuBackend>(
     }
 
     // SAFETY(u32 cast): s is the number of random directions, bounded by practical GPU limits.
-    debug_assert!(
+    assert!(
         s <= u32::MAX as usize,
         "too many directions for GPU dispatch"
     );
@@ -102,7 +102,7 @@ pub fn hessian_diagonal_gpu<B: GpuBackend>(
     }
 
     // SAFETY(u32 cast): n is the number of input dimensions, bounded by practical GPU limits.
-    debug_assert!(n <= u32::MAX as usize, "too many inputs for GPU dispatch");
+    assert!(n <= u32::MAX as usize, "too many inputs for GPU dispatch");
     let result = backend.taylor_forward_2nd_batch(tape, &primals, &seeds, n as u32)?;
 
     let value = result.values[0];
@@ -143,7 +143,7 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
     }
 
     // SAFETY(u32 cast): s is the number of random directions, bounded by practical GPU limits.
-    debug_assert!(
+    assert!(
         s <= u32::MAX as usize,
         "too many directions for GPU dispatch"
     );

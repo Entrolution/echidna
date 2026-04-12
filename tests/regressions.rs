@@ -925,7 +925,167 @@ mod regression_28 {
         let output = input.custom_unary(handle, 2.0 * x[0]);
         tape.set_output(output.index());
 
-        // hessian_vec should debug_assert because custom ops are present
+        // hessian_vec should assert because custom ops are present
         let _ = tape.hessian_vec::<1>(&x);
+    }
+}
+
+// ═════════════════════════════════���════════════════════════
+//  Boundary-value derivative regression tests (PR #49 fixes)
+// ══════════════════════════════════════════════════════════
+
+// d/dx asin(x) = 1/sqrt(1-x²). At x = 1 - 1e-15, the naive formula 1 - x*x
+// loses ~15 digits. The (1-x)(1+x) formulation preserves precision.
+mod boundary_asin {
+    use echidna::Dual;
+
+    #[test]
+    fn asin_near_boundary_dual() {
+        let x_val = 1.0_f64 - 1e-15;
+        let d = Dual::new(x_val, 1.0);
+        let r = d.asin();
+        // Analytical: 1/sqrt((1-x)(1+x)) = 1/sqrt(1e-15 * (2 - 1e-15))
+        let expected = 1.0 / ((1.0 - x_val) * (1.0 + x_val)).sqrt();
+        let rel_err = ((r.eps - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "asin derivative near boundary: got {}, expected {}, rel_err={}",
+            r.eps,
+            expected,
+            rel_err
+        );
+    }
+
+    #[test]
+    fn acos_near_boundary_dual() {
+        let x_val = 1.0_f64 - 1e-15;
+        let d = Dual::new(x_val, 1.0);
+        let r = d.acos();
+        let expected = -1.0 / ((1.0 - x_val) * (1.0 + x_val)).sqrt();
+        let rel_err = ((r.eps - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "acos derivative near boundary: got {}, expected {}, rel_err={}",
+            r.eps,
+            expected,
+            rel_err
+        );
+    }
+
+    #[test]
+    fn atanh_near_boundary_dual() {
+        let x_val = 1.0_f64 - 1e-15;
+        let d = Dual::new(x_val, 1.0);
+        let r = d.atanh();
+        let expected = 1.0 / ((1.0 - x_val) * (1.0 + x_val));
+        let rel_err = ((r.eps - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "atanh derivative near boundary: got {}, expected {}, rel_err={}",
+            r.eps,
+            expected,
+            rel_err
+        );
+    }
+}
+
+#[cfg(feature = "bytecode")]
+mod boundary_bytecode {
+    use num_traits::Float;
+
+    fn breverse_grad(
+        f: impl FnOnce(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+        x: &[f64],
+    ) -> Vec<f64> {
+        let (mut tape, _) = echidna::record(f, x);
+        tape.gradient(x)
+    }
+
+    #[test]
+    fn asin_near_boundary_breverse() {
+        let x_val = 1.0_f64 - 1e-15;
+        let g = breverse_grad(|x| x[0].asin(), &[x_val]);
+        let expected = 1.0 / ((1.0 - x_val) * (1.0 + x_val)).sqrt();
+        let rel_err = ((g[0] - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "BReverse asin near boundary: rel_err={}",
+            rel_err
+        );
+    }
+
+    #[test]
+    fn atan2_large_inputs_breverse() {
+        let g = breverse_grad(|x| x[0].atan2(x[1]), &[1e200, 1e200]);
+        // At (a,a), d/da atan2(a,b) = b/(a²+b²) = 1/(2a) ≈ 5e-201
+        // This is subnormal for f64, so it may flush to zero on some platforms.
+        // The key property: it must be finite (not NaN or Inf).
+        assert!(
+            g[0].is_finite(),
+            "atan2 da gradient should be finite for large inputs, got {}",
+            g[0]
+        );
+        assert!(
+            g[1].is_finite(),
+            "atan2 db gradient should be finite for large inputs, got {}",
+            g[1]
+        );
+    }
+
+    #[test]
+    fn div_small_denominator_breverse() {
+        let x_val = 1e-200_f64;
+        let g = breverse_grad(|x| x[0].recip(), &[x_val]);
+        // d/dx(1/x) = -1/x² = -1e400 → Inf for f64. That's the correct IEEE result.
+        // The key is it should NOT be NaN.
+        assert!(
+            !g[0].is_nan(),
+            "recip derivative should not be NaN for small x"
+        );
+    }
+}
+
+#[cfg(feature = "taylor")]
+mod boundary_taylor {
+    use echidna::Taylor;
+
+    #[test]
+    fn taylor_hypot_large_inputs() {
+        // hypot(a, b) at a₀=1e200, b₀=1e200 with direction (1, 0)
+        let a = Taylor::<f64, 3>::new([1e200, 1.0, 0.0]);
+        let b = Taylor::<f64, 3>::constant(1e200);
+        let r = a.hypot(b);
+        assert!(r.coeffs[0].is_finite(), "hypot primal should be finite");
+        assert!(
+            r.coeffs[1] != 0.0 && r.coeffs[1].is_finite(),
+            "hypot first derivative should be non-zero and finite, got {}",
+            r.coeffs[1]
+        );
+    }
+
+    #[test]
+    fn taylor_hypot_small_inputs() {
+        let a = Taylor::<f64, 3>::new([1e-200, 1.0, 0.0]);
+        let b = Taylor::<f64, 3>::constant(1e-200);
+        let r = a.hypot(b);
+        assert!(r.coeffs[0].is_finite(), "hypot primal should be finite");
+        assert!(
+            r.coeffs[1].is_finite(),
+            "hypot first derivative should be finite, got {}",
+            r.coeffs[1]
+        );
+    }
+
+    #[test]
+    fn taylor_asin_near_boundary() {
+        // asin at x₀ = 1 - 1e-10 — derivative should be large but finite
+        let x = Taylor::<f64, 3>::new([1.0 - 1e-10, 1.0, 0.0]);
+        let r = x.asin();
+        assert!(r.coeffs[0].is_finite(), "asin primal should be finite");
+        assert!(
+            r.coeffs[1].is_finite() && r.coeffs[1] > 0.0,
+            "asin first Taylor coefficient should be positive and finite, got {}",
+            r.coeffs[1]
+        );
     }
 }

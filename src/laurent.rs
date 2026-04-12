@@ -221,7 +221,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// Zero-pads the front for `pole_order > 0` (terms beyond K are truncated).
     /// Panics if `pole_order < 0`.
     fn as_taylor_coeffs(&self) -> [F; K] {
-        debug_assert!(self.pole_order >= 0, "as_taylor_coeffs called on pole");
+        assert!(self.pole_order >= 0, "as_taylor_coeffs called on pole");
         let shift = self.pole_order as usize;
         std::array::from_fn(|i| {
             if i < shift {
