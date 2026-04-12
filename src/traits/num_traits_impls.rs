@@ -608,9 +608,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         self.value.classify()
     }
 
-    // BUG-HUNT-NOTE: Returning Reverse::constant() (no tape entry) is a valid optimization.
-    // These are piecewise-constant functions with zero derivative a.e. Skipping tape
-    // recording saves space without affecting gradient correctness.
+    // Returning Reverse::constant() (no tape entry) is intentional: floor/ceil/round/trunc
+    // are piecewise-constant with zero derivative a.e. Skipping tape recording saves space
+    // without affecting gradient correctness.
     fn floor(self) -> Self {
         Reverse::constant(self.value.floor())
     }
