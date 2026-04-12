@@ -519,10 +519,10 @@ mod tests {
 
     #[test]
     fn boundary_tau_nearly_parallel() {
-        // When s and d are nearly parallel, b ≈ sqrt(disc) and the naive
-        // quadratic formula suffers catastrophic cancellation. Vieta's
-        // formula should give a clean result.
-        let s = [0.9, 0.0];
+        // When s is near the trust-region boundary and d is nearly parallel,
+        // c ≈ 0 so disc ≈ b², making (-b + sqrt(disc)) suffer cancellation.
+        // Vieta's formula avoids this.
+        let s = [1.0 - 1e-14, 0.0]; // very close to boundary
         let d = [1.0, 1e-10]; // nearly parallel to s
         let radius = 1.0;
         let tau = boundary_tau(&s, &d, radius);
