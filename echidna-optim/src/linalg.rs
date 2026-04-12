@@ -25,7 +25,11 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
     let mut lu: Vec<Vec<F>> = a.to_vec();
     let mut perm: Vec<usize> = (0..n).collect();
 
-    let eps = F::epsilon().sqrt();
+    // Use a relative singularity threshold: eps_mach * n * max_pivot.
+    // This adapts to both f32 and f64, and scales with matrix magnitude.
+    let eps_mach = F::epsilon();
+    let n_f = F::from(n).unwrap();
+    let mut max_pivot_seen = F::zero();
 
     for col in 0..n {
         // Find pivot
@@ -39,7 +43,9 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
             }
         }
 
-        if max_val < eps {
+        max_pivot_seen = max_pivot_seen.max(max_val);
+        let tol = eps_mach * n_f * max_pivot_seen;
+        if max_val < tol {
             return None; // Singular
         }
 

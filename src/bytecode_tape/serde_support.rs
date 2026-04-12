@@ -98,10 +98,12 @@ impl<'de, F: Float + Deserialize<'de>> Deserialize<'de> for BytecodeTape<F> {
             }
         }
         for (i, &[a, b]) in data.arg_indices.iter().enumerate() {
-            if data.opcodes[i] != OpCode::Input
-                && data.opcodes[i] != OpCode::Const
-                && data.opcodes[i] != OpCode::Custom
-            {
+            if data.opcodes[i] == OpCode::Custom {
+                return Err(serde::de::Error::custom(format!(
+                    "opcodes[{i}] is Custom, which cannot be deserialized (custom ops have no serializable callback)"
+                )));
+            }
+            if data.opcodes[i] != OpCode::Input && data.opcodes[i] != OpCode::Const {
                 if a >= data.num_variables {
                     return Err(serde::de::Error::custom(format!(
                         "arg_indices[{}][0] ({}) >= num_variables ({})",

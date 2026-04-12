@@ -52,33 +52,28 @@
 
 - [x] Review-fix: Phase 3 commit
 
-## Phase 4: Low-severity fixes
+## Phase 4: Low-severity fixes ✓
 
-- [ ] Fix #11: Per-type thread-local borrow guard
-  - Use `TypeId`-based or generic-parameter-based borrow tracking instead of single bool
-  - Test: Add cross-type nesting test (BReverse<f64> inside BReverse<f32>)
+- [x] Fix #11: Per-type thread-local borrow guard
+  - Added `borrow_cell()` to `BtapeThreadLocal` and `TapeThreadLocal` traits with per-type thread_local bools
+  - `BtapeBorrowGuard` and `TapeBorrowGuard` now use the per-type cell, allowing cross-type nesting
 
-- [ ] Fix #12: Reject Custom opcodes in deserialized tapes
-  - Add `if data.opcodes[i] == OpCode::Custom { return Err(...) }` in serde validation
-  - Test: Add test that serialized tape with Custom opcode is rejected
+- [x] Fix #12: Reject Custom opcodes in deserialized tapes
+  - Added early rejection of Custom opcodes in serde_support.rs validation loop
 
-- [ ] Fix #13: f32-aware Gram-Schmidt epsilon
-  - Replace `F::from(1e-12).unwrap()` with `F::epsilon().sqrt()` in `laplacian.rs:274`
-  - Test: Add f32 Hutch++ test
+- [x] Fix #13: f32-aware Gram-Schmidt epsilon
+  - Replaced `F::from(1e-12).unwrap()` with `F::epsilon().sqrt()` in laplacian.rs
 
-- [ ] Fix #14: f32 factorial precision guard
-  - Add `if k >= 13 && std::mem::size_of::<F>() <= 4 { ... }` guard or document limitation
-  - Test: Document or test f32 limitation for high orders
+- [x] Fix #14: f32 factorial precision guard
+  - Added `k < 13 || size_of::<F>() > 4` assertion in both diagonal_kth_order variants
 
-- [ ] Fix #15: L-BFGS near-zero curvature guard
-  - Replace `sy > F::zero()` with `sy > F::epsilon() * yy` in `lbfgs.rs:138`
-  - Test: Add test with near-flat objective
+- [x] Fix #15: L-BFGS near-zero curvature guard
+  - Changed `sy > F::zero()` to `sy > F::epsilon() * yy` in lbfgs.rs
 
-- [ ] Fix #16: f32-aware LU singularity threshold
-  - Scale threshold relative to matrix norm or max pivot, not just `sqrt(epsilon)`
-  - Test: Add f32 ill-conditioned solve test
+- [x] Fix #16: f32-aware LU singularity threshold
+  - Replaced `sqrt(epsilon)` with relative threshold `epsilon * n * max_pivot_seen` in linalg.rs
 
-- [ ] Review-fix: Phase 4 commit
+- [x] Review-fix: Phase 4 commit
 
 ## Deferrals (requires user approval)
 

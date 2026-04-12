@@ -10,6 +10,11 @@ thread_local! {
     static BTAPE_F64: Cell<*mut BytecodeTape<f64>> = const { Cell::new(std::ptr::null_mut()) };
     static BTAPE_DUAL_F32: Cell<*mut BytecodeTape<Dual<f32>>> = const { Cell::new(std::ptr::null_mut()) };
     static BTAPE_DUAL_F64: Cell<*mut BytecodeTape<Dual<f64>>> = const { Cell::new(std::ptr::null_mut()) };
+    // Per-type borrow guards (prevents false reentrance detection across different float types)
+    static BTAPE_BORROWED_F32: Cell<bool> = const { Cell::new(false) };
+    static BTAPE_BORROWED_F64: Cell<bool> = const { Cell::new(false) };
+    static BTAPE_BORROWED_DUAL_F32: Cell<bool> = const { Cell::new(false) };
+    static BTAPE_BORROWED_DUAL_F64: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Trait to select the correct thread-local for a given float type.
@@ -19,11 +24,16 @@ thread_local! {
 pub trait BtapeThreadLocal: Float {
     /// Returns the thread-local cell holding a pointer to the active bytecode tape.
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>>;
+    /// Returns the per-type borrow flag cell.
+    fn btape_borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>>;
 }
 
 impl BtapeThreadLocal for f32 {
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
         &BTAPE_F32
+    }
+    fn btape_borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &BTAPE_BORROWED_F32
     }
 }
 
@@ -31,11 +41,17 @@ impl BtapeThreadLocal for f64 {
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
         &BTAPE_F64
     }
+    fn btape_borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &BTAPE_BORROWED_F64
+    }
 }
 
 impl BtapeThreadLocal for Dual<f32> {
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
         &BTAPE_DUAL_F32
+    }
+    fn btape_borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &BTAPE_BORROWED_DUAL_F32
     }
 }
 
@@ -43,30 +59,32 @@ impl BtapeThreadLocal for Dual<f64> {
     fn btape_cell() -> &'static std::thread::LocalKey<Cell<*mut BytecodeTape<Self>>> {
         &BTAPE_DUAL_F64
     }
+    fn btape_borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &BTAPE_BORROWED_DUAL_F64
+    }
 }
 
-thread_local! {
-    static BTAPE_BORROWED: Cell<bool> = const { Cell::new(false) };
+struct BtapeBorrowGuard {
+    cell: &'static std::thread::LocalKey<Cell<bool>>,
 }
-
-struct BtapeBorrowGuard;
 
 impl BtapeBorrowGuard {
-    fn new() -> Self {
-        BTAPE_BORROWED.with(|b| {
+    fn new<F: BtapeThreadLocal>() -> Self {
+        let cell = F::btape_borrow_cell();
+        cell.with(|b| {
             assert!(
                 !b.get(),
                 "reentrant with_active_btape call detected — this would create aliased &mut references"
             );
             b.set(true);
         });
-        BtapeBorrowGuard
+        BtapeBorrowGuard { cell }
     }
 }
 
 impl Drop for BtapeBorrowGuard {
     fn drop(&mut self) {
-        BTAPE_BORROWED.with(|b| b.set(false));
+        self.cell.with(|b| b.set(false));
     }
 }
 
@@ -74,7 +92,7 @@ impl Drop for BtapeBorrowGuard {
 /// Panics if no tape is active.
 #[inline]
 pub fn with_active_btape<F: BtapeThreadLocal, R>(f: impl FnOnce(&mut BytecodeTape<F>) -> R) -> R {
-    let _guard = BtapeBorrowGuard::new();
+    let _guard = BtapeBorrowGuard::new::<F>();
     F::btape_cell().with(|cell| {
         let ptr = cell.get();
         assert!(
