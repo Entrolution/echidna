@@ -4,10 +4,11 @@
 
 | Version | Supported |
 |---------|-----------|
-| >= 0.8.0 | Yes       |
+| >= 0.8.1 | Yes       |
+| 0.8.0    | No — GPU cbrt HVP second derivative is wrong; asin/acos/atanh lose precision near domain boundaries; CUDA Taylor codegen truncates 64-bit offsets |
 | < 0.8.0  | No        |
 
-Only the latest minor release receives security updates. Versions prior to 0.8.0 have known correctness bugs including: GPU Taylor coefficient errors for POWI at x=0, REM with non-constant divisors, POWF with negative base, and ATAN2 at b=0 for K>=3; silent NaN in Laurent max/min; piggyback forward-adjoint gradient bias; optimizer NaN non-detection; and trust region convergence issues.
+Only the latest patch release receives security updates. Version 0.8.0 has known correctness bugs including: GPU cbrt Hessian-vector product off by r² factor; catastrophic cancellation in asin/acos/atanh derivatives near ±1 (all AD modes and GPU shaders); CUDA Taylor codegen silently truncating 64-bit offsets to u32; bytecode atan2 overflow for large inputs; and `debug_assert!` guards on custom ops in Hessian stripped in release builds. Versions prior to 0.8.0 have additional known issues documented in the changelog.
 
 ## Reporting a Vulnerability
 

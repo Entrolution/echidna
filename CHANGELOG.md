@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-04-12
+
+### Fixed
+
+#### GPU kernels (CUDA + WGSL)
+- **cbrt HVP second derivative**: tangent_reverse kernels computed `-2at/(9r³)` instead of `-2at/(9r⁵)`, producing wrong Hessian-vector products through `cbrt`. Fixed in both CUDA and WGSL.
+- **asin/acos/atanh cancellation in GPU shaders**: GPU derivative formulas used `1-a*a` which loses ~15 digits near |a|→1. Replaced with `(1-a)*(1+a)` across all GPU kernels (reverse, tangent_forward, tangent_reverse) for CPU-GPU parity.
+- **CUDA Taylor codegen u32 truncation**: generated code assigned 64-bit `j_base` to `unsigned int` intermediates, silently truncating for large tapes. All offset variables now use `unsigned long long`.
+
+#### Core AD (all modes)
+- **asin/acos/atanh catastrophic cancellation**: `1 - x*x` replaced with `(1-x)*(1+x)` in Dual, DualVec, Reverse, bytecode reverse_partials, and Taylor recurrences to preserve precision near domain boundaries.
+- **atan2 bytecode overflow**: `a*a + b*b` replaced with `hypot(a,b)²` in bytecode reverse_partials, preventing zero derivatives for large inputs (|a| or |b| > ~1.34e154).
+- **Division derivative overflow**: quotient rule restructured from `(a'b - ab') * inv²` to `(a' - a*inv*b') * inv`, avoiding intermediate overflow for small denominators.
+- **Taylor hypot overflow/underflow**: inputs rescaled by `max(|a₀|, |b₀|)` before squaring, preventing silent zeroing of derivative coefficients for large inputs and infinity for small inputs.
+
+#### Bytecode tape
+- **Custom ops in Hessian (release builds)**: `debug_assert!` promoted to `assert!` for custom-ops guards in `hessian_vec`, `sparse_hessian_vec`, and `sparse_jacobian_vec`, preventing silently wrong second derivatives in release builds.
+- **Serde Custom opcode rejection**: deserialization now rejects tapes containing Custom opcodes (which have no serializable callback) instead of silently accepting them.
+- **Per-type thread-local borrow guards**: borrow guards for `with_active_tape` and `with_active_btape` are now per-type instead of global, preventing false reentrance panics when nesting different float types on the same thread.
+
+#### STDE
+- **Welford negative variance**: `m2.max(0.0)` clamp prevents NaN standard errors from floating-point cancellation in nearly-identical samples.
+- **estimate_weighted zero-weight division**: guarded `w_sum2 / w_sum` against all-zero weights producing NaN.
+- **Gram-Schmidt epsilon**: replaced hardcoded `1e-12` with `F::epsilon().sqrt()` in Hutch++, fixing f32 compatibility.
+- **Higher-order f32 precision guard**: `diagonal_kth_order` now rejects k ≥ 13 for f32 (k! exceeds f32 mantissa precision).
+
+#### GPU infrastructure
+- **WGSL u32 index overflow**: chunking logic now caps `chunk_size` so `bid * num_variables * K` cannot exceed `u32::MAX`.
+
+#### echidna-optim
+- **L-BFGS rho overflow**: curvature pair acceptance tightened from `sy > 0` to `sy > epsilon * yy`, preventing infinite `rho = 1/sy` from near-zero curvature.
+- **LU singularity threshold**: replaced `sqrt(epsilon)` with relative threshold `epsilon * n * max_pivot`, adapting to both f32 and matrix scale. Explicit zero-pivot check added.
+
+### Added
+- 5 additional `debug_assert!` → `assert!` promotions for correctness-critical guards (Welford finite-sample, Laurent pole guard, GPU dispatch u32 bounds).
+- 35 new regression/structural tests:
+  - 8 boundary-value derivative tests (asin/acos/atanh near ±1, atan2 large inputs, division small denominator, Taylor hypot extremes)
+  - 2 Welford accumulator edge case tests (nearly-identical samples, all-zero weights)
+  - 5 GPU chunking safety tests (u32 overflow prevention)
+  - 4 f32 derivative correctness tests (cross-validation + diagonal_kth_order)
+  - 15 per-opcode GPU HVP parity tests (exp, log, sqrt, cbrt, recip, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, powf)
+  - 1 serde Custom opcode rejection test (existing assert test updated)
+
 ## [0.8.0] - 2026-04-11
 
 ### Fixed
