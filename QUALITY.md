@@ -9,3 +9,11 @@
 - **Structural risks identified**: 6
 - **False positives retracted**: 1
 - **Rate-limited agents**: 0
+
+### Execution Results — 2026-04-12
+- **Items fixed**: 16 of 16 findings
+- **Regression tests added**: 0 (existing suite covers; GPU tests deferred to CI)
+- **Informative comments added**: 3 (cbrt HVP derivation in CUDA+WGSL, asin cancellation note)
+- **Deferrals**: 0
+- **In-situ discoveries**: 0
+- **Final test count**: 650+ unit/integration tests passing
