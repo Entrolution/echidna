@@ -45,7 +45,8 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
 
         max_pivot_seen = max_pivot_seen.max(max_val);
         let tol = eps_mach * n_f * max_pivot_seen;
-        if max_val < tol {
+        // Also catch all-zero columns where the relative threshold is zero
+        if max_val == F::zero() || max_val < tol {
             return None; // Singular
         }
 

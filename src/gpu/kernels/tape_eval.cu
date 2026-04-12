@@ -271,15 +271,15 @@ extern "C" __global__ void reverse_sweep(
             case OP_SIN:    da = cos(a); break;
             case OP_COS:    da = -sin(a); break;
             case OP_TAN:    { F c = cos(a); da = F(1)/(c*c); break; }
-            case OP_ASIN:   da = F(1)/sqrt(F(1)-a*a); break;
-            case OP_ACOS:   da = F(-1)/sqrt(F(1)-a*a); break;
+            case OP_ASIN:   da = F(1)/sqrt((F(1)-a)*(F(1)+a)); break;
+            case OP_ACOS:   da = F(-1)/sqrt((F(1)-a)*(F(1)+a)); break;
             case OP_ATAN:   da = F(1)/(F(1)+a*a); break;
             case OP_SINH:   da = cosh(a); break;
             case OP_COSH:   da = sinh(a); break;
             case OP_TANH:   { F c = cosh(a); da = F(1)/(c*c); break; }
             case OP_ASINH:  da = F(1)/sqrt(a*a+F(1)); break;
             case OP_ACOSH:  da = F(1)/sqrt(a*a-F(1)); break;
-            case OP_ATANH:  da = F(1)/(F(1)-a*a); break;
+            case OP_ATANH:  da = F(1)/((F(1)-a)*(F(1)+a)); break;
             case OP_ABS:    da = _sign(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
             case OP_ROUND:  case OP_TRUNC: da = F(0); break;
@@ -399,15 +399,15 @@ extern "C" __global__ void tangent_forward(
             case OP_SIN:   r=sin(a); rt=cos(a)*at; break;
             case OP_COS:   r=cos(a); rt=-sin(a)*at; break;
             case OP_TAN:   r=tan(a); { F c=cos(a); rt=at/(c*c); } break;
-            case OP_ASIN:  r=asin(a); rt=at/sqrt(F(1)-a*a); break;
-            case OP_ACOS:  r=acos(a); rt=-at/sqrt(F(1)-a*a); break;
+            case OP_ASIN:  r=asin(a); rt=at/sqrt((F(1)-a)*(F(1)+a)); break;
+            case OP_ACOS:  r=acos(a); rt=-at/sqrt((F(1)-a)*(F(1)+a)); break;
             case OP_ATAN:  r=atan(a); rt=at/(F(1)+a*a); break;
             case OP_SINH:  r=sinh(a); rt=cosh(a)*at; break;
             case OP_COSH:  r=cosh(a); rt=sinh(a)*at; break;
             case OP_TANH:  r=tanh(a); { F c=cosh(a); rt=at/(c*c); } break;
             case OP_ASINH: r=asinh(a); rt=at/sqrt(a*a+F(1)); break;
             case OP_ACOSH: r=acosh(a); rt=at/sqrt(a*a-F(1)); break;
-            case OP_ATANH: r=atanh(a); rt=at/(F(1)-a*a); break;
+            case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
             case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
             case OP_FLOOR:  r=floor(a); rt=F(0); break;
@@ -527,15 +527,15 @@ extern "C" __global__ void tangent_reverse(
             case OP_SIN:   r=sin(a); rt=cos(a)*at; break;
             case OP_COS:   r=cos(a); rt=-sin(a)*at; break;
             case OP_TAN:   r=tan(a); { F c=cos(a); rt=at/(c*c); } break;
-            case OP_ASIN:  r=asin(a); rt=at/sqrt(F(1)-a*a); break;
-            case OP_ACOS:  r=acos(a); rt=-at/sqrt(F(1)-a*a); break;
+            case OP_ASIN:  r=asin(a); rt=at/sqrt((F(1)-a)*(F(1)+a)); break;
+            case OP_ACOS:  r=acos(a); rt=-at/sqrt((F(1)-a)*(F(1)+a)); break;
             case OP_ATAN:  r=atan(a); rt=at/(F(1)+a*a); break;
             case OP_SINH:  r=sinh(a); rt=cosh(a)*at; break;
             case OP_COSH:  r=cosh(a); rt=sinh(a)*at; break;
             case OP_TANH:  r=tanh(a); { F c=cosh(a); rt=at/(c*c); } break;
             case OP_ASINH: r=asinh(a); rt=at/sqrt(a*a+F(1)); break;
             case OP_ACOSH: r=acosh(a); rt=at/sqrt(a*a-F(1)); break;
-            case OP_ATANH: r=atanh(a); rt=at/(F(1)-a*a); break;
+            case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
             case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
             case OP_FLOOR:  r=floor(a); rt=F(0); break;
@@ -646,15 +646,15 @@ extern "C" __global__ void tangent_reverse(
             case OP_SIN:    da_re=cos(a); da_eps=-sin(a)*at; break;
             case OP_COS:    da_re=-sin(a); da_eps=-cos(a)*at; break;
             case OP_TAN:    { F c=cos(a); F s=F(1)/(c*c); da_re=s; da_eps=F(2)*tan(a)*s*at; break; }
-            case OP_ASIN:   { F t=sqrt(F(1)-a*a); da_re=F(1)/t; da_eps=a*at/(t*t*t); break; }
-            case OP_ACOS:   { F t=sqrt(F(1)-a*a); da_re=F(-1)/t; da_eps=-a*at/(t*t*t); break; }
+            case OP_ASIN:   { F t=sqrt((F(1)-a)*(F(1)+a)); da_re=F(1)/t; da_eps=a*at/(t*t*t); break; }
+            case OP_ACOS:   { F t=sqrt((F(1)-a)*(F(1)+a)); da_re=F(-1)/t; da_eps=-a*at/(t*t*t); break; }
             case OP_ATAN:   { F t=F(1)+a*a; da_re=F(1)/t; da_eps=F(-2)*a*at/(t*t); break; }
             case OP_SINH:   da_re=cosh(a); da_eps=sinh(a)*at; break;
             case OP_COSH:   da_re=sinh(a); da_eps=cosh(a)*at; break;
             case OP_TANH:   { F c=cosh(a); F s=F(1)/(c*c); da_re=s; da_eps=F(-2)*tanh(a)*s*at; break; }
             case OP_ASINH:  { F t=sqrt(a*a+F(1)); da_re=F(1)/t; da_eps=-a*at/(t*t*t); break; }
             case OP_ACOSH:  { F t=sqrt(a*a-F(1)); da_re=F(1)/t; da_eps=-a*at/(t*t*t); break; }
-            case OP_ATANH:  { F t=F(1)-a*a; da_re=F(1)/t; da_eps=F(2)*a*at/(t*t); break; }
+            case OP_ATANH:  { F t=(F(1)-a)*(F(1)+a); da_re=F(1)/t; da_eps=F(2)*a*at/(t*t); break; }
             case OP_ABS:    da_re=_sign(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
             case OP_ROUND:  case OP_TRUNC: break;

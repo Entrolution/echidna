@@ -203,8 +203,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 24u /* SIN */: { da = cos(a); }
             case 25u /* COS */: { da = -sin(a); }
             case 26u /* TAN */: { let c = cos(a); da = 1.0 / (c * c); }
-            case 27u /* ASIN */: { da = 1.0 / sqrt(1.0 - a * a); }
-            case 28u /* ACOS */: { da = -1.0 / sqrt(1.0 - a * a); }
+            case 27u /* ASIN */: { da = 1.0 / sqrt((1.0 - a) * (1.0 + a)); }
+            case 28u /* ACOS */: { da = -1.0 / sqrt((1.0 - a) * (1.0 + a)); }
             case 29u /* ATAN */: { da = 1.0 / (1.0 + a * a); }
 
             // Hyperbolic
@@ -213,7 +213,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 32u /* TANH */: { let c = cosh(a); da = 1.0 / (c * c); }
             case 33u /* ASINH */: { da = 1.0 / sqrt(a * a + 1.0); }
             case 34u /* ACOSH */: { da = 1.0 / sqrt(a * a - 1.0); }
-            case 35u /* ATANH */: { da = 1.0 / (1.0 - a * a); }
+            case 35u /* ATANH */: { da = 1.0 / ((1.0 - a) * (1.0 + a)); }
 
             // Misc
             case 36u /* ABS */: { da = select(select(-1.0, 1.0, a >= 0.0), 0.0, a != a); }
