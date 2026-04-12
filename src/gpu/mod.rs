@@ -480,3 +480,74 @@ pub fn taylor_forward_2nd_batch_chunked<B: GpuBackend>(
         c2s: all_c2s,
     })
 }
+
+#[cfg(all(test, feature = "stde"))]
+mod tests {
+    use super::*;
+
+    /// Replicate the chunk_size calculation from taylor_forward_2nd_batch_chunked
+    /// to test u32 overflow safety without requiring a GPU backend.
+    fn compute_chunk_size(num_variables: u32, max_buffer_bytes: u64) -> Option<u32> {
+        let bytes_per_element = (num_variables as u64) * 3 * 4;
+        if bytes_per_element == 0 {
+            return None;
+        }
+        let mut chunk_size = max_buffer_bytes / bytes_per_element;
+        if chunk_size == 0 {
+            return None;
+        }
+        let dispatch_limit = MAX_WORKGROUPS_PER_DIM * TAYLOR_WORKGROUP_SIZE;
+        chunk_size = chunk_size.min(dispatch_limit);
+        let nv_k = (num_variables as u64) * 3;
+        if nv_k > 0 {
+            chunk_size = chunk_size.min(u32::MAX as u64 / nv_k);
+        }
+        Some(chunk_size as u32)
+    }
+
+    #[test]
+    fn chunking_caps_for_large_num_variables() {
+        // With 500,000 variables and K=3, bid * nv * K must stay within u32.
+        // Max safe chunk_size = u32::MAX / (500_000 * 3) = 2863
+        let chunk = compute_chunk_size(500_000, u64::MAX).unwrap();
+        let product = chunk as u64 * 500_000 * 3;
+        assert!(
+            product <= u32::MAX as u64,
+            "chunk_size * nv * K = {} exceeds u32::MAX",
+            product
+        );
+    }
+
+    #[test]
+    fn chunking_caps_for_very_large_num_variables() {
+        // With very large num_variables, chunk_size should be very small
+        let chunk = compute_chunk_size(1_000_000, u64::MAX).unwrap();
+        let product = chunk as u64 * 1_000_000 * 3;
+        assert!(
+            product <= u32::MAX as u64,
+            "chunk_size * nv * K = {} exceeds u32::MAX",
+            product
+        );
+    }
+
+    #[test]
+    fn chunking_with_small_buffer() {
+        // Buffer too small for even one element
+        let result = compute_chunk_size(1000, 1);
+        assert!(result.is_none(), "should fail with buffer too small");
+    }
+
+    #[test]
+    fn chunking_single_variable() {
+        let chunk = compute_chunk_size(1, WGPU_MAX_BUFFER_BYTES).unwrap();
+        assert!(chunk > 0, "should handle single variable");
+        let product = chunk as u64 * 1 * 3;
+        assert!(product <= u32::MAX as u64);
+    }
+
+    #[test]
+    fn chunking_zero_variables() {
+        let result = compute_chunk_size(0, WGPU_MAX_BUFFER_BYTES);
+        assert!(result.is_none(), "should fail with zero variables");
+    }
+}

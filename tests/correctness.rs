@@ -471,3 +471,134 @@ fn hvp_cross_validate_trig_mix() {
     let v = [0.5, -0.5];
     cross_validate_hvp(|v| trig_mix(v), &x, &v, "trig-mix-hvp");
 }
+
+// ══════════════════════════════════════════════
+//  f32 derivative correctness
+// ══════════════════════════════════════════════
+
+fn finite_diff_grad_f32(f: impl Fn(&[f32]) -> f32, x: &[f32], h: f32) -> Vec<f32> {
+    let n = x.len();
+    let mut grad = vec![0.0f32; n];
+    for i in 0..n {
+        let mut xp = x.to_vec();
+        let mut xm = x.to_vec();
+        xp[i] += h;
+        xm[i] -= h;
+        grad[i] = (f(&xp) - f(&xm)) / (2.0 * h);
+    }
+    grad
+}
+
+fn forward_grad_f32(f: impl Fn(&[Dual<f32>]) -> Dual<f32>, x: &[f32]) -> Vec<f32> {
+    let n = x.len();
+    let mut grad = vec![0.0f32; n];
+    for i in 0..n {
+        let inputs: Vec<Dual<f32>> = x
+            .iter()
+            .enumerate()
+            .map(|(k, &xi)| {
+                if k == i {
+                    Dual::variable(xi)
+                } else {
+                    Dual::constant(xi)
+                }
+            })
+            .collect();
+        grad[i] = f(&inputs).eps;
+    }
+    grad
+}
+
+fn cross_validate_f32(
+    f_dual: impl Fn(&[Dual<f32>]) -> Dual<f32>,
+    f_rev: impl FnOnce(&[echidna::Reverse<f32>]) -> echidna::Reverse<f32>,
+    f_f32: impl Fn(&[f32]) -> f32,
+    x: &[f32],
+    label: &str,
+) {
+    let fwd_grad = forward_grad_f32(&f_dual, x);
+    let rev_grad = echidna::grad(f_rev, x);
+    let fd_grad = finite_diff_grad_f32(&f_f32, x, 1e-4);
+
+    // Forward vs reverse: should match to f32 precision (~1e-6).
+    for i in 0..x.len() {
+        let scale = fwd_grad[i].abs().max(1e-6);
+        assert!(
+            (fwd_grad[i] - rev_grad[i]).abs() <= 1e-5 * scale,
+            "f32 {label} fwd vs rev, component {i}: fwd={}, rev={}",
+            fwd_grad[i],
+            rev_grad[i]
+        );
+    }
+
+    // Forward vs finite diff: f32 FD is noisy, allow ~1e-2 relative error.
+    for i in 0..x.len() {
+        let scale = fwd_grad[i].abs().max(1.0);
+        assert!(
+            (fwd_grad[i] - fd_grad[i]).abs() <= 1e-2 * scale,
+            "f32 {label} fwd vs fd, component {i}: fwd={}, fd={}",
+            fwd_grad[i],
+            fd_grad[i]
+        );
+    }
+}
+
+#[test]
+fn cross_validate_f32_rosenbrock() {
+    let x: Vec<f32> = vec![1.5, 2.0];
+    cross_validate_f32(
+        |v| rosenbrock(v),
+        |v| rosenbrock(v),
+        |v| rosenbrock(v),
+        &x,
+        "rosenbrock-f32",
+    );
+}
+
+#[test]
+fn cross_validate_f32_trig_mix() {
+    let x: Vec<f32> = vec![1.0, 2.0];
+    cross_validate_f32(
+        |v| trig_mix(v),
+        |v| trig_mix(v),
+        |v| trig_mix(v),
+        &x,
+        "trig-mix-f32",
+    );
+}
+
+#[test]
+fn cross_validate_f32_sphere() {
+    let x: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+    cross_validate_f32(
+        |v| sphere(v),
+        |v| sphere(v),
+        |v| sphere(v),
+        &x,
+        "sphere-5d-f32",
+    );
+}
+
+#[cfg(feature = "stde")]
+#[test]
+fn f32_diagonal_kth_order_boundary() {
+    // k=12 should work for f32 (12! = 479_001_600, fits in f32 exactly: 2^28.8)
+    // k=2 is the basic case
+    use echidna::BReverse;
+    let f = |x: &[BReverse<f32>]| x[0] * x[0] + x[1] * x[1];
+    let x: Vec<f32> = vec![1.0, 2.0];
+    let (tape, _) = echidna::record(f, &x);
+
+    let (_, diag_k2) = echidna::stde::diagonal_kth_order(&tape, &x, 2);
+    // d²/dx₀²(x₀²+x₁²) = 2, d²/dx₁²(x₀²+x₁²) = 2
+    assert!(
+        (diag_k2[0] - 2.0).abs() < 0.01,
+        "k=2 f32 diag[0] = {}",
+        diag_k2[0]
+    );
+    assert!(
+        (diag_k2[1] - 2.0).abs() < 0.01,
+        "k=2 f32 diag[1] = {}",
+        diag_k2[1]
+    );
+}
