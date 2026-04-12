@@ -37,6 +37,10 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
 ) -> (F, Vec<F>) {
     assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
     assert!(k <= 20, "k must be <= 20 (k! overflows f64 for k > 20)");
+    assert!(
+        k < 13 || std::mem::size_of::<F>() > 4,
+        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
+    );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 
@@ -162,6 +166,10 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
     );
     assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
     assert!(k <= 20, "k must be <= 20 (k! overflows f64 for k > 20)");
+    assert!(
+        k < 13 || std::mem::size_of::<F>() > 4,
+        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
+    );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 

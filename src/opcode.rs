@@ -339,10 +339,12 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Atan2 => {
             // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            let denom = a * a + b * b;
-            if denom == zero {
+            // Use hypot to avoid overflow when a or b is large
+            let h = a.hypot(b);
+            if h == zero {
                 (zero, zero)
             } else {
+                let denom = h * h;
                 (b / denom, -a / denom)
             }
         }
@@ -414,8 +416,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let c = a.cos();
             (one / (c * c), zero)
         }
-        OpCode::Asin => (one / (one - a * a).sqrt(), zero),
-        OpCode::Acos => (-one / (one - a * a).sqrt(), zero),
+        OpCode::Asin => (one / ((one - a) * (one + a)).sqrt(), zero),
+        OpCode::Acos => (-one / ((one - a) * (one + a)).sqrt(), zero),
         OpCode::Atan => (one / (one + a * a), zero),
 
         // Hyperbolic
@@ -427,7 +429,7 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Asinh => (one / (a * a + one).sqrt(), zero),
         OpCode::Acosh => (one / (a * a - one).sqrt(), zero),
-        OpCode::Atanh => (one / (one - a * a), zero),
+        OpCode::Atanh => (one / ((one - a) * (one + a)), zero),
 
         // Misc
         OpCode::Abs => (a.signum(), zero),

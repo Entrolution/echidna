@@ -51,7 +51,7 @@ impl<F: Float> Div for Dual<F> {
         let inv = F::one() / rhs.re;
         Dual {
             re: self.re * inv,
-            eps: (self.eps * rhs.re - self.re * rhs.eps) * inv * inv,
+            eps: (self.eps - self.re * inv * rhs.eps) * inv,
         }
     }
 }

@@ -252,8 +252,8 @@ pub fn taylor_asin<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     c[0] = a[0].asin();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = 1 - a²
-    scratch2[0] = F::one() - scratch1[0];
+    // scratch2 = 1 - a²  (use (1-a₀)(1+a₀) to avoid cancellation near |a₀|→1)
+    scratch2[0] = (F::one() - a[0]) * (F::one() + a[0]);
     for k in 1..n {
         scratch2[k] = -scratch1[k];
     }
@@ -402,8 +402,8 @@ pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     c[0] = a[0].atanh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = 1 - a²
-    scratch2[0] = F::one() - scratch1[0];
+    // scratch2 = 1 - a²  (use (1-a₀)(1+a₀) to avoid cancellation near |a₀|→1)
+    scratch2[0] = (F::one() - a[0]) * (F::one() + a[0]);
     for k in 1..n {
         scratch2[k] = -scratch1[k];
     }
@@ -648,6 +648,7 @@ pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 /// `c = hypot(a, b) = sqrt(a² + b²)`.
 ///
 /// Uses `scratch1` for a², `scratch2` for b², and the result scratch for a²+b².
+/// Rescales inputs by max(|a₀|, |b₀|) to avoid overflow/underflow in the intermediate a²+b².
 #[inline]
 pub fn taylor_hypot<F: Float>(
     a: &[F],
@@ -657,16 +658,41 @@ pub fn taylor_hypot<F: Float>(
     scratch2: &mut [F],
 ) {
     let n = c.len();
-    // scratch1 = a²
-    taylor_mul(a, a, scratch1);
-    // scratch2 = b²
-    taylor_mul(b, b, scratch2);
-    // scratch1 = a² + b² (reuse scratch1)
-    for k in 0..n {
-        scratch1[k] = scratch1[k] + scratch2[k];
+    let scale = a[0].abs().max(b[0].abs());
+    if scale == F::zero() {
+        // Both leading terms are zero — compute directly (derivatives may be infinite)
+        taylor_mul(a, a, scratch1);
+        taylor_mul(b, b, scratch2);
+        for k in 0..n {
+            scratch1[k] = scratch1[k] + scratch2[k];
+        }
+        taylor_sqrt(scratch1, c);
+        c[0] = a[0].hypot(b[0]);
+        return;
     }
-    // c = sqrt(a² + b²)
-    taylor_sqrt(scratch1, c);
+    let inv_scale = F::one() / scale;
+    // scratch1 = (a/scale)  -- temporarily store rescaled a
+    for k in 0..n {
+        scratch1[k] = a[k] * inv_scale;
+    }
+    // scratch2 = (b/scale)  -- temporarily store rescaled b
+    for k in 0..n {
+        scratch2[k] = b[k] * inv_scale;
+    }
+    // c = (a/scale)²  -- reuse c as temp
+    taylor_mul(scratch1, scratch1, c);
+    // scratch1 = (b/scale)²  -- reuse scratch1
+    taylor_mul(scratch2, scratch2, scratch1);
+    // c = (a/scale)² + (b/scale)²
+    for k in 0..n {
+        c[k] = c[k] + scratch1[k];
+    }
+    // scratch1 = sqrt((a/scale)² + (b/scale)²)
+    taylor_sqrt(c, scratch1);
+    // c = scale * sqrt(...)  — undo rescaling
+    for k in 0..n {
+        c[k] = scratch1[k] * scale;
+    }
     c[0] = a[0].hypot(b[0]);
 }
 

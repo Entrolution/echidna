@@ -215,6 +215,8 @@ pub trait TapeThreadLocal: Float {
     fn cell() -> &'static std::thread::LocalKey<Cell<*mut Tape<Self>>>;
     /// Returns the thread-local cell holding the tape pool.
     fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>>;
+    /// Returns the per-type borrow flag cell.
+    fn borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>>;
 }
 
 impl TapeThreadLocal for f32 {
@@ -224,6 +226,9 @@ impl TapeThreadLocal for f32 {
     fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>> {
         &POOL_F32
     }
+    fn borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &TAPE_BORROWED_F32
+    }
 }
 
 impl TapeThreadLocal for f64 {
@@ -232,6 +237,9 @@ impl TapeThreadLocal for f64 {
     }
     fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>> {
         &POOL_F64
+    }
+    fn borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &TAPE_BORROWED_F64
     }
 }
 
@@ -255,34 +263,39 @@ impl<F: TapeThreadLocal> Tape<F> {
 }
 
 thread_local! {
-    static TAPE_BORROWED: Cell<bool> = const { Cell::new(false) };
+    // Per-type borrow guards (prevents false reentrance detection across different float types)
+    static TAPE_BORROWED_F32: Cell<bool> = const { Cell::new(false) };
+    static TAPE_BORROWED_F64: Cell<bool> = const { Cell::new(false) };
 }
 
-struct TapeBorrowGuard;
+struct TapeBorrowGuard {
+    cell: &'static std::thread::LocalKey<Cell<bool>>,
+}
 
 impl TapeBorrowGuard {
-    fn new() -> Self {
-        TAPE_BORROWED.with(|b| {
+    fn new<F: TapeThreadLocal>() -> Self {
+        let cell = F::borrow_cell();
+        cell.with(|b| {
             assert!(
                 !b.get(),
                 "reentrant with_active_tape call detected — this would create aliased &mut references"
             );
             b.set(true);
         });
-        TapeBorrowGuard
+        TapeBorrowGuard { cell }
     }
 }
 
 impl Drop for TapeBorrowGuard {
     fn drop(&mut self) {
-        TAPE_BORROWED.with(|b| b.set(false));
+        self.cell.with(|b| b.set(false));
     }
 }
 
 /// Access the active tape for the current thread. Panics if no tape is active.
 #[inline]
 pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R) -> R {
-    let _guard = TapeBorrowGuard::new();
+    let _guard = TapeBorrowGuard::new::<F>();
     F::cell().with(|cell| {
         let ptr = cell.get();
         assert!(

@@ -757,7 +757,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(
             self,
             self.value.asin(),
-            F::one() / (F::one() - self.value * self.value).sqrt(),
+            F::one() / ((F::one() - self.value) * (F::one() + self.value)).sqrt(),
         )
     }
 
@@ -765,7 +765,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(
             self,
             self.value.acos(),
-            -F::one() / (F::one() - self.value * self.value).sqrt(),
+            -F::one() / ((F::one() - self.value) * (F::one() + self.value)).sqrt(),
         )
     }
 
@@ -821,7 +821,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(
             self,
             self.value.atanh(),
-            F::one() / (F::one() - self.value * self.value),
+            F::one() / ((F::one() - self.value) * (F::one() + self.value)),
         )
     }
 

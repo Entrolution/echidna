@@ -133,9 +133,10 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
         grad = ls.gradient;
         grad_norm = norm(&grad);
 
-        // Update history
+        // Update history (skip pairs with near-zero curvature to prevent rho overflow)
         let sy = dot(&s, &y);
-        if sy > F::zero() {
+        let yy = dot(&y, &y);
+        if sy > F::epsilon() * yy {
             if s_hist.len() == m {
                 s_hist.remove(0);
                 y_hist.remove(0);

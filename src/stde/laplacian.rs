@@ -271,7 +271,7 @@ pub fn laplacian_hutchpp<F: Float>(
 
     let n = tape.num_inputs();
     let two = F::from(2.0).unwrap();
-    let eps = F::from(1e-12).unwrap();
+    let eps = F::epsilon().sqrt();
 
     // ── Step 1: Sketch — k HVPs to get columns of H·S ──
     let mut dual_vals_buf = Vec::new();

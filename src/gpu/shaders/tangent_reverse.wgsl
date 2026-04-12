@@ -154,15 +154,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 24u: { r=sin(a); rt=cos(a)*at; }
             case 25u: { r=cos(a); rt=-sin(a)*at; }
             case 26u: { r=tan(a); let c=cos(a); rt=at/(c*c); }
-            case 27u: { r=asin(a); rt=at/sqrt(1.0-a*a); }
-            case 28u: { r=acos(a); rt=-at/sqrt(1.0-a*a); }
+            case 27u: { r=asin(a); rt=at/sqrt((1.0-a)*(1.0+a)); }
+            case 28u: { r=acos(a); rt=-at/sqrt((1.0-a)*(1.0+a)); }
             case 29u: { r=atan(a); rt=at/(1.0+a*a); }
             case 30u: { r=sinh_f(a); rt=cosh_f(a)*at; }
             case 31u: { r=cosh_f(a); rt=sinh_f(a)*at; }
             case 32u: { r=tanh(a); let c=cosh_f(a); rt=at/(c*c); }
             case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt=at/sqrt(a*a+1.0); }
             case 34u: { r=log(a+sqrt(a*a-1.0)); rt=at/sqrt(a*a-1.0); }
-            case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=at/(1.0-a*a); }
+            case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=at/((1.0-a)*(1.0+a)); }
             case 36u: { r=abs(a); let s=select(-1.0, 1.0, a>=0.0); rt=select(s*at, 0.0, a!=a); }
             case 37u: { if a!=a {r=a;} else if a>=0.0 {r=1.0;} else {r=-1.0;} rt=0.0; }
             case 38u: { r=floor(a); rt=0.0; }
@@ -274,7 +274,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 12u /* NEG */: { da_re=-1.0; }
             case 13u /* RECIP */: { let inv=1.0/a; da_re=-inv*inv; da_eps=2.0*at*inv*inv*inv; }
             case 14u /* SQRT */: { da_re=0.5/r; da_eps=-0.25*at/(a*r); }
-            case 15u /* CBRT */: { let rr=r*r; da_re=1.0/(3.0*rr); da_eps=-2.0*at/(9.0*rr*r); }
+            // f''(a) = -2/(9*r^5) where r = cbrt(a)
+            case 15u /* CBRT */: { let rr=r*r; da_re=1.0/(3.0*rr); da_eps=-2.0*at/(9.0*rr*rr*r); }
             case 16u /* POWI */: {
                 let e=bitcast<i32>(bi);
                 if e == 0 { da_re=0.0; da_eps=0.0; } else {
@@ -290,15 +291,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 24u /* SIN */: { da_re=cos(a); da_eps=-sin(a)*at; }
             case 25u /* COS */: { da_re=-sin(a); da_eps=-cos(a)*at; }
             case 26u /* TAN */: { let c=cos(a); let s=1.0/(c*c); da_re=s; da_eps=2.0*tan(a)*s*at; }
-            case 27u /* ASIN */: { let t=sqrt(1.0-a*a); da_re=1.0/t; da_eps=a*at/(t*t*t); }
-            case 28u /* ACOS */: { let t=sqrt(1.0-a*a); da_re=-1.0/t; da_eps=-a*at/(t*t*t); }
+            case 27u /* ASIN */: { let t=sqrt((1.0-a)*(1.0+a)); da_re=1.0/t; da_eps=a*at/(t*t*t); }
+            case 28u /* ACOS */: { let t=sqrt((1.0-a)*(1.0+a)); da_re=-1.0/t; da_eps=-a*at/(t*t*t); }
             case 29u /* ATAN */: { let t=1.0+a*a; da_re=1.0/t; da_eps=-2.0*a*at/(t*t); }
             case 30u /* SINH */: { da_re=cosh_f(a); da_eps=sinh_f(a)*at; }
             case 31u /* COSH */: { da_re=sinh_f(a); da_eps=cosh_f(a)*at; }
             case 32u /* TANH */: { let c=cosh_f(a); let s=1.0/(c*c); da_re=s; da_eps=-2.0*tanh(a)*s*at; }
             case 33u /* ASINH */: { let t=sqrt(a*a+1.0); da_re=1.0/t; da_eps=-a*at/(t*t*t); }
             case 34u /* ACOSH */: { let t=sqrt(a*a-1.0); da_re=1.0/t; da_eps=-a*at/(t*t*t); }
-            case 35u /* ATANH */: { let t=1.0-a*a; da_re=1.0/t; da_eps=2.0*a*at/(t*t); }
+            case 35u /* ATANH */: { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); }
             case 36u /* ABS */: { da_re=select(-1.0, 1.0, a>=0.0); }
             case 37u, 38u, 39u, 40u, 41u: { /* zero derivative */ }
             case 42u /* FRACT */: { da_re=1.0; }

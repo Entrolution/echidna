@@ -223,15 +223,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 24u /* SIN */: { r = sin(a); rt = cos(a) * at; }
             case 25u /* COS */: { r = cos(a); rt = -sin(a) * at; }
             case 26u /* TAN */: { r = tan(a); let c = cos(a); rt = at / (c * c); }
-            case 27u /* ASIN */: { r = asin(a); rt = at / sqrt(1.0 - a * a); }
-            case 28u /* ACOS */: { r = acos(a); rt = -at / sqrt(1.0 - a * a); }
+            case 27u /* ASIN */: { r = asin(a); rt = at / sqrt((1.0 - a) * (1.0 + a)); }
+            case 28u /* ACOS */: { r = acos(a); rt = -at / sqrt((1.0 - a) * (1.0 + a)); }
             case 29u /* ATAN */: { r = atan(a); rt = at / (1.0 + a * a); }
             case 30u /* SINH */: { r = sinh_f(a); rt = cosh_f(a) * at; }
             case 31u /* COSH */: { r = cosh_f(a); rt = sinh_f(a) * at; }
             case 32u /* TANH */: { r = tanh(a); let c = cosh_f(a); rt = at / (c * c); }
             case 33u /* ASINH */: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt = at / sqrt(a * a + 1.0); }
             case 34u /* ACOSH */: { r = log(a + sqrt(a * a - 1.0)); rt = at / sqrt(a * a - 1.0); }
-            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / (1.0 - a * a); }
+            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / ((1.0 - a) * (1.0 + a)); }
             case 36u /* ABS */: { r = abs(a); let s = select(-1.0, 1.0, a >= 0.0); rt = select(s * at, 0.0, a != a); }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: {
                 // Zero derivative ops

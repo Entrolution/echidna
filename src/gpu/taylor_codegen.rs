@@ -1414,7 +1414,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // Initialize
     writeln!(s, "    for (unsigned int i = 0; i < num_variables; i++) {{").unwrap();
-    writeln!(s, "        unsigned int off = j_base + i * K;").unwrap();
+    writeln!(s, "        unsigned long long off = j_base + i * K;").unwrap();
     writeln!(s, "        jets[off] = constants[i];").unwrap();
     for c in 1..k {
         writeln!(s, "        jets[off + {c}] = (F)0;").unwrap();
@@ -1428,7 +1428,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     )
     .unwrap();
     writeln!(s, "    for (unsigned int i = 0; i < num_inputs; i++) {{").unwrap();
-    writeln!(s, "        unsigned int off = j_base + i * K;").unwrap();
+    writeln!(s, "        unsigned long long off = j_base + i * K;").unwrap();
     writeln!(s, "        jets[off] = primal_inputs[in_base + i];").unwrap();
     if k > 1 {
         writeln!(s, "        jets[off + 1] = direction_seeds[in_base + i];").unwrap();
@@ -1448,7 +1448,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // Load a
     writeln!(s, "        JetK a;").unwrap();
-    writeln!(s, "        unsigned int a_off = j_base + a_idx * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long a_off = j_base + (unsigned long long)a_idx * K;"
+    )
+    .unwrap();
     for c in 0..k {
         writeln!(s, "        a.v[{c}] = jets[a_off + {c}];").unwrap();
     }
@@ -1467,7 +1471,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "        case {case}: {{").unwrap();
         writeln!(
             s,
-            "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+            "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
         )
         .unwrap();
         for c in 0..k {
@@ -1481,7 +1485,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 6: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1499,7 +1503,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 7: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1539,7 +1543,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 8: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1571,7 +1575,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 9: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1594,7 +1598,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "        case {case}: {{").unwrap();
         writeln!(
             s,
-            "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+            "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
         )
         .unwrap();
         for c in 0..k {
@@ -1776,7 +1780,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        }}").unwrap();
 
     // Store result
-    writeln!(s, "        unsigned int r_off = j_base + i * K;").unwrap();
+    writeln!(s, "        unsigned long long r_off = j_base + i * K;").unwrap();
     for c in 0..k {
         writeln!(s, "        jets[r_off + {c}] = r.v[{c}];").unwrap();
     }
@@ -1790,8 +1794,12 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     .unwrap();
     writeln!(s, "    for (unsigned int j = 0; j < num_outputs; j++) {{").unwrap();
     writeln!(s, "        unsigned int oi = output_indices[j];").unwrap();
-    writeln!(s, "        unsigned int src = j_base + oi * K;").unwrap();
-    writeln!(s, "        unsigned int dst = out_base + j * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long src = j_base + (unsigned long long)oi * K;"
+    )
+    .unwrap();
+    writeln!(s, "        unsigned long long dst = out_base + j * K;").unwrap();
     for c in 0..k {
         writeln!(s, "        jet_outputs[dst + {c}] = jets[src + {c}];").unwrap();
     }
