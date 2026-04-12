@@ -216,7 +216,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 35u /* ATANH */: { da = 1.0 / ((1.0 - a) * (1.0 + a)); }
 
             // Misc
-            case 36u /* ABS */: { da = select(select(-1.0, 1.0, a >= 0.0), 0.0, a != a); }
+            case 36u /* ABS */: { da = select(select(-1.0, 1.0, a >= 0.0), a, a != a); }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: { da = 0.0; }
             case 42u /* FRACT */: { da = 1.0; }
 
