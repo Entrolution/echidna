@@ -21,3 +21,7 @@ tarpaulin-report.html
 
 # Claude Code
 .claude/
+
+# Bug hunt artifacts (local-only working documents)
+BUG_HUNT_*.md
+QUALITY.md
