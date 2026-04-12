@@ -628,7 +628,8 @@ extern "C" __global__ void tangent_reverse(
             case OP_NEG:   da_re=F(-1); break;
             case OP_RECIP: { F inv=F(1)/a; da_re=-inv*inv; da_eps=F(2)*at*inv*inv*inv; break; }
             case OP_SQRT:  da_re=F(0.5)/r; da_eps=F(-0.25)*at/(a*r); break;
-            case OP_CBRT:  { F rr=r*r; da_re=F(1)/(F(3)*rr); da_eps=F(-2)*at/(F(9)*rr*r); break; }
+            // f''(a) = -2/(9·a^(5/3)) = -2/(9·r⁵) where r = cbrt(a)
+            case OP_CBRT:  { F rr=r*r; da_re=F(1)/(F(3)*rr); da_eps=F(-2)*at/(F(9)*rr*rr*r); break; }
             case OP_POWI: {
                 int n = (int)bi;
                 if (n == 0) { da_re=F(0); da_eps=F(0); }

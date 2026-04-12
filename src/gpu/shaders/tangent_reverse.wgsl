@@ -274,7 +274,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 12u /* NEG */: { da_re=-1.0; }
             case 13u /* RECIP */: { let inv=1.0/a; da_re=-inv*inv; da_eps=2.0*at*inv*inv*inv; }
             case 14u /* SQRT */: { da_re=0.5/r; da_eps=-0.25*at/(a*r); }
-            case 15u /* CBRT */: { let rr=r*r; da_re=1.0/(3.0*rr); da_eps=-2.0*at/(9.0*rr*r); }
+            // f''(a) = -2/(9*r^5) where r = cbrt(a)
+            case 15u /* CBRT */: { let rr=r*r; da_re=1.0/(3.0*rr); da_eps=-2.0*at/(9.0*rr*rr*r); }
             case 16u /* POWI */: {
                 let e=bitcast<i32>(bi);
                 if e == 0 { da_re=0.0; da_eps=0.0; } else {
