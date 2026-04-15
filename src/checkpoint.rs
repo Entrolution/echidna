@@ -636,7 +636,11 @@ fn optimal_advance(steps: usize, c: usize) -> usize {
     }
 }
 
-/// Binomial coefficient function: beta(s, c) = C(s+c, c).
+/// Binomial coefficient function for the Revolve checkpointing schedule.
+///
+/// For c >= 1: beta(s, c) = C(s+c, c), the standard binomial coefficient.
+/// For c = 0:  beta(s, 0) = s + 1 (linear scan — with no checkpoints,
+/// `s` recomputations from the start can reverse `s + 1` steps).
 ///
 /// Represents the maximum number of steps that can be reversed with
 /// `s` forward recomputations and `c` checkpoint slots.

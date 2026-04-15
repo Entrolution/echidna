@@ -25,3 +25,9 @@ tarpaulin-report.html
 # Bug hunt artifacts (local-only working documents)
 BUG_HUNT_*.md
 QUALITY.md
+
+# TLA+ model checking artifacts
+specs/**/states/
+specs/**/*.dump
+specs/**/*_TTrace*
+specs/tla2tools.jar
