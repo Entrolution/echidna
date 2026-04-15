@@ -6,10 +6,12 @@ on:
     paths:
       - 'specs/**'
       - 'src/checkpoint.rs'
+      - 'src/bytecode_tape/optimize.rs'
   pull_request:
     paths:
       - 'specs/**'
       - 'src/checkpoint.rs'
+      - 'src/bytecode_tape/optimize.rs'
 
 jobs:
   model-check:
@@ -49,4 +51,18 @@ jobs:
           java -XX:+UseParallelGC -cp specs/tla2tools.jar tlc2.TLC \
             -config specs/revolve/HintAllocation.cfg \
             specs/revolve/HintAllocation.tla \
+            -workers auto
+
+      - name: Check TapeOptimizer
+        run: |
+          java -XX:+UseParallelGC -cp specs/tla2tools.jar tlc2.TLC \
+            -config specs/tape_optimizer/TapeOptimizer.cfg \
+            specs/tape_optimizer/TapeOptimizer.tla \
+            -workers auto
+
+      - name: Check TapeOptimizer Idempotency
+        run: |
+          java -XX:+UseParallelGC -cp specs/tla2tools.jar tlc2.TLC \
+            -config specs/tape_optimizer/Idempotency.cfg \
+            specs/tape_optimizer/Idempotency.tla \
             -workers auto

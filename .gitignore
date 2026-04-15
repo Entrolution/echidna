@@ -27,6 +27,7 @@ BUG_HUNT_*.md
 QUALITY.md
 
 # TLA+ model checking artifacts
+states/
 specs/**/states/
 specs/**/*.dump
 specs/**/*_TTrace*
