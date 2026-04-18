@@ -150,6 +150,25 @@ impl<F: Float> Tape<F> {
 
     /// Run the reverse sweep, seeding the adjoint of `seed_index` with 1.
     /// Returns the full adjoint vector.
+    ///
+    /// # Performance note on subnormal (denormal) floats
+    ///
+    /// This function does **not** set the x86/x64 MXCSR flush-to-zero bit.
+    /// If a reverse sweep produces subnormal adjoints — common on long
+    /// chains where `a != zero` lets tiny contributions accumulate — x86
+    /// hardware falls into microcode-emulated arithmetic that can be
+    /// 10-100× slower than the normal path. Adjoints that stay normal
+    /// (≥ `f32::MIN_POSITIVE` ≈ 1.17e-38 or `f64::MIN_POSITIVE` ≈ 2.2e-308)
+    /// are unaffected.
+    ///
+    /// Callers on x86 where subnormal adjoints are expected can opt into
+    /// FTZ by setting `MXCSR` themselves (`_mm_setcsr(0x9FC0)` via
+    /// `core::arch::x86_64::_mm_setcsr`) around the reverse-sweep call.
+    /// Doing so in the library would change numerical semantics for
+    /// callers who depend on subnormal precision, so the choice is
+    /// deferred. ARM64 always flushes subnormals by default (FPCR.FZ=1
+    /// in AArch32 compatibility, FPCR.FZ16 et al. on AArch64), so this
+    /// warning is x86-specific.
     #[must_use]
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let mut adjoints = vec![F::zero(); self.num_variables as usize];
