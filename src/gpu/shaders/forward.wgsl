@@ -251,7 +251,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 39u /* CEIL */: { r = ceil(a); }
             case 40u /* ROUND */: { r = round(a); }
             case 41u /* TRUNC */: { r = trunc(a); }
-            case 42u /* FRACT */: { r = fract(a); }
+            // WGSL `fract` is floor-based; CPU `f32::fract()` is truncation-based.
+            case 42u /* FRACT */: { r = a - trunc(a); }
             default: { r = 0.0; }
         }
 

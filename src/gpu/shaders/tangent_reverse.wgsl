@@ -135,10 +135,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-a*inv*inv*bt; }
             case 6u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=a-trunc(a/b)*b; rt=at-trunc(a/b)*bt; }
             case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=pow(a,b); let dx=select(b*r/a*at, b*pow(a,b-1.0)*at, a==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0); rt=dx+dy; }
-            case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let d=a*a+b*b; rt=(b*at-a*bt)/d; }
+            case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let mx=max(abs(a),abs(b)); if mx==0.0 {rt=0.0;} else {let au=a/mx; let bu=b/mx; let d=mx*(au*au+bu*bu); rt=(bu*at-au*bt)/d;} }
             case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=sqrt(a*a+b*b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
-            case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; if a>=b {r=a;rt=at;} else {r=b;rt=bt;} }
-            case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; if a<=b {r=a;rt=at;} else {r=b;rt=bt;} }
+            case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a>=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
+            case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a<=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
             case 12u: { r=-a; rt=-at; }
             case 13u: { r=1.0/a; rt=-at/(a*a); }
             case 14u: { r=sqrt(a); rt=at/(2.0*r); }
@@ -160,16 +160,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 30u: { r=sinh_f(a); rt=cosh_f(a)*at; }
             case 31u: { r=cosh_f(a); rt=sinh_f(a)*at; }
             case 32u: { r=tanh(a); let c=cosh_f(a); rt=at/(c*c); }
-            case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt=at/sqrt(a*a+1.0); }
-            case 34u: { r=log(a+sqrt(a*a-1.0)); rt=at/sqrt(a*a-1.0); }
+            case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); if ax>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {rt=at/sqrt(a*a+1.0);} }
+            case 34u: { r=log(a+sqrt(a*a-1.0)); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt(a*a-1.0);} }
             case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=at/((1.0-a)*(1.0+a)); }
-            case 36u: { r=abs(a); let s=select(-1.0, 1.0, a>=0.0); rt=select(s*at, 0.0, a!=a); }
+            case 36u: { r=abs(a); if a!=a {rt=0.0;} else {let bits=bitcast<u32>(a); let s=select(1.0, -1.0, (bits&0x80000000u)!=0u); rt=s*at;} }
             case 37u: { if a!=a {r=a;} else if a>=0.0 {r=1.0;} else {r=-1.0;} rt=0.0; }
             case 38u: { r=floor(a); rt=0.0; }
             case 39u: { r=ceil(a); rt=0.0; }
             case 40u: { r=round(a); rt=0.0; }
             case 41u: { r=trunc(a); rt=0.0; }
-            case 42u: { r=fract(a); rt=at; }
+            case 42u: { r=a-trunc(a); rt=at; }
             default: {}
         }
         primals[base + i] = r;
@@ -232,24 +232,51 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let b=primals[base+bi]; let bt=tans[base+bi];
                 let ab1 = pow(a, b-1.0);
                 da_re = b * ab1;
-                if a == 0.0 {
-                    da_eps = 0.0; // higher-order terms vanish at a=0
+                // For a <= 0, `log(a)` is NaN. Finite `r` at a < 0 implies b
+                // was integer; the classical derivative w.r.t. b is undefined
+                // there, convention is 0 — mirrors CPU OpCode::Powf safety net.
+                if a <= 0.0 {
+                    da_eps = 0.0;
                 } else {
                     da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at + log(a)*bt);
                 }
-                let la = select(log(a), 0.0, a == 0.0);
                 let rr = primals[base+i]; // r = a^b from forward pass
-                db_re = select(rr * la, 0.0, rr == 0.0);
-                let rt = tans[base+i];
-                if rr == 0.0 { db_eps = 0.0; } else { db_eps = rt*la + rr*at/a; }
+                if rr == 0.0 || a <= 0.0 {
+                    db_re = 0.0;
+                    db_eps = 0.0;
+                } else {
+                    let la = log(a);
+                    let rt = tans[base+i];
+                    db_re = rr * la;
+                    db_eps = rt*la + rr*at/a;
+                }
             }
             case 8u /* ATAN2 */: {
                 let b=primals[base+bi]; let bt=tans[base+bi];
-                let d=a*a+b*b;
-                let d2 = d*d;
-                let dd = 2.0*(a*at+b*bt);
-                da_re=b/d; da_eps=(bt*d-b*dd)/d2;
-                db_re=-a/d; db_eps=(-at*d+a*dd)/d2;
+                // Normalize by max(|a|,|b|) so a²+b² doesn't overflow in f32
+                // even when a*a alone would. Let au = a/mx, bu = b/mx, s =
+                // au² + bu² ∈ [1, 2], ms = mx·s. Then:
+                //   a² + b² = mx · ms
+                //   da_re  = b/(a²+b²) = bu/ms
+                //   da_eps = bt/(a²+b²) − bu·dd_over_mx/ms²
+                //          = (bt/mx − bu·dd_over_mx/ms) / ms
+                // where dd_over_mx = 2·(au·at + bu·bt) is bounded for
+                // fixed tangent magnitudes. Expressing in this form avoids
+                // the explicit mx² that would overflow for |mx| > sqrt(f32::MAX).
+                let mx = max(abs(a), abs(b));
+                if mx == 0.0 {
+                    da_re = 0.0; da_eps = 0.0; db_re = 0.0; db_eps = 0.0;
+                } else {
+                    let au = a / mx;
+                    let bu = b / mx;
+                    let s = au * au + bu * bu;
+                    let ms = mx * s;
+                    let dd_over_mx = 2.0 * (au * at + bu * bt);
+                    da_re = bu / ms;
+                    db_re = -au / ms;
+                    da_eps = (bt / mx - bu * dd_over_mx / ms) / ms;
+                    db_eps = (-at / mx + au * dd_over_mx / ms) / ms;
+                }
             }
             case 9u /* HYPOT */: {
                 let b=primals[base+bi]; let bt=tans[base+bi];
@@ -263,11 +290,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 10u /* MAX */: {
                 let b=primals[base+bi];
-                if a>=b { da_re=1.0; } else { db_re=1.0; }
+                if a>=b || b!=b { da_re=1.0; } else { db_re=1.0; }
             }
             case 11u /* MIN */: {
                 let b=primals[base+bi];
-                if a<=b { da_re=1.0; } else { db_re=1.0; }
+                if a<=b || b!=b { da_re=1.0; } else { db_re=1.0; }
             }
 
             // Unary ops: da_re = f'(a), da_eps = f''(a)*at
@@ -297,10 +324,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 30u /* SINH */: { da_re=cosh_f(a); da_eps=sinh_f(a)*at; }
             case 31u /* COSH */: { da_re=sinh_f(a); da_eps=cosh_f(a)*at; }
             case 32u /* TANH */: { let c=cosh_f(a); let s=1.0/(c*c); da_re=s; da_eps=-2.0*tanh(a)*s*at; }
-            case 33u /* ASINH */: { let t=sqrt(a*a+1.0); da_re=1.0/t; da_eps=-a*at/(t*t*t); }
-            case 34u /* ACOSH */: { let t=sqrt(a*a-1.0); da_re=1.0/t; da_eps=-a*at/(t*t*t); }
+            case 33u /* ASINH */: {
+                // For |a| > 1e8 use inv-based formula to avoid a*a+1 overflow.
+                if abs(a) > 1e8 {
+                    let inv = 1.0 / a;
+                    // d/dx asinh = 1/sqrt(1+x²) = |1/x|/sqrt(1+1/x²) for large |x|
+                    let denom = sqrt(1.0 + inv * inv);
+                    da_re = abs(inv) / denom;
+                    // d²/dx² asinh = -x/(1+x²)^(3/2). Rewrite via inv = 1/x:
+                    //   = -sign(x)·|inv|³/denom³ = -sign(x)·inv²·|inv|/denom³
+                    let denom3 = denom * denom * denom;
+                    da_eps = -a * at * inv * inv * abs(inv) / denom3;
+                } else {
+                    let t = sqrt(a * a + 1.0);
+                    da_re = 1.0 / t;
+                    da_eps = -a * at / (t * t * t);
+                }
+            }
+            case 34u /* ACOSH */: {
+                if abs(a) > 1e8 {
+                    let inv = 1.0 / a;
+                    let denom = sqrt(1.0 - inv * inv);
+                    da_re = abs(inv) / denom;
+                    let denom3 = denom * denom * denom;
+                    da_eps = -a * at * inv * inv * abs(inv) / denom3;
+                } else {
+                    let t = sqrt(a * a - 1.0);
+                    da_re = 1.0 / t;
+                    da_eps = -a * at / (t * t * t);
+                }
+            }
             case 35u /* ATANH */: { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); }
-            case 36u /* ABS */: { da_re=select(-1.0, 1.0, a>=0.0); }
+            case 36u /* ABS */: {
+                if a != a {
+                    da_re = 0.0;
+                } else {
+                    let bits = bitcast<u32>(a);
+                    da_re = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
+                }
+            }
             case 37u, 38u, 39u, 40u, 41u: { /* zero derivative */ }
             case 42u /* FRACT */: { da_re=1.0; }
             default: {}

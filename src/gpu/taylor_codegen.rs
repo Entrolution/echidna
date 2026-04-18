@@ -678,8 +678,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }
     for i in 2..k {
         // CPU powf with negative base produces NaN through exp(b*ln(negative)).
-        // Use explicit NaN to match CPU behavior regardless of whether val is finite.
-        writeln!(s, "                    r.v[{i}] = 0.0 / 0.0;").unwrap();
+        // `0.0 / 0.0` is an abstract-typed NaN that naga rejects as not-
+        // expressible in f32; use the canonical quiet-NaN bit pattern instead.
+        writeln!(s, "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);").unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
@@ -756,7 +757,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                if a.v[0] == 0.0 {{").unwrap();
     writeln!(s, "                    r.v[0] = 0.0;").unwrap();
     for i in 1..k {
-        writeln!(s, "                    r.v[{i}] = 1.0 / 0.0;").unwrap();
+        // `1.0 / 0.0` is a compile-time abstract `inf` that naga rejects as
+        // inexpressible in f32. Use the bit pattern for +∞ instead.
+        writeln!(s, "                    r.v[{i}] = bitcast<f32>(0x7f800000u);").unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(
