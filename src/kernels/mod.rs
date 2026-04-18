@@ -55,7 +55,12 @@ pub fn atan2_partials<T: Float>(a: T, b: T) -> (T, T) {
     if h == T::zero() {
         (T::zero(), T::zero())
     } else {
-        (b / h / h, T::zero() - a / h / h)
+        // Unary `-x` (via `Float: Neg<Output = Self>`) preserves the IEEE
+        // signed-zero invariant `-(+0.0) = -0.0`. `T::zero() - x` would
+        // flatten to `+0.0` at `x = +0.0` under round-to-nearest, silently
+        // changing sign-bit semantics observable by downstream `copysign`
+        // / `is_sign_negative` consumers.
+        (b / h / h, -a / h / h)
     }
 }
 

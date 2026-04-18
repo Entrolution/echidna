@@ -162,13 +162,28 @@ impl<F: Float> Tape<F> {
     /// are unaffected.
     ///
     /// Callers on x86 where subnormal adjoints are expected can opt into
-    /// FTZ by setting `MXCSR` themselves (`_mm_setcsr(0x9FC0)` via
-    /// `core::arch::x86_64::_mm_setcsr`) around the reverse-sweep call.
-    /// Doing so in the library would change numerical semantics for
-    /// callers who depend on subnormal precision, so the choice is
-    /// deferred. ARM64 always flushes subnormals by default (FPCR.FZ=1
-    /// in AArch32 compatibility, FPCR.FZ16 et al. on AArch64), so this
-    /// warning is x86-specific.
+    /// FTZ by setting the MXCSR bit themselves. The correct read-modify-
+    /// write idiom (so the caller's existing rounding mode and exception
+    /// masks survive) is:
+    ///
+    /// ```ignore
+    /// use core::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+    /// // MXCSR bit 15 = FTZ. Bit 6 = DAZ (input denormals flushed to
+    /// // zero) is *independent*; enable it too only if you also want
+    /// // subnormal inputs treated as zero.
+    /// let saved = unsafe { _mm_getcsr() };
+    /// unsafe { _mm_setcsr(saved | (1 << 15)) };
+    /// // ... tape.reverse(...) ...
+    /// unsafe { _mm_setcsr(saved) }; // restore
+    /// ```
+    ///
+    /// Doing this globally in the library would change numerical
+    /// semantics for callers who depend on subnormal precision or have
+    /// set a non-default rounding mode (e.g. interval arithmetic with
+    /// `FE_DOWNWARD`), so the choice is deferred.
+    ///
+    /// ARM64 flushes subnormals by default (FPCR.FZ=1 on AArch32 and
+    /// FPCR.FZ et al. on AArch64), so this warning is x86-specific.
     #[must_use]
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let mut adjoints = vec![F::zero(); self.num_variables as usize];
