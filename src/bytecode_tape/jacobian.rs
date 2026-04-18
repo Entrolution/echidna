@@ -85,7 +85,15 @@ impl<F: Float> super::BytecodeTape<F> {
             .filter(|k| opcode::has_nontrivial_subdifferential(k.opcode))
             .collect();
         let k = active.len();
-        let limit = max_active_kinks.unwrap_or(20);
+        // Hard ceiling: `1usize << k` at the combo-enumeration step below
+        // panics in debug and wraps to 1 in release for k >= usize::BITS,
+        // silently enumerating only a single combo. Cap the effective limit
+        // regardless of what the caller passed so the overflow is never
+        // reachable. On a 32-bit target this caps at 31; on 64-bit, 63.
+        let max_representable: usize = (usize::BITS as usize) - 1;
+        let limit = max_active_kinks
+            .unwrap_or(20)
+            .min(max_representable);
 
         if k > limit {
             return Err(crate::nonsmooth::ClarkeError::TooManyKinks { count: k, limit });

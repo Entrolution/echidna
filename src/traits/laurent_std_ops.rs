@@ -23,6 +23,18 @@ impl<F: Float, const K: usize> Add for Laurent<F, K> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
+        // `Laurent::zero()` is the additive identity, but when the other
+        // operand has a large-magnitude pole_order the shift-alignment
+        // assertion below fires before the algebraic identity has a chance to
+        // apply. Short-circuit on either operand being all-zero so the `Zero`
+        // trait contract (and generic `.sum()` code) works for every
+        // pole_order that fits in `i32`.
+        if rhs.is_all_zero_pub() {
+            return self;
+        }
+        if self.is_all_zero_pub() {
+            return rhs;
+        }
         let p1 = self.pole_order();
         let p2 = rhs.pole_order();
         let p_out = p1.min(p2);
@@ -61,6 +73,13 @@ impl<F: Float, const K: usize> Sub for Laurent<F, K> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
+        // Short-circuit on zero operand (see `Add` impl for rationale).
+        if rhs.is_all_zero_pub() {
+            return self;
+        }
+        if self.is_all_zero_pub() {
+            return -rhs;
+        }
         let p1 = self.pole_order();
         let p2 = rhs.pole_order();
         let p_out = p1.min(p2);
