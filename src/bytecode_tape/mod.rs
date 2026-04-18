@@ -256,10 +256,8 @@ impl<F: Float> BytecodeTape<F> {
                     return Some(arg1);
                 }
             }
-            OpCode::Sub => {
-                if arg1_const && self.values[arg1 as usize] == zero {
-                    return Some(arg0);
-                }
+            OpCode::Sub if arg1_const && self.values[arg1 as usize] == zero => {
+                return Some(arg0);
             }
             OpCode::Mul => {
                 // Identity: x * 1 → x, 1 * x → x
@@ -277,10 +275,8 @@ impl<F: Float> BytecodeTape<F> {
                     return Some(self.push_const(value));
                 }
             }
-            OpCode::Div => {
-                if arg1_const && self.values[arg1 as usize] == one {
-                    return Some(arg0);
-                }
+            OpCode::Div if arg1_const && self.values[arg1 as usize] == one => {
+                return Some(arg0);
             }
             _ => {}
         }

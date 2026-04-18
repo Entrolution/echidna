@@ -706,10 +706,8 @@ pub fn taylor_hypot<F: Float>(
         if n > 1 && (a[1] != F::zero() || b[1] != F::zero()) {
             let mut a_shifted = vec![F::zero(); n];
             let mut b_shifted = vec![F::zero(); n];
-            for k in 1..n {
-                a_shifted[k - 1] = a[k];
-                b_shifted[k - 1] = b[k];
-            }
+            a_shifted[..(n - 1)].copy_from_slice(&a[1..n]);
+            b_shifted[..(n - 1)].copy_from_slice(&b[1..n]);
             let mut inner_c = vec![F::zero(); n];
             let mut inner_s1 = vec![F::zero(); n];
             let mut inner_s2 = vec![F::zero(); n];
@@ -721,9 +719,7 @@ pub fn taylor_hypot<F: Float>(
                 &mut inner_s2,
             );
             c[0] = F::zero();
-            for k in 1..n {
-                c[k] = inner_c[k - 1];
-            }
+            c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
             return;
         }
         // Deeper-order zero (a and b both vanish past the first-non-zero
