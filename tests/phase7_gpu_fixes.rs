@@ -126,6 +126,90 @@ fn l24_wgpu_div_small_denominator_db_finite() {
 // CUDA `hypot(a, b)` (CUDA). Higher-order Taylor coefficients still
 // use jet_mul / jet_add and may overflow; that's a follow-up.
 
+// Post-Cycle-2 addition: scalar HYPOT across all three WGSL shaders
+// (forward, tangent_forward, and the reverse-primal path that reads
+// from forward's output) now honours IEEE `hypot(±Inf, x) = +Inf` and
+// avoids `a*a + b*b` overflow via the shared `hypot_f32` helper.
+
+#[cfg(feature = "gpu-wgpu")]
+#[test]
+fn wgpu_hypot_inf_finite_returns_inf() {
+    let ctx = match WgpuContext::new() {
+        Some(c) => c,
+        None => return,
+    };
+    let (tape, _) = record(
+        |v: &[BReverse<f64>]| v[0].hypot(v[1]),
+        &[1.0_f64, 1.0_f64],
+    );
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let gpu_tape = ctx.upload_tape(&gpu_data);
+    // hypot(+Inf, 1) must be +Inf per IEEE 754-2008.
+    let result = ctx.forward_batch(&gpu_tape, &[f32::INFINITY, 1.0_f32], 1).unwrap();
+    assert!(
+        result[0].is_infinite() && result[0] > 0.0,
+        "hypot(Inf, 1) must be +Inf, got {}",
+        result[0]
+    );
+}
+
+#[cfg(feature = "gpu-wgpu")]
+#[test]
+fn wgpu_hypot_inf_inf_returns_inf() {
+    let ctx = match WgpuContext::new() {
+        Some(c) => c,
+        None => return,
+    };
+    let (tape, _) = record(
+        |v: &[BReverse<f64>]| v[0].hypot(v[1]),
+        &[1.0_f64, 1.0_f64],
+    );
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let gpu_tape = ctx.upload_tape(&gpu_data);
+    // Pre-fix the rescale formula gave `Inf/Inf = NaN`; post-fix the
+    // `ax == inf || ay == inf` guard short-circuits to +Inf.
+    let result = ctx
+        .forward_batch(&gpu_tape, &[f32::INFINITY, f32::INFINITY], 1)
+        .unwrap();
+    assert!(
+        result[0].is_infinite() && result[0] > 0.0,
+        "hypot(Inf, Inf) must be +Inf (IEEE), got {}",
+        result[0]
+    );
+}
+
+#[cfg(feature = "gpu-wgpu")]
+#[test]
+fn wgpu_tangent_forward_hypot_large_magnitude_primal_finite() {
+    let ctx = match WgpuContext::new() {
+        Some(c) => c,
+        None => return,
+    };
+    let (tape, _) = record(
+        |v: &[BReverse<f64>]| v[0].hypot(v[1]),
+        &[1.0_f64, 1.0_f64],
+    );
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let gpu_tape = ctx.upload_tape(&gpu_data);
+    // At (1e20, 1e20), naive `a*a + b*b = 2e40` overflows f32 to +Inf,
+    // then `sqrt(Inf) = Inf`. The rescaled helper gives `1e20 * sqrt(2) ≈ 1.414e20`.
+    // `gradient_batch` drives the tangent_forward kernel on the primal
+    // path (via the JVP-on-single-output code path).
+    let (r, g) = ctx
+        .gradient_batch(&gpu_tape, &[1e20_f32, 1e20_f32], 1)
+        .unwrap();
+    assert!(
+        r[0].is_finite(),
+        "tangent_forward hypot primal at (1e20, 1e20) must be finite (rescaled), got {}",
+        r[0]
+    );
+    assert!(g[0].is_finite() && g[1].is_finite());
+    // Expected: sqrt(2) * 1e20 ≈ 1.414e20.
+    let expected = 2.0_f32.sqrt() * 1e20_f32;
+    let rel = ((r[0] - expected) / expected).abs();
+    assert!(rel < 1e-4, "hypot(1e20, 1e20) = {}, expected ≈ {}", r[0], expected);
+}
+
 // ── M24: CUDA upload_tape with empty output_indices ──
 
 #[cfg(feature = "gpu-cuda")]

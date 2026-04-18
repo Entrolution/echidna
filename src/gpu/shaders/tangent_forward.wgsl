@@ -101,6 +101,22 @@ fn ln1p_f32(x: f32) -> f32 {
     return log(1.0 + x);
 }
 
+// Overflow-safe hypot with IEEE Inf handling, mirroring forward.wgsl.
+// The naive `sqrt(a² + b²)` in a tangent primal arm overflowed for
+// large |a| or |b|; using this helper keeps the primal matched
+// bit-for-bit to the forward kernel.
+fn hypot_f32(a: f32, b: f32) -> f32 {
+    let ax = abs(a);
+    let ay = abs(b);
+    let inf = bitcast<f32>(0x7f800000u);
+    if ax == inf || ay == inf { return inf; }
+    let mx = max(ax, ay);
+    let mn = min(ax, ay);
+    if mx == 0.0 { return 0.0; }
+    let r = mn / mx;
+    return mx * sqrt(1.0 + r * r);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -207,7 +223,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 9u /* HYPOT */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
-                r = sqrt(a * a + b * b);
+                // Call the scalar helper so the primal matches
+                // `forward.wgsl` bit-for-bit (rescale + IEEE Inf guard)
+                // and `a*a + b*b` can't overflow for large operands.
+                r = hypot_f32(a, b);
                 if r == 0.0 { rt = 0.0; } else { rt = (a * at + b * bt) / r; }
             }
             case 10u /* MAX */: {
