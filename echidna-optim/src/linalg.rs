@@ -36,9 +36,7 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
     let n_f = F::from(n).unwrap();
     let mut matrix_inf_norm = F::zero();
     for row in a.iter() {
-        let row_sum = row
-            .iter()
-            .fold(F::zero(), |acc, &x| acc + x.abs());
+        let row_sum = row.iter().fold(F::zero(), |acc, &x| acc + x.abs());
         if row_sum > matrix_inf_norm {
             matrix_inf_norm = row_sum;
         }

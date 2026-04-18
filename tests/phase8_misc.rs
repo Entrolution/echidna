@@ -68,9 +68,7 @@ fn l37_ndarray_wrappers_accept_owned_arrays() {
     use ndarray::Array1;
 
     let x: Array1<f64> = Array1::from_vec(vec![1.0, 5.0, 3.0]);
-    let f = |v: &[BReverse<f64>]| -> BReverse<f64> {
-        v[0] * v[0] + v[1] + v[2] * v[2] * v[2]
-    };
+    let f = |v: &[BReverse<f64>]| -> BReverse<f64> { v[0] * v[0] + v[1] + v[2] * v[2] * v[2] };
     let g = grad_ndarray(f, &x);
     assert!((g[0] - 2.0).abs() < 1e-12, "∂f/∂a at a=1 → 2, got {}", g[0]);
     assert!((g[1] - 1.0).abs() < 1e-12, "∂f/∂b → 1, got {}", g[1]);
@@ -112,9 +110,7 @@ fn l39_sparse_jacobian_ndarray_returns_outputs() {
     use ndarray::Array1;
 
     // f(x, y) = [x, y, x+y] — diagonal plus a sum row.
-    let f = |v: &[BReverse<f64>]| -> Vec<BReverse<f64>> {
-        vec![v[0], v[1], v[0] + v[1]]
-    };
+    let f = |v: &[BReverse<f64>]| -> Vec<BReverse<f64>> { vec![v[0], v[1], v[0] + v[1]] };
     let x = Array1::from_vec(vec![3.0, 5.0]);
     let (outputs, _pattern, _values) = sparse_jacobian_ndarray(f, &x);
     assert_eq!(outputs.len(), 3);
@@ -134,7 +130,11 @@ fn l40_mixed_partial_all_zero_orders_returns_value() {
     let f = |v: &[BReverse<f64>]| -> BReverse<f64> { v[0] * v[0] * v[0] };
     let (tape, _) = record(f, &[2.0]);
     let (value, deriv) = mixed_partial(&tape, &[2.0], &[0]);
-    assert!((value - 8.0).abs() < 1e-12, "value = f(2) = 8, got {}", value);
+    assert!(
+        (value - 8.0).abs() < 1e-12,
+        "value = f(2) = 8, got {}",
+        value
+    );
     // An all-zero multi-index is the identity operator → derivative equals value.
     assert!(
         (deriv - 8.0).abs() < 1e-12,

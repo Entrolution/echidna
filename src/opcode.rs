@@ -348,7 +348,11 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                 // forward-mode `Dual::powf` constant-integer fast path. This
                 // also prevents NaN from contaminating a live tape slot for
                 // `b` on reverse sweep.
-                let db = if r == zero || a <= zero { zero } else { r * a.ln() };
+                let db = if r == zero || a <= zero {
+                    zero
+                } else {
+                    r * a.ln()
+                };
                 (da, db)
             }
         }

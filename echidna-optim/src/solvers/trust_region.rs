@@ -269,8 +269,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             // on tiny ones. Scale by `(1 + |f|)` so the tolerance tracks
             // the problem magnitude.
             if config.convergence.func_tol > F::zero()
-                && (f_prev - f_val).abs()
-                    < config.convergence.func_tol * (F::one() + f_val.abs())
+                && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
             {
                 return OptimResult {
                     x,

@@ -11,6 +11,8 @@
 //! dispatchers specialise it inline for performance, but the standalone
 //! function remains a legitimate entry point.
 
+#![cfg(feature = "bytecode")]
+
 use echidna::opcode::{reverse_partials, OpCode};
 
 // L14: Ln / Log2 / Log10 / Ln1p / Atanh emit (NaN, 0) strictly outside
@@ -42,13 +44,21 @@ fn l14_ln_boundary_preserves_inf_limit() {
     // Ln at a=0: IEEE `1/0 = +Inf` must survive the domain guard so the
     // one-sided limit of the derivative is preserved.
     let (da, _) = reverse_partials::<f64>(OpCode::Ln, 0.0, 0.0, f64::NEG_INFINITY);
-    assert!(da.is_infinite() && da > 0.0, "Ln at a=0 should give +Inf, got {}", da);
+    assert!(
+        da.is_infinite() && da > 0.0,
+        "Ln at a=0 should give +Inf, got {}",
+        da
+    );
 }
 
 #[test]
 fn l14_ln_finite_partial_inside_domain() {
     let (da, _) = reverse_partials::<f64>(OpCode::Ln, 2.0, 0.0, 2.0_f64.ln());
-    assert!((da - 0.5).abs() < 1e-15, "Ln at 2 must give 1/2, got {}", da);
+    assert!(
+        (da - 0.5).abs() < 1e-15,
+        "Ln at 2 must give 1/2, got {}",
+        da
+    );
 
     let (da, _) = reverse_partials::<f64>(OpCode::Ln1p, 3.0, 0.0, 4.0_f64.ln());
     assert!(

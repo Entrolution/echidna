@@ -679,7 +679,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         // CPU powf with negative base produces NaN through exp(b*ln(negative)).
         // `0.0 / 0.0` is an abstract-typed NaN that naga rejects as not-
         // expressible in f32; use the canonical quiet-NaN bit pattern instead.
-        writeln!(s, "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);").unwrap();
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+        )
+        .unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
@@ -739,11 +743,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     .unwrap();
     writeln!(s, "                else {{").unwrap();
     writeln!(s, "                    let h = max(aa, bb);").unwrap();
-    writeln!(
-        s,
-        "                    if (h == 0.0) {{ r.v[0] = 0.0; }}"
-    )
-    .unwrap();
+    writeln!(s, "                    if (h == 0.0) {{ r.v[0] = 0.0; }}").unwrap();
     writeln!(
         s,
         "                    else {{ let as_ = a.v[0] / h; let bs = b.v[0] / h; r.v[0] = h * sqrt(as_ * as_ + bs * bs); }}"
@@ -782,7 +782,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     for i in 1..k {
         // `1.0 / 0.0` is a compile-time abstract `inf` that naga rejects as
         // inexpressible in f32. Use the bit pattern for +∞ instead.
-        writeln!(s, "                    r.v[{i}] = bitcast<f32>(0x7f800000u);").unwrap();
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7f800000u);"
+        )
+        .unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(
@@ -1659,11 +1663,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         "            r = jet_sqrt(jet_add(jet_mul(a,a), jet_mul(b,b)));"
     )
     .unwrap();
-    writeln!(
-        s,
-        "            r.v[0] = hypot(a.v[0], b.v[0]); break;"
-    )
-    .unwrap();
+    writeln!(s, "            r.v[0] = hypot(a.v[0], b.v[0]); break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
     // MAX, MIN
@@ -1869,7 +1869,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         )
         .unwrap();
     }
-    writeln!(s, "            {{ /* identically zero series → sg = 1 */ }}").unwrap();
+    writeln!(
+        s,
+        "            {{ /* identically zero series → sg = 1 */ }}"
+    )
+    .unwrap();
     writeln!(s, "            r.v[0] = fabs(a.v[0]);").unwrap();
     for i in 1..k {
         writeln!(s, "            r.v[{i}] = sg * a.v[{i}];").unwrap();

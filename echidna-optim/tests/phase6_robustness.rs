@@ -6,9 +6,7 @@ use echidna_optim::convergence::norm;
 use echidna_optim::linalg::lu_solve;
 use echidna_optim::objective::Objective;
 use echidna_optim::result::TerminationReason;
-use echidna_optim::{
-    lbfgs, newton, trust_region, LbfgsConfig, NewtonConfig, TrustRegionConfig,
-};
+use echidna_optim::{lbfgs, newton, trust_region, LbfgsConfig, NewtonConfig, TrustRegionConfig};
 
 // M30: scale-aware singularity tolerance. The matrix below is non-singular
 // symbolically (diag(1e-8, 1e10)), but its condition number (~1e18) exceeds

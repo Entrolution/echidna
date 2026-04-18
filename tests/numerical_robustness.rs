@@ -60,8 +60,14 @@ fn dual_hypot_large_tangent_factors() {
 
 #[test]
 fn dual_vec_hypot_large_tangent_factors() {
-    let a: DualVec<f64, 2> = DualVec { re: 1e200, eps: [1e150, 0.0] };
-    let b: DualVec<f64, 2> = DualVec { re: 1e200, eps: [0.0, 1e150] };
+    let a: DualVec<f64, 2> = DualVec {
+        re: 1e200,
+        eps: [1e150, 0.0],
+    };
+    let b: DualVec<f64, 2> = DualVec {
+        re: 1e200,
+        eps: [0.0, 1e150],
+    };
     let r = a.hypot(b);
     assert!(r.eps[0].is_finite());
     assert!(r.eps[1].is_finite());
@@ -104,7 +110,10 @@ fn dual_acosh_near_one_factored_form() {
 
 #[test]
 fn dual_vec_acosh_near_one() {
-    let x: DualVec<f64, 1> = DualVec { re: 1.0 + 1e-15, eps: [1.0] };
+    let x: DualVec<f64, 1> = DualVec {
+        re: 1.0 + 1e-15,
+        eps: [1.0],
+    };
     let y = x.acosh();
     assert!(y.eps[0].is_finite());
     assert!(y.eps[0] > 0.0);
@@ -130,13 +139,19 @@ fn dual_recip_nonzero_eps_at_singular_point_keeps_inf() {
     let x = Dual::new(0.0_f64, 1.0);
     let y = x.recip();
     assert!(y.re.is_infinite());
-    assert!(y.eps.is_infinite(), "eps with eps!=0 at singularity should be Inf");
+    assert!(
+        y.eps.is_infinite(),
+        "eps with eps!=0 at singularity should be Inf"
+    );
 }
 
 #[test]
 fn dual_vec_recip_mixed_zero_eps_lanes() {
     // Per-lane: zero lanes are zeroed, non-zero lanes carry the singular derivative.
-    let x: DualVec<f64, 2> = DualVec { re: 0.0, eps: [0.0, 1.0] };
+    let x: DualVec<f64, 2> = DualVec {
+        re: 0.0,
+        eps: [0.0, 1.0],
+    };
     let y = x.recip();
     assert!(y.re.is_infinite());
     assert_eq!(y.eps[0], 0.0);
@@ -166,7 +181,10 @@ fn laurent_powi_pole_order_overflow_returns_nan_not_panic() {
     // via `checked_mul().expect(…)`. Post-fix: returns nan_laurent().
     let x: Laurent<f64, 2> = Laurent::new([1.0, 0.0], i32::MAX / 4);
     let result = std::panic::catch_unwind(|| x.powi(5));
-    assert!(result.is_ok(), "powi should not panic on pole_order overflow");
+    assert!(
+        result.is_ok(),
+        "powi should not panic on pole_order overflow"
+    );
     let y = result.unwrap();
     // The result should be NaN-shaped; coefficient values are NaN.
     assert!(y.coeff(y.pole_order()).is_nan());
@@ -212,7 +230,8 @@ fn laurent_hypot_large_leading_plus_smaller_higher_order() {
     assert!(
         ((second - expected_second) / expected_second).abs() < 1e-6,
         "second coeff = {}, expected ≈ {}",
-        second, expected_second,
+        second,
+        expected_second,
     );
 }
 

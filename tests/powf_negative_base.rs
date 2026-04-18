@@ -75,8 +75,14 @@ fn dual_powf_live_exponent_still_uses_exp_ln() {
 
 #[test]
 fn dual_vec_powf_negative_base() {
-    let x: DualVec<f64, 2> = DualVec { re: -2.0, eps: [1.0, 0.0] };
-    let y = x.powf(DualVec { re: 3.0, eps: [0.0, 0.0] });
+    let x: DualVec<f64, 2> = DualVec {
+        re: -2.0,
+        eps: [1.0, 0.0],
+    };
+    let y = x.powf(DualVec {
+        re: 3.0,
+        eps: [0.0, 0.0],
+    });
     assert!((y.re - (-8.0)).abs() < 1e-12);
     assert!((y.eps[0] - 12.0).abs() < 1e-12);
     assert_eq!(y.eps[1], 0.0);

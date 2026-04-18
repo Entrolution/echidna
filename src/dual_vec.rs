@@ -315,9 +315,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         let y_over_h = self.re / h;
         DualVec {
             re: self.re.atan2(other.re),
-            eps: std::array::from_fn(|k| {
-                (x_over_h * self.eps[k] - y_over_h * other.eps[k]) / h
-            }),
+            eps: std::array::from_fn(|k| (x_over_h * self.eps[k] - y_over_h * other.eps[k]) / h),
         }
     }
 

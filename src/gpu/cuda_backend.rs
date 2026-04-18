@@ -553,7 +553,10 @@ impl GpuBackend for CudaContext {
         } else {
             // SAFETY(u32 cast): output_indices.len() is bounded by tape
             // outputs count, which is at most num_variables (already u32).
-            (data.output_indices.clone(), data.output_indices.len() as u32)
+            (
+                data.output_indices.clone(),
+                data.output_indices.len() as u32,
+            )
         };
         CudaTapeBuffers {
             opcodes: s.clone_htod(&data.opcodes).unwrap(),

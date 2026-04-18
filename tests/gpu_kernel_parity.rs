@@ -46,11 +46,17 @@ fn wgpu_atan2_large_magnitudes_gradient_finite() {
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
-    let (_, g) = ctx
-        .gradient_batch(&gpu_tape, &[large, large], 1)
-        .unwrap();
-    assert!(g[0].is_finite(), "d/dy atan2 should be finite; got {}", g[0]);
-    assert!(g[1].is_finite(), "d/dx atan2 should be finite; got {}", g[1]);
+    let (_, g) = ctx.gradient_batch(&gpu_tape, &[large, large], 1).unwrap();
+    assert!(
+        g[0].is_finite(),
+        "d/dy atan2 should be finite; got {}",
+        g[0]
+    );
+    assert!(
+        g[1].is_finite(),
+        "d/dx atan2 should be finite; got {}",
+        g[1]
+    );
     // Expected: d/dy = x/(x²+y²) = 1e20 / 2e40 = 5e-21, nonzero.
     assert!(g[0] != 0.0, "d/dy atan2 underflowed to zero");
     assert!(g[1] != 0.0, "d/dx atan2 underflowed to zero");
@@ -139,10 +145,7 @@ fn wgpu_max_with_nan_operand_primal_and_grad() {
 
     // max(x, NaN) = x (non-NaN side). Gradient should flow to x.
     let x0 = [1.5_f64, f64::NAN];
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0].max(v[1]),
-        &x0,
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].max(v[1]), &x0);
 
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -199,5 +202,8 @@ fn wgpu_fract_negative_input_matches_cpu() {
         out[0],
         expected
     );
-    assert!(out[0] < 0.0, "GPU fract should be negative for negative input");
+    assert!(
+        out[0] < 0.0,
+        "GPU fract should be negative for negative input"
+    );
 }

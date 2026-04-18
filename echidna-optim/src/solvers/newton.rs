@@ -183,8 +183,7 @@ pub fn newton<F: Float, O: Objective<F>>(
         // magnitude objectives (|f| ≈ 1e8) and impossibly tight on tiny
         // ones. Scale by `(1 + |f|)` so the criterion tracks the problem.
         if config.convergence.func_tol > F::zero()
-            && (f_prev - f_val).abs()
-                < config.convergence.func_tol * (F::one() + f_val.abs())
+            && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
         {
             return OptimResult {
                 x,

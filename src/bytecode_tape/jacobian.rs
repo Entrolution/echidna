@@ -91,9 +91,7 @@ impl<F: Float> super::BytecodeTape<F> {
         // regardless of what the caller passed so the overflow is never
         // reachable. On a 32-bit target this caps at 31; on 64-bit, 63.
         let max_representable: usize = (usize::BITS as usize) - 1;
-        let limit = max_active_kinks
-            .unwrap_or(20)
-            .min(max_representable);
+        let limit = max_active_kinks.unwrap_or(20).min(max_representable);
 
         if k > limit {
             return Err(crate::nonsmooth::ClarkeError::TooManyKinks { count: k, limit });

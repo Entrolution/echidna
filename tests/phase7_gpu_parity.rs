@@ -41,10 +41,7 @@ fn l25_cuda_fmad_disabled_bit_exact_with_cpu_f64() {
     let a = 1.2345678901234567_f64;
     let b = 9.8765432109876543_f64;
     let c = 1.1111111111111111_f64;
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0] * v[1] + v[2],
-        &[a, b, c],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0] * v[1] + v[2], &[a, b, c]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     let (gpu_result, _) = ctx
@@ -129,16 +126,19 @@ fn m28_cuda_rem_quotient_boundary_consistent() {
         Some(c) => c,
         None => return,
     };
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0] % v[1],
-        &[5.0_f64, 2.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0] % v[1], &[5.0_f64, 2.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     // a = 5, b = 2: trunc(5/2) = 2, so primal = 5 - 2*2 = 1.
     // Gradient: da = 1, db = -trunc(5/2) = -2.
-    let (r, g) = ctx.gradient_batch(&gpu_tape, &[5.0_f32, 2.0_f32], 1).unwrap();
+    let (r, g) = ctx
+        .gradient_batch(&gpu_tape, &[5.0_f32, 2.0_f32], 1)
+        .unwrap();
     assert!((r[0] - 1.0).abs() < 1e-5, "r = 5 % 2 = 1, got {}", r[0]);
     assert!((g[0] - 1.0).abs() < 1e-5, "da should be 1, got {}", g[0]);
-    assert!((g[1] - (-2.0)).abs() < 1e-5, "db should be -2, got {}", g[1]);
+    assert!(
+        (g[1] - (-2.0)).abs() < 1e-5,
+        "db should be -2, got {}",
+        g[1]
+    );
 }

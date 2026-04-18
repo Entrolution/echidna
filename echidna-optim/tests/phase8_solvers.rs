@@ -9,9 +9,7 @@
 
 use echidna_optim::objective::Objective;
 use echidna_optim::result::TerminationReason;
-use echidna_optim::{
-    lbfgs, newton, trust_region, LbfgsConfig, NewtonConfig, TrustRegionConfig,
-};
+use echidna_optim::{lbfgs, newton, trust_region, LbfgsConfig, NewtonConfig, TrustRegionConfig};
 
 // ─────────────────────────────────────────────────────────────────────
 // L28: trust-region radius collapse → NumericalError

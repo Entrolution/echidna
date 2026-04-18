@@ -21,7 +21,12 @@ fn dual_atan2_large_magnitudes_finite_tangent() {
     // Expected: x/(x²+y²) = 1e200/(2·1e400) = 5e-201
     let expected = 5e-201_f64;
     let rel_err = (result.eps - expected).abs() / expected.abs();
-    assert!(rel_err < 1e-10, "eps = {}, expected ≈ {}", result.eps, expected);
+    assert!(
+        rel_err < 1e-10,
+        "eps = {}, expected ≈ {}",
+        result.eps,
+        expected
+    );
 }
 
 /// `atan2(1e-200, 1e-200)`: `h = sqrt(2)·1e-200`, naive `h*h` underflows to 0,
@@ -37,7 +42,12 @@ fn dual_atan2_tiny_magnitudes_finite_tangent() {
     // Expected: 1e-200/(2·1e-400) = 5e199
     let expected = 5e199_f64;
     let rel_err = (result.eps - expected).abs() / expected.abs();
-    assert!(rel_err < 1e-10, "eps = {}, expected ≈ {}", result.eps, expected);
+    assert!(
+        rel_err < 1e-10,
+        "eps = {}, expected ≈ {}",
+        result.eps,
+        expected
+    );
 }
 
 /// Mixed: very large y, small x. `atan2 → π/2`, `d/dy ≈ 0`, `d/dx ≈ -1/y`.
@@ -86,8 +96,14 @@ fn dual_atan2_nan_primal() {
 /// DualVec variant of the large-magnitude case.
 #[test]
 fn dual_vec_atan2_large_magnitudes() {
-    let y: DualVec<f64, 2> = DualVec { re: 1e200, eps: [1.0, 0.0] };
-    let x: DualVec<f64, 2> = DualVec { re: 1e200, eps: [0.0, 1.0] };
+    let y: DualVec<f64, 2> = DualVec {
+        re: 1e200,
+        eps: [1.0, 0.0],
+    };
+    let x: DualVec<f64, 2> = DualVec {
+        re: 1e200,
+        eps: [0.0, 1.0],
+    };
     let r = y.atan2(x);
     assert!(r.eps[0].is_finite());
     assert!(r.eps[1].is_finite());

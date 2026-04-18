@@ -31,8 +31,16 @@ fn cuda_atan2_large_magnitudes_gradient_finite() {
     let gpu_tape = ctx.upload_tape(&gpu_data);
     let (_, g) = ctx.gradient_batch(&gpu_tape, &[large, large], 1).unwrap();
 
-    assert!(g[0].is_finite(), "d/dy atan2 should be finite; got {}", g[0]);
-    assert!(g[1].is_finite(), "d/dx atan2 should be finite; got {}", g[1]);
+    assert!(
+        g[0].is_finite(),
+        "d/dy atan2 should be finite; got {}",
+        g[0]
+    );
+    assert!(
+        g[1].is_finite(),
+        "d/dx atan2 should be finite; got {}",
+        g[1]
+    );
     assert!(g[0] != 0.0, "d/dy atan2 underflowed to zero");
     assert!(g[1] != 0.0, "d/dx atan2 underflowed to zero");
 }
@@ -145,7 +153,11 @@ fn cuda_fract_negative_input_matches_cpu() {
     assert!(
         (out[0] - expected).abs() < 1e-6,
         "fract(-1.3) on CUDA = {}, expected ≈ {}",
-        out[0], expected,
+        out[0],
+        expected,
     );
-    assert!(out[0] < 0.0, "GPU fract should be negative for negative input");
+    assert!(
+        out[0] < 0.0,
+        "GPU fract should be negative for negative input"
+    );
 }

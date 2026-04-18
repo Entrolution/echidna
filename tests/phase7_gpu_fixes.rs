@@ -74,7 +74,12 @@ fn m29_wgpu_atan_moderate_large_a_positive_normal_f32() {
     );
     let expected = 1.0_f64 / (1.0 + 9e18);
     let rel_err = ((g[0] as f64) - expected).abs() / expected;
-    assert!(rel_err < 1e-3, "atan'(3e9) = {:e}, expected ≈ {:e}", g[0], expected);
+    assert!(
+        rel_err < 1e-3,
+        "atan'(3e9) = {:e}, expected ≈ {:e}",
+        g[0],
+        expected
+    );
 }
 
 #[cfg(feature = "gpu-cuda")]
@@ -89,7 +94,11 @@ fn m29_cuda_atan_large_abs_a_finite_nonzero() {
     let gpu_tape = ctx.upload_tape(&gpu_data);
     let large = 1e20_f32;
     let (_, g) = ctx.gradient_batch(&gpu_tape, &[large], 1).unwrap();
-    assert!(g[0].is_finite(), "atan derivative must be finite for |a|=1e20, got {}", g[0]);
+    assert!(
+        g[0].is_finite(),
+        "atan derivative must be finite for |a|=1e20, got {}",
+        g[0]
+    );
     assert!(g[0] > 0.0);
 }
 
@@ -106,18 +115,21 @@ fn l24_wgpu_div_small_denominator_db_finite() {
         None => return,
     };
     // f(a, b) = a / b. db = -a / b² in the reverse sweep.
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0] / v[1],
-        &[1.0_f64, 1.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0] / v[1], &[1.0_f64, 1.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     // a = 1e-10, b = 1e-20. b² = 1e-40 which doesn't overflow f32 upward
     // but a/b² = 1e30 is huge. Pre-fix computes `-a * inv * inv` where
     // `inv² = 1e40 → Inf`; post-fix computes `-r * inv = -1e10 * 1e20 = -1e30`
     // which is finite.
-    let (_, g) = ctx.gradient_batch(&gpu_tape, &[1e-10_f32, 1e-20_f32], 1).unwrap();
-    assert!(g[1].is_finite(), "db must be finite at small |b|, got {}", g[1]);
+    let (_, g) = ctx
+        .gradient_batch(&gpu_tape, &[1e-10_f32, 1e-20_f32], 1)
+        .unwrap();
+    assert!(
+        g[1].is_finite(),
+        "db must be finite at small |b|, got {}",
+        g[1]
+    );
 }
 
 // ── L22: Taylor HYPOT primal survives large magnitudes ──
@@ -138,14 +150,13 @@ fn wgpu_hypot_inf_finite_returns_inf() {
         Some(c) => c,
         None => return,
     };
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0].hypot(v[1]),
-        &[1.0_f64, 1.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].hypot(v[1]), &[1.0_f64, 1.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     // hypot(+Inf, 1) must be +Inf per IEEE 754-2008.
-    let result = ctx.forward_batch(&gpu_tape, &[f32::INFINITY, 1.0_f32], 1).unwrap();
+    let result = ctx
+        .forward_batch(&gpu_tape, &[f32::INFINITY, 1.0_f32], 1)
+        .unwrap();
     assert!(
         result[0].is_infinite() && result[0] > 0.0,
         "hypot(Inf, 1) must be +Inf, got {}",
@@ -160,10 +171,7 @@ fn wgpu_hypot_inf_inf_returns_inf() {
         Some(c) => c,
         None => return,
     };
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0].hypot(v[1]),
-        &[1.0_f64, 1.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].hypot(v[1]), &[1.0_f64, 1.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     // Pre-fix the rescale formula gave `Inf/Inf = NaN`; post-fix the
@@ -185,10 +193,7 @@ fn wgpu_tangent_forward_hypot_large_magnitude_primal_finite() {
         Some(c) => c,
         None => return,
     };
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0].hypot(v[1]),
-        &[1.0_f64, 1.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].hypot(v[1]), &[1.0_f64, 1.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     // At (1e20, 1e20), naive `a*a + b*b = 2e40` overflows f32 to +Inf,
@@ -207,7 +212,12 @@ fn wgpu_tangent_forward_hypot_large_magnitude_primal_finite() {
     // Expected: sqrt(2) * 1e20 ≈ 1.414e20.
     let expected = 2.0_f32.sqrt() * 1e20_f32;
     let rel = ((r[0] - expected) / expected).abs();
-    assert!(rel < 1e-4, "hypot(1e20, 1e20) = {}, expected ≈ {}", r[0], expected);
+    assert!(
+        rel < 1e-4,
+        "hypot(1e20, 1e20) = {}, expected ≈ {}",
+        r[0],
+        expected
+    );
 }
 
 // ── M24: CUDA upload_tape with empty output_indices ──
@@ -317,18 +327,17 @@ fn l23_cuda_powi_n1_at_zero_second_derivative_finite() {
     // f(x) = x.powi(1) = x. Hessian is 0. HVP at x=0, v=1 must be finite.
     // (On CPU: `0 * 0 * pow(0, -1) = 0 * Inf = NaN`; post-fix GPU path
     // short-circuits to 0.)
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0].powi(1),
-        &[0.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].powi(1), &[0.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
-    let (hv_grad, hv) = ctx
-        .hvp_batch(&gpu_tape, &[0.0_f32], &[1.0_f32], 1)
-        .unwrap();
+    let (hv_grad, hv) = ctx.hvp_batch(&gpu_tape, &[0.0_f32], &[1.0_f32], 1).unwrap();
     assert_eq!(hv_grad.len(), 1);
     assert_eq!(hv.len(), 1);
-    assert!(hv[0].is_finite(), "HVP at powi(x,1), x=0 must be finite, got {}", hv[0]);
+    assert!(
+        hv[0].is_finite(),
+        "HVP at powi(x,1), x=0 must be finite, got {}",
+        hv[0]
+    );
     assert_eq!(hv[0], 0.0, "Hessian of linear function is zero");
 }
 
@@ -342,15 +351,10 @@ fn l23_wgpu_powi_n1_at_zero_second_derivative_finite() {
         Some(c) => c,
         None => return,
     };
-    let (tape, _) = record(
-        |v: &[BReverse<f64>]| v[0].powi(1),
-        &[0.0_f64],
-    );
+    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].powi(1), &[0.0_f64]);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
-    let (_hv_grad, hv) = ctx
-        .hvp_batch(&gpu_tape, &[0.0_f32], &[1.0_f32], 1)
-        .unwrap();
+    let (_hv_grad, hv) = ctx.hvp_batch(&gpu_tape, &[0.0_f32], &[1.0_f32], 1).unwrap();
     assert!(
         hv[0].is_finite(),
         "WGSL HVP at powi(x,1), x=0 must be finite, got {}",

@@ -75,7 +75,10 @@ fn dual_acosh_at_one_diverges() {
 /// DualVec variant.
 #[test]
 fn dual_vec_asinh_large() {
-    let x: DualVec<f64, 2> = DualVec { re: 1e200, eps: [1.0, 0.0] };
+    let x: DualVec<f64, 2> = DualVec {
+        re: 1e200,
+        eps: [1.0, 0.0],
+    };
     let y = x.asinh();
     assert!(y.eps[0].is_finite());
     let expected = 1e-200_f64;
@@ -86,10 +89,7 @@ fn dual_vec_asinh_large() {
 /// Reverse-mode variant.
 #[test]
 fn reverse_asinh_large_x() {
-    let g = echidna::grad(
-        |x: &[echidna::Reverse<f64>]| x[0].asinh(),
-        &[1e200_f64],
-    );
+    let g = echidna::grad(|x: &[echidna::Reverse<f64>]| x[0].asinh(), &[1e200_f64]);
     assert!(g[0].is_finite());
     let expected = 1e-200_f64;
     assert!(((g[0] - expected) / expected).abs() < 1e-10);
@@ -97,10 +97,7 @@ fn reverse_asinh_large_x() {
 
 #[test]
 fn reverse_acosh_large_x() {
-    let g = echidna::grad(
-        |x: &[echidna::Reverse<f64>]| x[0].acosh(),
-        &[1e200_f64],
-    );
+    let g = echidna::grad(|x: &[echidna::Reverse<f64>]| x[0].acosh(), &[1e200_f64]);
     assert!(g[0].is_finite());
     let expected = 1e-200_f64;
     assert!(((g[0] - expected) / expected).abs() < 1e-10);
@@ -111,10 +108,7 @@ fn reverse_acosh_large_x() {
 #[test]
 fn breverse_asinh_large_x() {
     use echidna::BReverse;
-    let (mut tape, _) = echidna::record(
-        |x: &[BReverse<f64>]| x[0].asinh(),
-        &[1e200_f64],
-    );
+    let (mut tape, _) = echidna::record(|x: &[BReverse<f64>]| x[0].asinh(), &[1e200_f64]);
     let g = tape.gradient(&[1e200_f64]);
     assert!(g[0].is_finite());
     let expected = 1e-200_f64;
@@ -125,10 +119,7 @@ fn breverse_asinh_large_x() {
 #[test]
 fn breverse_acosh_large_x() {
     use echidna::BReverse;
-    let (mut tape, _) = echidna::record(
-        |x: &[BReverse<f64>]| x[0].acosh(),
-        &[1e200_f64],
-    );
+    let (mut tape, _) = echidna::record(|x: &[BReverse<f64>]| x[0].acosh(), &[1e200_f64]);
     let g = tape.gradient(&[1e200_f64]);
     assert!(g[0].is_finite());
     let expected = 1e-200_f64;

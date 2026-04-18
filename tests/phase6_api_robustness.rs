@@ -48,7 +48,11 @@ fn m37_sparse_hessian_empty_input_returns_constant_value() {
     tape.set_outputs(&[idx]);
 
     let (value, gradient, _pattern, hess_vals) = tape.sparse_hessian(&[]);
-    assert!((value - 1.25).abs() < 1e-15, "sparse_hessian value = {}", value);
+    assert!(
+        (value - 1.25).abs() < 1e-15,
+        "sparse_hessian value = {}",
+        value
+    );
     assert_eq!(gradient.len(), 0);
     assert_eq!(hess_vals.len(), 0);
 }
@@ -88,9 +92,7 @@ fn m38_record_multi_rejects_empty_outputs() {
 fn m45_mixed_partial_rejects_wrong_orders_length() {
     use echidna::record;
     // f(x, y) = x^2 + y: tape has 2 inputs; we pass only one order.
-    let f = |inputs: &[BReverse<f64>]| -> BReverse<f64> {
-        inputs[0] * inputs[0] + inputs[1]
-    };
+    let f = |inputs: &[BReverse<f64>]| -> BReverse<f64> { inputs[0] * inputs[0] + inputs[1] };
     let (tape, _) = record(f, &[1.0, 2.0]);
     let _ = echidna::diffop::mixed_partial(&tape, &[1.0, 2.0], &[1]);
 }
@@ -104,9 +106,7 @@ fn m45_mixed_partial_rejects_wrong_orders_length() {
 #[test]
 fn m46_extraction_prefactor_small_order_exact() {
     use echidna::record;
-    let f = |inputs: &[BReverse<f64>]| -> BReverse<f64> {
-        inputs[0] * inputs[0] * inputs[0]
-    };
+    let f = |inputs: &[BReverse<f64>]| -> BReverse<f64> { inputs[0] * inputs[0] * inputs[0] };
     let (tape, _) = record(f, &[1.0]);
     let (value, deriv) = echidna::diffop::mixed_partial(&tape, &[1.0], &[3]);
     assert!((value - 1.0).abs() < 1e-15);
