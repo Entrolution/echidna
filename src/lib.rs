@@ -98,6 +98,7 @@ pub mod api;
 pub mod dual;
 pub mod dual_vec;
 pub mod float;
+pub mod kernels;
 pub mod reverse;
 pub mod scalar;
 pub mod tape;

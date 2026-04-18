@@ -5,6 +5,8 @@
 
 use num_traits::Float;
 
+use crate::kernels;
+
 /// Sentinel used in `arg_indices[1]` for unary ops (the second argument slot is unused).
 pub const UNUSED: u32 = u32::MAX;
 
@@ -356,29 +358,10 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                 (da, db)
             }
         }
-        OpCode::Atan2 => {
-            // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            // Factor as (b/h)/h and (-a/h)/h to avoid squaring h — h² overflows
-            // for |h| > sqrt(f64::MAX) ≈ 1.3e154 and underflows below
-            // sqrt(f64::MIN_POSITIVE), silently corrupting otherwise finite partials.
-            // b/h and a/h are bounded by 1 (since h = hypot ≥ |a|, |b|).
-            // At the origin (h=0), the gradient is mathematically undefined;
-            // returning (0, 0) matches JAX/PyTorch convention.
-            let h = a.hypot(b);
-            if h == zero {
-                (zero, zero)
-            } else {
-                (b / h / h, -a / h / h)
-            }
-        }
-        OpCode::Hypot => {
-            // hypot(a,b) = sqrt(a²+b²), d/da = a/r, d/db = b/r
-            if r == zero {
-                (zero, zero)
-            } else {
-                (a / r, b / r)
-            }
-        }
+        // Atan2 and Hypot delegate to `kernels` so the overflow-safe factoring
+        // (a/h)/h pattern stays the single source of truth across the AD types.
+        OpCode::Atan2 => kernels::atan2_partials(a, b),
+        OpCode::Hypot => kernels::hypot_partials(a, b, r),
         OpCode::Max => {
             if a >= b || b.is_nan() {
                 (one, zero)
@@ -475,16 +458,7 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Asin => (one / ((one - a) * (one + a)).sqrt(), zero),
         OpCode::Acos => (-one / ((one - a) * (one + a)).sqrt(), zero),
-        OpCode::Atan => {
-            // For large |a|, use (1/a)²/(1+(1/a)²) to avoid 1+a² overflow
-            let da = if a.abs() > T::from(1e8).unwrap() {
-                let inv = one / a;
-                inv * inv / (one + inv * inv)
-            } else {
-                one / (one + a * a)
-            };
-            (da, zero)
-        }
+        OpCode::Atan => (kernels::atan_deriv(a), zero),
 
         // Hyperbolic
         OpCode::Sinh => (a.cosh(), zero),
@@ -493,26 +467,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let c = a.cosh();
             (one / (c * c), zero)
         }
-        OpCode::Asinh => {
-            // For |a| > 1e8, a*a+1 overflows for |a| > sqrt(f64::MAX), collapsing
-            // the derivative to 0. Use |1/a|/sqrt(1+(1/a)²) which stays in-range.
-            let da = if a.abs() > T::from(1e8).unwrap() {
-                let inv = one / a;
-                inv.abs() / (one + inv * inv).sqrt()
-            } else {
-                one / (a * a + one).sqrt()
-            };
-            (da, zero)
-        }
-        OpCode::Acosh => {
-            let da = if a.abs() > T::from(1e8).unwrap() {
-                let inv = one / a;
-                inv.abs() / (one - inv * inv).sqrt()
-            } else {
-                one / (a * a - one).sqrt()
-            };
-            (da, zero)
-        }
+        OpCode::Asinh => (kernels::asinh_deriv(a), zero),
+        OpCode::Acosh => (kernels::acosh_deriv(a), zero),
         OpCode::Atanh => {
             if a >= -one && a <= one {
                 (one / ((one - a) * (one + a)), zero)
