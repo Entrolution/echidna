@@ -925,8 +925,10 @@ mod regression_28 {
         let handle = tape.register_custom(Arc::new(Scale));
         let idx = tape.new_input(x[0]);
         let input = BReverse::from_tape(x[0], idx);
-        let _guard = BtapeGuard::new(&mut tape);
-        let output = input.custom_unary(handle, 2.0 * x[0]);
+        let output = {
+            let _guard = BtapeGuard::new(&mut tape);
+            input.custom_unary(handle, 2.0 * x[0])
+        };
         tape.set_output(output.index());
 
         // hessian_vec should assert because custom ops are present

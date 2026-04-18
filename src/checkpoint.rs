@@ -3,6 +3,24 @@
 //! Uses the optimal binomial (Revolve) checkpointing schedule
 //! (Griewank & Walther, 2000) to minimize recomputation for a given
 //! number of checkpoint slots.
+//!
+//! # Determinism requirement
+//!
+//! The `step` function passed to any `grad_checkpointed*` must be
+//! **bit-deterministic**: re-executing `step` from a checkpoint must
+//! reproduce exactly the state the forward pass observed. The adjoint
+//! seed at the final state is bound to the primal trajectory the
+//! forward pass produced; if re-execution drifts (non-deterministic
+//! parallel reductions, atomic FP adds, rayon folds without a fixed
+//! ordering, GPU kernels with non-deterministic atomics), the gradient
+//! is computed against a trajectory that was never actually run and
+//! silently disagrees with the un-checkpointed reference.
+//!
+//! Symptoms of a non-deterministic `step` in practice: gradient values
+//! that differ across runs, or differ from `grad()` on a small-scale
+//! version of the same computation. If your `step` uses parallelism,
+//! ensure deterministic reduction ordering (e.g. use `rayon::iter`'s
+//! sequential reduce rather than `par_iter().sum()` of floats).
 
 use std::collections::HashSet;
 
@@ -48,8 +66,17 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
     let num_checkpoints = num_checkpoints.max(1).min(num_steps);
 
     // Compute optimal checkpoint positions using Revolve schedule.
-    // The recursive schedule may produce more positions than num_checkpoints;
-    // take only the first num_checkpoints to enforce the memory budget.
+    //
+    // The recursive Revolve schedule can produce more positions than the
+    // requested memory budget; we truncate to the first `num_checkpoints`
+    // of them. This keeps the memory guarantee but leaves an uncovered
+    // tail when `num_steps >> num_checkpoints` and the later Revolve
+    // positions sit in the tail — recomputation then walks forward from
+    // the last-kept checkpoint, which is O(tail) per reverse segment and
+    // can degrade to O(num_steps²) in the adversarial case. The budget is
+    // honoured; the performance degradation is the known trade-off. Users
+    // who need the optimal O(n · log n) Revolve schedule should size
+    // `num_checkpoints` to `log2(num_steps)` or larger.
     let mut all_positions = revolve_schedule(num_steps, num_checkpoints);
     all_positions.truncate(num_checkpoints);
     let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
@@ -95,7 +122,10 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
 ///
 /// * `step` - A function that advances state by one step: `state_{k+1} = step(state_k)`
 /// * `stop` - Predicate `stop(state, step_index)` returning `true` to stop iteration.
-///   Step 0 is the initial state; `stop` is first called after step 1 with `(state_1, 1)`.
+///   `stop` is called before the loop with `(x0, 0)` so a caller can short-
+///   circuit iteration entirely; if it returns `false` there, iteration
+///   enters the loop and `stop` is re-evaluated after every step
+///   (`step_index = 1, 2, ...`).
 /// * `loss` - A scalar loss function applied to the final state
 /// * `x0` - Initial state
 /// * `num_checkpoints` - Number of checkpoint slots (must be >= 2)
@@ -715,7 +745,7 @@ fn vjp_step<F: Float + BtapeThreadLocal>(
         })
         .collect();
 
-    {
+    let scalar_index = {
         let _guard = BtapeGuard::new(&mut tape);
         let outputs = step(&inputs);
 
@@ -734,8 +764,9 @@ fn vjp_step<F: Float + BtapeThreadLocal>(
             scalar += BReverse::constant(w[i]) * outputs[i];
         }
 
-        tape.set_output(scalar.index);
-    }
+        scalar.index
+    };
+    tape.set_output(scalar_index);
 
     tape.gradient(state)
 }

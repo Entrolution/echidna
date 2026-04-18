@@ -66,7 +66,16 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn recip(self) -> Self {
         let inv = F::one() / self.re;
-        self.chain(inv, -inv * inv)
+        // At self.re = 0, inv = ±Inf. Skip the chain for eps = 0 so the
+        // tangent is 0 (the "constant zero" convention) rather than the
+        // IEEE `0 * Inf = NaN` we'd otherwise propagate. Non-zero eps at
+        // the singularity keeps the Inf (the true derivative is unbounded).
+        let eps = if self.eps == F::zero() {
+            F::zero()
+        } else {
+            self.eps * (-inv * inv)
+        };
+        Dual { re: inv, eps }
     }
 
     /// Square root.
@@ -109,6 +118,19 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn powf(self, n: Self) -> Self {
         // d/dx (x^y) = y * x^(y-1) * dx + x^y * ln(x) * dy
+        //
+        // Constant integer exponent fast path: if `n` has no tangent and its
+        // value is a losslessly representable integer, dispatch to `powi`.
+        // This avoids computing `ln(x)` for `x < 0` where stdlib returns NaN —
+        // that NaN would poison `eps` via `NaN * 0 = NaN` in IEEE 754, even
+        // though `dy` is algebraically zero for a constant exponent.
+        if n.eps == F::zero() {
+            if let Some(ni) = n.re.to_i32() {
+                if F::from(ni).unwrap() == n.re {
+                    return self.powi(ni);
+                }
+            }
+        }
         if n.re == F::zero() {
             // a^0 = 1, d/da(a^0) = 0, d/db(a^b)|_{b=0} = ln(a) (for a > 0)
             let dy = if self.re > F::zero() {
@@ -267,16 +289,23 @@ impl<F: Float> Dual<F> {
     pub fn atan2(self, other: Self) -> Self {
         // d/dx atan2(y,x) = x/(x²+y²) dy - y/(x²+y²) dx
         let h = self.re.hypot(other.re);
-        let denom = h * h;
-        if denom == F::zero() {
+        if h == F::zero() {
             return Dual {
                 re: self.re.atan2(other.re),
                 eps: F::zero(),
             };
         }
+        // Factor as ((x/h)·dy - (y/h)·dx)/h instead of .../(h*h). Both x/h
+        // and y/h are bounded by 1 (since h = hypot(x,y) ≥ |x|, |y|), so no
+        // intermediate step overflows. The naive h*h form overflows for
+        // |h| > sqrt(f64::MAX) ≈ 1.3e154 and underflows for |h| below
+        // sqrt(f64::MIN_POSITIVE) — silently corrupting otherwise finite
+        // partials.
+        let x_over_h = other.re / h;
+        let y_over_h = self.re / h;
         Dual {
             re: self.re.atan2(other.re),
-            eps: (other.re * self.eps - self.re * other.eps) / denom,
+            eps: (x_over_h * self.eps - y_over_h * other.eps) / h,
         }
     }
 
@@ -304,19 +333,36 @@ impl<F: Float> Dual<F> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(
-            self.re.asinh(),
-            F::one() / (self.re * self.re + F::one()).sqrt(),
-        )
+        // For |x| > 1e8, `x*x + 1` overflows in f64 at |x| > ~1.3e154 and the
+        // derivative silently collapses to 0. Use the algebraically equivalent
+        // |1/x| / sqrt(1 + (1/x)²) form, which stays in-range for any x.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() + inv * inv).sqrt()
+        } else {
+            F::one() / (self.re * self.re + F::one()).sqrt()
+        };
+        self.chain(self.re.asinh(), deriv)
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(
-            self.re.acosh(),
-            F::one() / (self.re * self.re - F::one()).sqrt(),
-        )
+        // Two-branch derivative:
+        //   |x| > 1e8   → `|1/x| / sqrt(1 - (1/x)²)` avoids x²-1 overflow.
+        //   |x| ≤ 1e8   → `1 / sqrt((x-1)·(x+1))` avoids catastrophic
+        //                 cancellation near x = 1 that `x²-1` would hit
+        //                 (at x = 1 + ε, `x² = 1 + 2ε + ε²` rounds to
+        //                 `1 + 2ε`, losing the ε² contribution). The
+        //                 factored form stays numerically distinct down
+        //                 to the minimum representable positive number.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() - inv * inv).sqrt()
+        } else {
+            F::one() / ((self.re - F::one()) * (self.re + F::one())).sqrt()
+        };
+        self.chain(self.re.acosh(), deriv)
     }
 
     /// Inverse hyperbolic tangent.
@@ -413,7 +459,11 @@ impl<F: Float> Dual<F> {
             eps: if h == F::zero() {
                 F::zero()
             } else {
-                (self.re * self.eps + other.re * other.eps) / h
+                // Factor as (x/h)·dx + (y/h)·dy to avoid numerator overflow:
+                // `x·dx` alone can overflow for x and dx both large even when
+                // the true tangent is representable. `hypot` does this trick
+                // for the primal; the tangent needs it too.
+                (self.re / h) * self.eps + (other.re / h) * other.eps
             },
         }
     }

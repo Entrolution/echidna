@@ -87,7 +87,19 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn recip(self) -> Self {
         let inv = F::one() / self.re;
-        self.chain(inv, -inv * inv)
+        // See `Dual::recip` — skip the chain for zero eps lanes at the
+        // singularity to avoid NaN from `0 * Inf`.
+        let factor = -inv * inv;
+        DualVec {
+            re: inv,
+            eps: std::array::from_fn(|k| {
+                if self.eps[k] == F::zero() {
+                    F::zero()
+                } else {
+                    self.eps[k] * factor
+                }
+            }),
+        }
     }
 
     /// Square root.
@@ -127,6 +139,16 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Floating-point power.
     #[inline]
     pub fn powf(self, n: Self) -> Self {
+        // Constant integer exponent fast path (see `Dual::powf` for rationale):
+        // avoids `ln(x)` NaN-poisoning the tangent when the exponent is a
+        // constant and `x < 0`.
+        if n.eps.iter().all(|&e| e == F::zero()) {
+            if let Some(ni) = n.re.to_i32() {
+                if F::from(ni).unwrap() == n.re {
+                    return self.powi(ni);
+                }
+            }
+        }
         if n.re == F::zero() {
             // a^0 = 1, d/da(a^0) = 0, d/db(a^b)|_{b=0} = ln(a) (for a > 0)
             let dy = if self.re > F::zero() {
@@ -281,16 +303,19 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
         let h = self.re.hypot(other.re);
-        let denom = h * h;
-        if denom == F::zero() {
+        if h == F::zero() {
             return DualVec {
                 re: self.re.atan2(other.re),
                 eps: [F::zero(); N],
             };
         }
+        // Factor ((x/h)·dy - (y/h)·dx)/h to avoid h² over/underflow; see
+        // `Dual::atan2` for the numerical argument.
+        let x_over_h = other.re / h;
+        let y_over_h = self.re / h;
         DualVec {
             re: self.re.atan2(other.re),
-            eps: std::array::from_fn(|k| (other.re * self.eps[k] - self.re * other.eps[k]) / denom),
+            eps: std::array::from_fn(|k| (x_over_h * self.eps[k] - y_over_h * other.eps[k]) / h),
         }
     }
 
@@ -318,19 +343,28 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(
-            self.re.asinh(),
-            F::one() / (self.re * self.re + F::one()).sqrt(),
-        )
+        // See `Dual::asinh` for the overflow rationale on the |x|>1e8 switch.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() + inv * inv).sqrt()
+        } else {
+            F::one() / (self.re * self.re + F::one()).sqrt()
+        };
+        self.chain(self.re.asinh(), deriv)
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(
-            self.re.acosh(),
-            F::one() / (self.re * self.re - F::one()).sqrt(),
-        )
+        // See `Dual::acosh`: small-|x| branch uses `(x-1)(x+1)` factored form
+        // to avoid catastrophic cancellation near x = 1.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() - inv * inv).sqrt()
+        } else {
+            F::one() / ((self.re - F::one()) * (self.re + F::one())).sqrt()
+        };
+        self.chain(self.re.acosh(), deriv)
     }
 
     /// Inverse hyperbolic tangent.
@@ -422,7 +456,10 @@ impl<F: Float, const N: usize> DualVec<F, N> {
             eps: if h == F::zero() {
                 [F::zero(); N]
             } else {
-                std::array::from_fn(|k| (self.re * self.eps[k] + other.re * other.eps[k]) / h)
+                // Factor `(x/h)·dx + (y/h)·dy` to keep intermediates bounded.
+                let x_over_h = self.re / h;
+                let y_over_h = other.re / h;
+                std::array::from_fn(|k| x_over_h * self.eps[k] + y_over_h * other.eps[k])
             },
         }
     }

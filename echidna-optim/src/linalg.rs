@@ -25,11 +25,23 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
     let mut lu: Vec<Vec<F>> = a.to_vec();
     let mut perm: Vec<usize> = (0..n).collect();
 
-    // Use a relative singularity threshold: eps_mach * n * max_pivot.
-    // This adapts to both f32 and f64, and scales with matrix magnitude.
+    // Use a relative singularity threshold scaled by the matrix infinity norm
+    // `‖A‖_∞ = max_i Σ_j |A[i][j]|`. Anchoring on the original-matrix scale
+    // is more robust than a running max-pivot-seen: an early small pivot (in
+    // a column that happens to be heavily cancelled) would otherwise lower
+    // the tolerance for every subsequent column, letting genuinely near-
+    // singular later pivots pass. ‖A‖_∞ is fixed at the start and reflects
+    // the true matrix magnitude.
     let eps_mach = F::epsilon();
     let n_f = F::from(n).unwrap();
-    let mut max_pivot_seen = F::zero();
+    let mut matrix_inf_norm = F::zero();
+    for row in a.iter() {
+        let row_sum = row.iter().fold(F::zero(), |acc, &x| acc + x.abs());
+        if row_sum > matrix_inf_norm {
+            matrix_inf_norm = row_sum;
+        }
+    }
+    let tol = eps_mach * n_f * matrix_inf_norm;
 
     for col in 0..n {
         // Find pivot
@@ -43,9 +55,7 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
             }
         }
 
-        max_pivot_seen = max_pivot_seen.max(max_val);
-        let tol = eps_mach * n_f * max_pivot_seen;
-        // Also catch all-zero columns where the relative threshold is zero
+        // Also catch all-zero columns where the tol is zero (zero matrix)
         if max_val == F::zero() || max_val < tol {
             return None; // Singular
         }

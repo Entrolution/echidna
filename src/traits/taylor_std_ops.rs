@@ -75,6 +75,15 @@ impl<F: Float, const K: usize> Rem for Taylor<F, K> {
     #[inline]
     #[allow(clippy::suspicious_arithmetic_impl)]
     fn rem(self, rhs: Self) -> Self {
+        // Zero-divisor produces `Inf` from the division and `NaN` from the
+        // modulo in the k=0 slot, then a silent tangent recurrence that mixes
+        // finite and non-finite coefficients. Flag the whole series as NaN so
+        // downstream consumers see a uniformly degenerate result.
+        if rhs.coeffs[0] == F::zero() {
+            return Taylor {
+                coeffs: std::array::from_fn(|_| F::nan()),
+            };
+        }
         let q = (self.coeffs[0] / rhs.coeffs[0]).trunc();
         Taylor {
             coeffs: std::array::from_fn(|k| {
@@ -321,6 +330,17 @@ impl<F: Float + TaylorArenaLocal> Rem for TaylorDyn<F> {
     #[inline]
     fn rem(self, rhs: Self) -> Self {
         TaylorDyn::binary_op(&self, &rhs, |a, b, c| {
+            // Mirror the `Taylor::rem` zero-divisor guard — without it the
+            // k=0 slot holds `a[0] % 0 = NaN` while higher-order slots
+            // compute from `(a[0]/0).trunc() = Inf` → `a[k] - b[k]*Inf`,
+            // producing a mixed finite/NaN/Inf series that looks internally
+            // inconsistent to downstream consumers.
+            if b[0] == F::zero() {
+                for ci in c.iter_mut() {
+                    *ci = F::nan();
+                }
+                return;
+            }
             c[0] = a[0] % b[0];
             let q = (a[0] / b[0]).trunc();
             for k in 1..c.len() {

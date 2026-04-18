@@ -66,7 +66,9 @@ typedef FLOAT_TYPE F;
 // Match Rust's f64::signum: +1 for +0, -1 for -0, NaN for NaN.
 __device__ F _sign(F x) { return (x != x) ? x : copysign(F(1), x); }
 __device__ F _cbrt(F x) { return copysign(pow(fabs(x), F(1.0/3.0)), x); }
-__device__ F _fract(F x) { return x - floor(x); }
+// Match Rust's `f32::fract() = x - trunc(x)` (truncation), not WGSL/C's
+// floor-based `x - floor(x)` convention — they disagree for negative x.
+__device__ F _fract(F x) { return x - trunc(x); }
 
 // ════════════════════════════════════════════════════════════════════
 // Forward evaluation kernel
@@ -226,18 +228,27 @@ extern "C" __global__ void reverse_sweep(
             case OP_DIV: {
                 F b = values[v_base+bi];
                 F inv = F(1)/b;
-                da = inv; db = -a*inv*inv; break;
+                // `db = -a/b² = -r/b` (via r = a/b, already available as the
+                // primal at this op). Writing it as `-r*inv` avoids forming
+                // `inv*inv`, which overflows in f32 when |b| ≲ 1e-19.
+                da = inv; db = -r*inv; break;
             }
             case OP_REM: { F b = values[v_base+bi]; da = F(1); db = -trunc(a/b); break; }
             case OP_POWF: {
                 F b = values[v_base+bi];
                 da = b * pow(a, b-F(1));
-                db = (r == F(0)) ? F(0) : r * log(a); break;
+                // For a<=0, log(a) is NaN; finite r at a<0 means b was integer,
+                // convention is db=0 (matches CPU OpCode::Powf safety net).
+                db = (r == F(0) || a <= F(0)) ? F(0) : r * log(a); break;
             }
             case OP_ATAN2: {
                 F b = values[v_base+bi];
-                F d = a*a + b*b;
-                da = b/d; db = -a/d; break;
+                // Use `hypot` to avoid a*a+b*b overflow at extreme magnitudes;
+                // factor as (b/h)/h so intermediates stay in-range.
+                F h = hypot(a, b);
+                if (h == F(0)) { da = F(0); db = F(0); }
+                else { da = b/h/h; db = -a/h/h; }
+                break;
             }
             case OP_HYPOT: {
                 F b = values[v_base+bi];
@@ -247,11 +258,13 @@ extern "C" __global__ void reverse_sweep(
             }
             case OP_MAX: {
                 F b = values[v_base+bi];
-                if (a >= b) { da = F(1); } else { db = F(1); } break;
+                // Route adjoint to `a` when it won (a>=b) or when b is NaN
+                // (IEEE fmax returns the non-NaN operand).
+                if ((a >= b) || isnan(b)) { da = F(1); } else { db = F(1); } break;
             }
             case OP_MIN: {
                 F b = values[v_base+bi];
-                if (a <= b) { da = F(1); } else { db = F(1); } break;
+                if ((a <= b) || isnan(b)) { da = F(1); } else { db = F(1); } break;
             }
             case OP_NEG:    da = F(-1); break;
             case OP_RECIP:  { F inv = F(1)/a; da = -inv*inv; break; }
@@ -273,12 +286,32 @@ extern "C" __global__ void reverse_sweep(
             case OP_TAN:    { F c = cos(a); da = F(1)/(c*c); break; }
             case OP_ASIN:   da = F(1)/sqrt((F(1)-a)*(F(1)+a)); break;
             case OP_ACOS:   da = F(-1)/sqrt((F(1)-a)*(F(1)+a)); break;
-            case OP_ATAN:   da = F(1)/(F(1)+a*a); break;
+            // For |a|>1e8, a*a+1 overflows to +Inf and 1/(1+a²) collapses to
+            // 0. Use the algebraically-equivalent `inv²/(1+inv²)` form that
+            // stays representable. Matches the CPU Dual::atan fix.
+            case OP_ATAN: {
+                F aa = fabs(a);
+                if (aa > F(1e8)) { F inv = F(1)/a; da = inv*inv/(F(1)+inv*inv); }
+                else             { da = F(1)/(F(1)+a*a); }
+                break;
+            }
             case OP_SINH:   da = cosh(a); break;
             case OP_COSH:   da = sinh(a); break;
             case OP_TANH:   { F c = cosh(a); da = F(1)/(c*c); break; }
-            case OP_ASINH:  da = F(1)/sqrt(a*a+F(1)); break;
-            case OP_ACOSH:  da = F(1)/sqrt(a*a-F(1)); break;
+            // For |a|>1e8, a*a+1 (resp. a*a-1) overflows; use inv-based
+            // formulation `|1/a|/sqrt(1 ± 1/a²)` that stays representable.
+            case OP_ASINH: {
+                F aa = fabs(a);
+                if (aa > F(1e8)) { F inv = F(1)/a; da = fabs(inv)/sqrt(F(1)+inv*inv); }
+                else              { da = F(1)/sqrt(a*a+F(1)); }
+                break;
+            }
+            case OP_ACOSH: {
+                F aa = fabs(a);
+                if (aa > F(1e8)) { F inv = F(1)/a; da = fabs(inv)/sqrt(F(1)-inv*inv); }
+                else              { da = F(1)/sqrt(a*a-F(1)); }
+                break;
+            }
             case OP_ATANH:  da = F(1)/((F(1)-a)*(F(1)+a)); break;
             case OP_ABS:    da = _sign(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
@@ -353,20 +386,24 @@ extern "C" __global__ void tangent_forward(
             case OP_MUL: { F b=primals[base+bi]; F bt=tangents[base+bi]; r=a*b; rt=b*at+a*bt; break; }
             case OP_DIV: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
-                r=a/b; F inv=F(1)/b; rt=inv*at-a*inv*inv*bt; break;
+                r=a/b; F inv=F(1)/b; rt=inv*at - r*inv*bt; break;
             }
             case OP_REM: { F b=primals[base+bi]; F bt=tangents[base+bi]; r=fmod(a,b); rt=at-trunc(a/b)*bt; break; }
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
                 r=pow(a,b);
-                // Guard: at a=0, b/a and log(a) are -inf/inf; split dx/dy
+                // Guard: at a=0, b/a and log(a) are -inf/inf; split dx/dy.
+                // At a<=0, log(a) is NaN; set dy=0 (matches CPU convention).
                 F dx = (a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at;
-                F dy = (r == F(0)) ? F(0) : r*log(a)*bt;
+                F dy = (r == F(0) || a <= F(0)) ? F(0) : r*log(a)*bt;
                 rt = dx + dy; break;
             }
             case OP_ATAN2: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
-                r=atan2(a,b); F d=a*a+b*b; rt=(b*at-a*bt)/d; break;
+                r=atan2(a,b);
+                F h = hypot(a, b);
+                rt = (h == F(0)) ? F(0) : (b*at - a*bt) / h / h;
+                break;
             }
             case OP_HYPOT: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
@@ -374,11 +411,11 @@ extern "C" __global__ void tangent_forward(
             }
             case OP_MAX: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
-                if(a>=b){r=a;rt=at;}else{r=b;rt=bt;} break;
+                if ((a>=b) || isnan(b)) { r=a; rt=at; } else { r=b; rt=bt; } break;
             }
             case OP_MIN: {
                 F b=primals[base+bi]; F bt=tangents[base+bi];
-                if(a<=b){r=a;rt=at;}else{r=b;rt=bt;} break;
+                if ((a<=b) || isnan(b)) { r=a; rt=at; } else { r=b; rt=bt; } break;
             }
             case OP_NEG:   r=-a; rt=-at; break;
             case OP_RECIP: r=F(1)/a; rt=-at/(a*a); break;
@@ -401,12 +438,28 @@ extern "C" __global__ void tangent_forward(
             case OP_TAN:   r=tan(a); { F c=cos(a); rt=at/(c*c); } break;
             case OP_ASIN:  r=asin(a); rt=at/sqrt((F(1)-a)*(F(1)+a)); break;
             case OP_ACOS:  r=acos(a); rt=-at/sqrt((F(1)-a)*(F(1)+a)); break;
-            case OP_ATAN:  r=atan(a); rt=at/(F(1)+a*a); break;
+            case OP_ATAN:  {
+                F aa = fabs(a);
+                r = atan(a);
+                if (aa > F(1e8)) { F inv=F(1)/a; rt = at*inv*inv/(F(1)+inv*inv); }
+                else             { rt = at/(F(1)+a*a); }
+                break;
+            }
             case OP_SINH:  r=sinh(a); rt=cosh(a)*at; break;
             case OP_COSH:  r=cosh(a); rt=sinh(a)*at; break;
             case OP_TANH:  r=tanh(a); { F c=cosh(a); rt=at/(c*c); } break;
-            case OP_ASINH: r=asinh(a); rt=at/sqrt(a*a+F(1)); break;
-            case OP_ACOSH: r=acosh(a); rt=at/sqrt(a*a-F(1)); break;
+            case OP_ASINH: {
+                r = asinh(a);
+                if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) + inv*inv); }
+                else                  { rt = at / sqrt(a*a + F(1)); }
+                break;
+            }
+            case OP_ACOSH: {
+                r = acosh(a);
+                if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
+                else                  { rt = at / sqrt(a*a - F(1)); }
+                break;
+            }
             case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
             case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
@@ -482,19 +535,22 @@ extern "C" __global__ void tangent_reverse(
             case OP_MUL: { F b=primals[base+bi]; F bt=tans[base+bi]; r=a*b; rt=b*at+a*bt; break; }
             case OP_DIV: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                r=a/b; F inv=F(1)/b; rt=inv*at-a*inv*inv*bt; break;
+                r=a/b; F inv=F(1)/b; rt=inv*at - r*inv*bt; break;
             }
             case OP_REM: { F b=primals[base+bi]; F bt=tans[base+bi]; r=fmod(a,b); rt=at-trunc(a/b)*bt; break; }
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 r=pow(a,b);
                 F dx = (a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at;
-                F dy = (r == F(0)) ? F(0) : r*log(a)*bt;
+                F dy = (r == F(0) || a <= F(0)) ? F(0) : r*log(a)*bt;
                 rt = dx + dy; break;
             }
             case OP_ATAN2: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                r=atan2(a,b); F d=a*a+b*b; rt=(b*at-a*bt)/d; break;
+                r=atan2(a,b);
+                F h = hypot(a, b);
+                rt = (h == F(0)) ? F(0) : (b*at - a*bt) / h / h;
+                break;
             }
             case OP_HYPOT: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
@@ -502,11 +558,11 @@ extern "C" __global__ void tangent_reverse(
             }
             case OP_MAX: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                if(a>=b){r=a;rt=at;}else{r=b;rt=bt;} break;
+                if ((a>=b) || isnan(b)) { r=a; rt=at; } else { r=b; rt=bt; } break;
             }
             case OP_MIN: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                if(a<=b){r=a;rt=at;}else{r=b;rt=bt;} break;
+                if ((a<=b) || isnan(b)) { r=a; rt=at; } else { r=b; rt=bt; } break;
             }
             case OP_NEG:   r=-a; rt=-at; break;
             case OP_RECIP: r=F(1)/a; rt=-at/(a*a); break;
@@ -529,12 +585,28 @@ extern "C" __global__ void tangent_reverse(
             case OP_TAN:   r=tan(a); { F c=cos(a); rt=at/(c*c); } break;
             case OP_ASIN:  r=asin(a); rt=at/sqrt((F(1)-a)*(F(1)+a)); break;
             case OP_ACOS:  r=acos(a); rt=-at/sqrt((F(1)-a)*(F(1)+a)); break;
-            case OP_ATAN:  r=atan(a); rt=at/(F(1)+a*a); break;
+            case OP_ATAN:  {
+                F aa = fabs(a);
+                r = atan(a);
+                if (aa > F(1e8)) { F inv=F(1)/a; rt = at*inv*inv/(F(1)+inv*inv); }
+                else             { rt = at/(F(1)+a*a); }
+                break;
+            }
             case OP_SINH:  r=sinh(a); rt=cosh(a)*at; break;
             case OP_COSH:  r=cosh(a); rt=sinh(a)*at; break;
             case OP_TANH:  r=tanh(a); { F c=cosh(a); rt=at/(c*c); } break;
-            case OP_ASINH: r=asinh(a); rt=at/sqrt(a*a+F(1)); break;
-            case OP_ACOSH: r=acosh(a); rt=at/sqrt(a*a-F(1)); break;
+            case OP_ASINH: {
+                r = asinh(a);
+                if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) + inv*inv); }
+                else                  { rt = at / sqrt(a*a + F(1)); }
+                break;
+            }
+            case OP_ACOSH: {
+                r = acosh(a);
+                if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
+                else                  { rt = at / sqrt(a*a - F(1)); }
+                break;
+            }
             case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
             case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
@@ -588,28 +660,57 @@ extern "C" __global__ void tangent_reverse(
             case OP_DIV: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 F inv=F(1)/b;
+                // Factor through `r = a/b` to push one division out of each
+                // higher-order term. `da_eps = -bt/b² = -bt·inv²` is kept
+                // (no `r` factor available); `db_re = -a/b² = -r·inv`
+                // replaces `a·inv²`; `db_eps = -at/b² + 2a·bt/b³` becomes
+                // `-at·inv² + 2·(r·inv)·bt·inv` which pulls one inv out
+                // of the cubic term.
                 da_re=inv; da_eps=-bt*inv*inv;
-                db_re=-a*inv*inv; db_eps=-at*inv*inv+F(2)*a*bt*inv*inv*inv; break;
+                db_re=-r*inv; db_eps=-at*inv*inv + F(2)*r*bt*inv*inv; break;
             }
             case OP_REM: { F b=primals[base+bi]; da_re=F(1); db_re=-trunc(a/b); break; }
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 F ab1 = pow(a, b-F(1));
                 da_re = b * ab1;
-                if (a == F(0)) { da_eps = F(0); }
+                // For a<=0, log(a) is NaN; convention is to zero the dy-like
+                // terms (CPU OpCode::Powf safety net parity).
+                if (a <= F(0)) { da_eps = F(0); }
                 else { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt); }
                 F rr = primals[base+i];
-                F la = (a == F(0)) ? F(0) : log(a);
-                db_re = (rr == F(0)) ? F(0) : rr * la;
-                F rt2 = tans[base+i];
-                db_eps = (rr == F(0)) ? F(0) : rt2*la + rr*at/a; break;
+                if (rr == F(0) || a <= F(0)) {
+                    db_re = F(0); db_eps = F(0);
+                } else {
+                    F la = log(a);
+                    F rt2 = tans[base+i];
+                    db_re = rr * la;
+                    db_eps = rt2*la + rr*at/a;
+                }
+                break;
             }
             case OP_ATAN2: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
-                F d=a*a+b*b; F d2=d*d;
-                F dd=F(2)*(a*at+b*bt);
-                da_re=b/d; da_eps=(bt*d-b*dd)/d2;
-                db_re=-a/d; db_eps=(-at*d+a*dd)/d2; break;
+                // Factor through `hypot` — using CUDA's overflow-safe builtin.
+                // First-order: da_re = b/h², db_re = -a/h², computed as
+                //   da_re = b/h/h which avoids forming h² directly.
+                // Second-order expands via d/dt(a²+b²) = 2(a·at + b·bt) = dd,
+                // and we compute (bt - b·dd/(a²+b²)) / (a²+b²) via division chains
+                // to sidestep the h⁴ intermediate.
+                F h = hypot(a, b);
+                if (h == F(0)) {
+                    da_re = F(0); da_eps = F(0); db_re = F(0); db_eps = F(0);
+                } else {
+                    F dd = F(2) * (a*at + b*bt);
+                    // h² = h*h may still overflow if h > sqrt(f64::MAX).
+                    // Compute per-term via (.../h)/h; each step is bounded.
+                    F dd_over_h2 = (dd / h) / h;
+                    da_re = (b / h) / h;
+                    db_re = -(a / h) / h;
+                    da_eps = (bt - b * dd_over_h2) / h / h;
+                    db_eps = (-at + a * dd_over_h2) / h / h;
+                }
+                break;
             }
             case OP_HYPOT: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
@@ -619,11 +720,11 @@ extern "C" __global__ void tangent_reverse(
             }
             case OP_MAX: {
                 F b=primals[base+bi];
-                if(a>=b){da_re=F(1);}else{db_re=F(1);} break;
+                if ((a>=b) || isnan(b)) { da_re=F(1); } else { db_re=F(1); } break;
             }
             case OP_MIN: {
                 F b=primals[base+bi];
-                if(a<=b){da_re=F(1);}else{db_re=F(1);} break;
+                if ((a<=b) || isnan(b)) { da_re=F(1); } else { db_re=F(1); } break;
             }
             case OP_NEG:   da_re=F(-1); break;
             case OP_RECIP: { F inv=F(1)/a; da_re=-inv*inv; da_eps=F(2)*at*inv*inv*inv; break; }
@@ -632,8 +733,19 @@ extern "C" __global__ void tangent_reverse(
             case OP_CBRT:  { F rr=r*r; da_re=F(1)/(F(3)*rr); da_eps=F(-2)*at/(F(9)*rr*rr*r); break; }
             case OP_POWI: {
                 int n = (int)bi;
-                if (n == 0) { da_re=F(0); da_eps=F(0); }
-                else { F fn=F(n); da_re=fn*pow(a,fn-F(1)); da_eps=fn*(fn-F(1))*pow(a,fn-F(2))*at; }
+                if (n == 0) {
+                    da_re=F(0); da_eps=F(0);
+                } else if (n == 1) {
+                    // f(a)=a, f'=1, f''=0. The general formula produces
+                    // `pow(a, -1)` for the f'' term which is +Inf at a=0,
+                    // and `0 * Inf * at = NaN`. Short-circuit to the
+                    // mathematically exact zero second derivative.
+                    da_re=F(1); da_eps=F(0);
+                } else {
+                    F fn=F(n);
+                    da_re=fn*pow(a,fn-F(1));
+                    da_eps=fn*(fn-F(1))*pow(a,fn-F(2))*at;
+                }
                 break;
             }
             case OP_EXP:    da_re=r; da_eps=r*at; break;
@@ -648,12 +760,57 @@ extern "C" __global__ void tangent_reverse(
             case OP_TAN:    { F c=cos(a); F s=F(1)/(c*c); da_re=s; da_eps=F(2)*tan(a)*s*at; break; }
             case OP_ASIN:   { F t=sqrt((F(1)-a)*(F(1)+a)); da_re=F(1)/t; da_eps=a*at/(t*t*t); break; }
             case OP_ACOS:   { F t=sqrt((F(1)-a)*(F(1)+a)); da_re=F(-1)/t; da_eps=-a*at/(t*t*t); break; }
-            case OP_ATAN:   { F t=F(1)+a*a; da_re=F(1)/t; da_eps=F(-2)*a*at/(t*t); break; }
+            // For |a|>1e8, (1+a²) overflows; use inv-based form for both
+            // orders. f(a)=atan(a); f'=1/(1+a²); f''=-2a/(1+a²)². With
+            // u=1/a: f' = u²/(1+u²); f'' = -2·u³/((1+u²)²·a·|a|)? Simpler:
+            // factor through h = 1+a² as `(h/a)/a` so h/a² = inv² when
+            // |a| large — direct inv-based second-order below.
+            case OP_ATAN:   {
+                F aa = fabs(a);
+                if (aa > F(1e8)) {
+                    F inv = F(1)/a;
+                    F h = F(1)+inv*inv;
+                    da_re = inv*inv/h;
+                    da_eps = F(-2)*inv*inv*inv*at/(h*h);
+                } else {
+                    F t = F(1)+a*a;
+                    da_re = F(1)/t;
+                    da_eps = F(-2)*a*at/(t*t);
+                }
+                break;
+            }
             case OP_SINH:   da_re=cosh(a); da_eps=sinh(a)*at; break;
             case OP_COSH:   da_re=sinh(a); da_eps=cosh(a)*at; break;
             case OP_TANH:   { F c=cosh(a); F s=F(1)/(c*c); da_re=s; da_eps=F(-2)*tanh(a)*s*at; break; }
-            case OP_ASINH:  { F t=sqrt(a*a+F(1)); da_re=F(1)/t; da_eps=-a*at/(t*t*t); break; }
-            case OP_ACOSH:  { F t=sqrt(a*a-F(1)); da_re=F(1)/t; da_eps=-a*at/(t*t*t); break; }
+            // Overflow-safe large-|a| switch; see CPU Dual::asinh/acosh for derivation.
+            case OP_ASINH: {
+                if (fabs(a) > F(1e8)) {
+                    F inv = F(1)/a;
+                    F denom = sqrt(F(1) + inv*inv);
+                    da_re = fabs(inv) / denom;
+                    // d²asinh/dx² = -x/(1+x²)^(3/2) rewritten via inv:
+                    //   = -sign(x)·inv²·|inv| / denom³
+                    F denom3 = denom*denom*denom;
+                    da_eps = -a * at * inv * inv * fabs(inv) / denom3;
+                } else {
+                    F t = sqrt(a*a + F(1));
+                    da_re = F(1)/t; da_eps = -a*at/(t*t*t);
+                }
+                break;
+            }
+            case OP_ACOSH: {
+                if (fabs(a) > F(1e8)) {
+                    F inv = F(1)/a;
+                    F denom = sqrt(F(1) - inv*inv);
+                    da_re = fabs(inv) / denom;
+                    F denom3 = denom*denom*denom;
+                    da_eps = -a * at * inv * inv * fabs(inv) / denom3;
+                } else {
+                    F t = sqrt(a*a - F(1));
+                    da_re = F(1)/t; da_eps = -a*at/(t*t*t);
+                }
+                break;
+            }
             case OP_ATANH:  { F t=(F(1)-a)*(F(1)+a); da_re=F(1)/t; da_eps=F(2)*a*at/(t*t); break; }
             case OP_ABS:    da_re=_sign(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:

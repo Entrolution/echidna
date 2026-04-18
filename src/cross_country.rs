@@ -212,6 +212,15 @@ impl<F: Float> LinearizedGraph<F> {
     /// Extract the m×n Jacobian matrix after all intermediates are eliminated.
     ///
     /// Remaining edges connect inputs to outputs directly.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any output's predecessor chain still contains a non-input
+    /// node. This happens when one declared output is an ancestor of another
+    /// declared output (the ancestor is classified as "non-intermediate" and
+    /// never eliminated), which cross-country elimination does not handle.
+    /// Split such tapes into single-output sub-tapes, or use the reverse-mode
+    /// Jacobian instead.
     pub(crate) fn extract_jacobian(&self) -> Vec<Vec<F>> {
         let m = self.output_indices.len();
         let n = self.num_inputs;
@@ -225,17 +234,22 @@ impl<F: Float> LinearizedGraph<F> {
                 jac[row][out] = jac[row][out] + F::one();
             }
 
-            // Accumulate remaining edges from input predecessors
+            // Accumulate remaining edges. Elevate the debug_assert to a hard
+            // assert: release-mode silent truncation of non-input predecessors
+            // produces silently wrong Jacobian rows (the bug-hunt finding M11),
+            // and the panic here is caller-actionable.
             for &(pred_idx, weight) in &self.preds[out] {
                 let p = pred_idx as usize;
-                debug_assert!(
+                assert!(
                     p < n,
-                    "non-input predecessor {} remains after elimination",
-                    p
+                    "cross-country extract_jacobian: non-input predecessor {} \
+                     remains after elimination (likely because output {} is an \
+                     ancestor of another declared output — cross-country cannot \
+                     handle this topology; use `BytecodeTape::jacobian` instead)",
+                    p,
+                    out,
                 );
-                if p < n {
-                    jac[row][p] = jac[row][p] + weight;
-                }
+                jac[row][p] = jac[row][p] + weight;
             }
         }
 

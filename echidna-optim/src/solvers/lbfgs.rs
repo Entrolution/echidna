@@ -134,10 +134,18 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
         grad = ls.gradient;
         grad_norm = norm(&grad);
 
-        // Update history (skip pairs with near-zero curvature to prevent rho overflow)
+        // Update history. Filter out pairs with near-zero curvature. The
+        // original guard `sy > eps * yy` has units `[s]·[y]` on the LHS and
+        // `[y]²` on the RHS — dimensionally inconsistent, so it behaves
+        // differently for "tall" vs "short" `y` vectors. Use a Cauchy-Schwarz
+        // normalized filter `sy > eps * sqrt(ss * yy)` which is dimensionally
+        // consistent (`cos θ > eps`) and reliably selects pairs with
+        // non-trivial curvature regardless of vector magnitudes.
         let sy = dot(&s, &y);
+        let ss = dot(&s, &s);
         let yy = dot(&y, &y);
-        if sy > F::epsilon() * yy {
+        let cs_scale = (ss * yy).sqrt();
+        if sy > F::epsilon() * cs_scale {
             if s_hist.len() == m {
                 s_hist.remove(0);
                 y_hist.remove(0);
@@ -187,8 +195,12 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
             };
         }
 
+        // Relative func_tol: absolute `|f_prev - f_val| < tol` is scale-
+        // blind — a tolerance of 1e-8 means ULP-precision on large-
+        // magnitude objectives (|f| ≈ 1e8) and impossibly tight on tiny
+        // ones. Scale by `(1 + |f|)` so the criterion tracks the problem.
         if config.convergence.func_tol > F::zero()
-            && (f_prev - f_val).abs() < config.convergence.func_tol
+            && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
         {
             return OptimResult {
                 x,
@@ -242,11 +254,22 @@ fn two_loop_recursion<F: Float>(
         let sy = dot(&s_hist[k - 1], &y_hist[k - 1]);
         let yy = dot(&y_hist[k - 1], &y_hist[k - 1]);
         if yy > F::epsilon() {
-            let gamma = sy / yy;
-            if gamma.is_finite() {
-                for v in r.iter_mut() {
-                    *v = *v * gamma;
-                }
+            let raw_gamma = sy / yy;
+            // Clamp `gamma` to [1e-3, 1e3]. A curvature pair that just
+            // barely passed the acceptance filter can have `sy/yy ≈ eps`
+            // — the two-loop recursion then scales the direction by that
+            // tiny factor, Armijo backtracks to alpha_min, and the
+            // search reports LineSearchFailed. Bounded gamma keeps the
+            // direction magnitude in a line-search-friendly range.
+            let lo = F::from(1e-3).unwrap();
+            let hi = F::from(1e3).unwrap();
+            let gamma = if raw_gamma.is_finite() {
+                raw_gamma.max(lo).min(hi)
+            } else {
+                F::one()
+            };
+            for v in r.iter_mut() {
+                *v = *v * gamma;
             }
         }
     }

@@ -55,7 +55,9 @@ pub struct LineSearchResult<F> {
 ///
 /// Searches for `alpha` such that `f(x + alpha*d) <= f(x) + c * alpha * g^T d`.
 ///
-/// Returns `None` if `alpha` falls below `alpha_min` (line search failure).
+/// Returns `None` if `alpha` falls below `alpha_min` (line search failure),
+/// which includes the case where every trial point returned a non-finite
+/// objective value or gradient — treated as infeasible and backtracked past.
 pub fn backtracking_armijo<F: Float, O: Objective<F>>(
     obj: &mut O,
     x: &[F],
@@ -87,6 +89,16 @@ pub fn backtracking_armijo<F: Float, O: Objective<F>>(
 
         let (f_new, g_new) = obj.eval_grad(&x_new);
         evals += 1;
+
+        // Reject infeasible trial points: `-Inf <= anything` is trivially
+        // true, so the Armijo check would accept a step off the domain and
+        // the solver would walk toward -Inf indefinitely. A NaN `f_new`
+        // falls through (`NaN <= x` is false) but is rejected here for
+        // symmetry. Either case is treated as "backtrack past this α".
+        if !f_new.is_finite() || !g_new.iter().all(|g| g.is_finite()) {
+            alpha = alpha * params.rho;
+            continue;
+        }
 
         // Armijo condition: f(x + alpha*d) <= f(x) + c * alpha * g^T d
         if f_new <= f_x + params.c * alpha * dg {

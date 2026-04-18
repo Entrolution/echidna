@@ -54,9 +54,15 @@ pub struct NonsmoothInfo<F: Float> {
 }
 
 impl<F: Float> NonsmoothInfo<F> {
-    /// Return kink entries whose switching value is within `tol` of zero.
+    /// Return kink entries whose switching value is within `tol` of zero,
+    /// or whose switching value is non-finite (NaN / ±Inf).
     ///
-    /// These are the "active" kinks — points near the boundary between branches.
+    /// Non-finite switching values indicate an upstream numerical blow-up
+    /// where the branch can no longer be decided — the kink is
+    /// conservatively reported as active so callers who enumerate the
+    /// Clarke subdifferential don't silently miss a potentially active
+    /// branch. Regression test `regression_24_nan_switching_value_is_not_smooth`
+    /// pins this contract.
     pub fn active_kinks(&self, tol: F) -> Vec<&KinkEntry<F>> {
         self.kinks
             .iter()

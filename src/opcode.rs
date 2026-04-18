@@ -332,28 +332,43 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                 let db = if a > zero { a.ln() } else { zero };
                 (zero, db)
             } else {
-                let da = if a == zero || r == zero {
-                    // Direct powf avoids 0/0 when a=0 and catches underflow
-                    // when r=a^b underflows to 0 but a!=0
+                let da = if a == zero || r == zero || !a.is_finite() || !r.is_finite() {
+                    // Direct powf avoids 0/0 when a=0, catches underflow when
+                    // r=a^b underflows to 0 but a!=0, and avoids Inf/Inf = NaN
+                    // when either a or r is infinite (e.g., Inf^2 = Inf, whose
+                    // true derivative at Inf is Inf, not NaN).
                     b * a.powf(b - one)
                 } else {
                     b * r / a
                 };
-                let db = if r == zero { zero } else { r * a.ln() };
+                // For `a <= 0`, `a.ln()` is NaN (stdlib real-valued). A finite
+                // `r` at `a < 0` means `b` was integer (else `r = NaN`); the
+                // derivative w.r.t. `b` at an integer `b` is not classically
+                // defined, and the convention here is 0 — matching the
+                // forward-mode `Dual::powf` constant-integer fast path. This
+                // also prevents NaN from contaminating a live tape slot for
+                // `b` on reverse sweep.
+                let db = if r == zero || a <= zero {
+                    zero
+                } else {
+                    r * a.ln()
+                };
                 (da, db)
             }
         }
         OpCode::Atan2 => {
             // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            // Use hypot to avoid overflow when a or b is large.
-            // At the origin (a=b=0), the gradient is mathematically undefined;
-            // returning (0, 0) is a defensible convention (matches JAX/PyTorch).
+            // Factor as (b/h)/h and (-a/h)/h to avoid squaring h — h² overflows
+            // for |h| > sqrt(f64::MAX) ≈ 1.3e154 and underflows below
+            // sqrt(f64::MIN_POSITIVE), silently corrupting otherwise finite partials.
+            // b/h and a/h are bounded by 1 (since h = hypot ≥ |a|, |b|).
+            // At the origin (h=0), the gradient is mathematically undefined;
+            // returning (0, 0) matches JAX/PyTorch convention.
             let h = a.hypot(b);
             if h == zero {
                 (zero, zero)
             } else {
-                let denom = h * h;
-                (b / denom, -a / denom)
+                (b / h / h, -a / h / h)
             }
         }
         OpCode::Hypot => {
@@ -410,14 +425,46 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             }
         }
 
-        // Exp/Log
+        // Exp/Log. Domain-restricted ops emit a NaN partial strictly
+        // outside their valid interval (a < 0 for Ln/Log2/Log10, a < -1
+        // for Ln1p, |a| > 1 for Atanh) so a caller that supplied
+        // out-of-domain inputs sees `(NaN, 0)` instead of a numerically
+        // plausible but semantically meaningless finite partial
+        // (e.g. `1/-1 = -1` for `Ln` at a = -1). Boundary values
+        // (a = 0 for Ln, a = -1 for Ln1p, |a| = 1 for Atanh) are left
+        // to the IEEE arithmetic — the partial evaluates to ±Inf, which
+        // is the correct one-sided derivative limit.
         OpCode::Exp => (r, zero), // d/da e^a = e^a = r
         OpCode::Exp2 => (r * T::ln(T::from(2.0).unwrap()), zero),
         OpCode::ExpM1 => (r + one, zero), // d/da (e^a - 1) = e^a = r+1
-        OpCode::Ln => (one / a, zero),
-        OpCode::Log2 => (one / (a * T::ln(T::from(2.0).unwrap())), zero),
-        OpCode::Log10 => (one / (a * T::ln(T::from(10.0).unwrap())), zero),
-        OpCode::Ln1p => (one / (one + a), zero),
+        OpCode::Ln => {
+            if a >= zero {
+                (one / a, zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
+        OpCode::Log2 => {
+            if a >= zero {
+                (one / (a * T::ln(T::from(2.0).unwrap())), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
+        OpCode::Log10 => {
+            if a >= zero {
+                (one / (a * T::ln(T::from(10.0).unwrap())), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
+        OpCode::Ln1p => {
+            if a >= -one {
+                (one / (one + a), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
 
         // Trig
         OpCode::Sin => (a.cos(), zero),
@@ -446,12 +493,46 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let c = a.cosh();
             (one / (c * c), zero)
         }
-        OpCode::Asinh => (one / (a * a + one).sqrt(), zero),
-        OpCode::Acosh => (one / (a * a - one).sqrt(), zero),
-        OpCode::Atanh => (one / ((one - a) * (one + a)), zero),
+        OpCode::Asinh => {
+            // For |a| > 1e8, a*a+1 overflows for |a| > sqrt(f64::MAX), collapsing
+            // the derivative to 0. Use |1/a|/sqrt(1+(1/a)²) which stays in-range.
+            let da = if a.abs() > T::from(1e8).unwrap() {
+                let inv = one / a;
+                inv.abs() / (one + inv * inv).sqrt()
+            } else {
+                one / (a * a + one).sqrt()
+            };
+            (da, zero)
+        }
+        OpCode::Acosh => {
+            let da = if a.abs() > T::from(1e8).unwrap() {
+                let inv = one / a;
+                inv.abs() / (one - inv * inv).sqrt()
+            } else {
+                one / (a * a - one).sqrt()
+            };
+            (da, zero)
+        }
+        OpCode::Atanh => {
+            if a >= -one && a <= one {
+                (one / ((one - a) * (one + a)), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
 
-        // Misc
-        OpCode::Abs => (a.signum(), zero),
+        // Misc. `Abs` uses the symmetric midpoint 0 of the Clarke
+        // subdifferential [-1, 1] at the kink; relying on `a.signum()`
+        // leaks the sign bit of ±0 (`signum(+0) = +0`, `signum(-0) = -0`),
+        // which makes algebraically equivalent tape positions report
+        // different subgradients depending on how the zero was produced.
+        OpCode::Abs => {
+            if a == zero {
+                (zero, zero)
+            } else {
+                (a.signum(), zero)
+            }
+        }
         OpCode::Signum | OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
             (zero, zero)
         }

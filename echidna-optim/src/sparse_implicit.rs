@@ -168,9 +168,13 @@ fn extract_fz_triplets(
 
 /// Build sparse F_z and compute LU factorization.
 ///
-/// Returns `None` if the matrix is singular or construction fails.
-/// Detects numeric singularity (not just symbolic) by solving a test vector
-/// and checking for non-finite results.
+/// Returns `None` if the matrix is singular or construction fails. Numeric
+/// singularity is detected by solving a test system and verifying both
+/// finiteness of the solution and that the residual `||F_z · x - rhs|| /
+/// ||rhs||` is small. The all-ones RHS of the previous probe passed
+/// trivially on matrices with a null space orthogonal to `1`, letting a
+/// near-singular F_z proceed into the downstream solve and return garbage
+/// tangents/adjoints.
 fn build_fz_and_factor(
     ctx: &SparseImplicitContext,
     jac_values: &[f64],
@@ -180,10 +184,45 @@ fn build_fz_and_factor(
     let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets).ok()?;
     let lu = mat.sp_lu().ok()?;
 
-    // Detect numeric singularity: solve with a test RHS and check for NaN/Inf.
-    let test_rhs = Col::<f64>::from_fn(m, |_| 1.0);
+    // Mixed-sign probe RHS — avoids the null-space direction an all-ones
+    // vector would hit for matrices like `diag(1,-1)` rotated into the
+    // state basis.
+    let test_rhs_vec: Vec<f64> = (0..m)
+        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+    let test_rhs = Col::<f64>::from_fn(m, |i| test_rhs_vec[i]);
     let test_sol = lu.solve(&test_rhs);
     if (0..m).any(|i| !test_sol[i].is_finite()) {
+        return None;
+    }
+
+    // Residual check: compute `F_z · test_sol` via the COO F_z entries and
+    // compare against `test_rhs`. This is a defensive check that catches
+    // LU-solver failures which produce a finite-but-wrong solution
+    // (e.g., internal numerical issues that bypass faer's own singularity
+    // detection). For faer's well-tested sparse LU the residual is
+    // generally near machine-eps even on ill-conditioned matrices — the
+    // primary signal against singularity is `sp_lu().ok()?` above.
+    let test_sol_slice: Vec<f64> = (0..m).map(|i| test_sol[i]).collect();
+    let mut applied = vec![0.0_f64; m];
+    for &k in &ctx.fz_indices {
+        let row = ctx.pattern.rows[k] as usize;
+        let col = ctx.pattern.cols[k] as usize;
+        applied[row] += jac_values[k] * test_sol_slice[col];
+    }
+    let mut resid_sq = 0.0_f64;
+    let mut rhs_sq = 0.0_f64;
+    for i in 0..m {
+        let r = applied[i] - test_rhs_vec[i];
+        resid_sq += r * r;
+        rhs_sq += test_rhs_vec[i] * test_rhs_vec[i];
+    }
+    // Tolerance: sqrt of machine epsilon scaled by dimension. Permissive
+    // enough that a correctly factored faer LU passes, strict enough that
+    // a solve producing residuals many orders of magnitude above machine
+    // precision is caught.
+    let tol = (f64::EPSILON.sqrt()) * (m as f64).sqrt();
+    if !resid_sq.is_finite() || resid_sq > tol * tol * rhs_sq {
         return None;
     }
 

@@ -360,7 +360,16 @@ impl WgpuContext {
         let ni = tape.num_inputs;
         let nv = tape.num_variables;
         let no = tape.num_outputs;
-        let total_inputs = (batch_size * ni) as usize;
+
+        // WGSL indexes the jet buffer with `bid * nv * K` in u32; for K=4 or
+        // K=5 at realistic nv, this can overflow before the CPU-side index
+        // arithmetic catches it. Enforce the u32 envelope here so that the
+        // kernel's 32-bit indexing remains safe.
+        assert!(
+            (batch_size as u64) * (nv as u64) * (k as u64) <= u32::MAX as u64,
+            "batch_size * num_variables * order overflows u32 in WGSL shader index arithmetic"
+        );
+        let total_inputs = (batch_size as usize) * (ni as usize);
 
         assert_eq!(
             primal_inputs.len(),
@@ -480,10 +489,16 @@ impl WgpuContext {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(sub_idx),
-            timeout: None,
-        });
+        // Propagate `device.poll` failures rather than swallowing them —
+        // on device loss (driver reset, OOM in another submission) a
+        // silently-ignored poll error turned into an indefinite wait on
+        // the `rx.recv()` below, looking like a deadlock to callers.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(sub_idx),
+                timeout: None,
+            })
+            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
 
         rx.recv()
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
@@ -493,7 +508,7 @@ impl WgpuContext {
         let raw: &[f32] = bytemuck::cast_slice(&data);
 
         // Deinterleave: raw is [c0, c1, ..., c_{K-1}] per output per batch element
-        let total_out = (batch_size * no) as usize;
+        let total_out = (batch_size as usize) * (no as usize);
         let mut coefficients: Vec<Vec<f32>> =
             (0..order).map(|_| Vec::with_capacity(total_out)).collect();
 
@@ -515,6 +530,10 @@ impl WgpuContext {
 
 impl GpuBackend for WgpuContext {
     type TapeBuffers = WgpuTapeBuffers;
+
+    fn num_outputs(&self, tape: &WgpuTapeBuffers) -> u32 {
+        tape.num_outputs
+    }
 
     fn upload_tape(&self, data: &GpuTapeData) -> WgpuTapeBuffers {
         use wgpu::util::DeviceExt;
@@ -601,7 +620,7 @@ impl GpuBackend for WgpuContext {
 
         assert_eq!(
             inputs.len(),
-            (batch_size * num_inputs) as usize,
+            (batch_size as usize) * (num_inputs as usize),
             "inputs length must be batch_size * num_inputs"
         );
 
@@ -713,10 +732,16 @@ impl GpuBackend for WgpuContext {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(sub_idx),
-            timeout: None,
-        });
+        // Propagate `device.poll` failures rather than swallowing them —
+        // on device loss (driver reset, OOM in another submission) a
+        // silently-ignored poll error turned into an indefinite wait on
+        // the `rx.recv()` below, looking like a deadlock to callers.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(sub_idx),
+                timeout: None,
+            })
+            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
 
         rx.recv()
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
@@ -751,7 +776,7 @@ impl GpuBackend for WgpuContext {
 
         assert_eq!(
             inputs.len(),
-            (batch_size * num_inputs) as usize,
+            (batch_size as usize) * (num_inputs as usize),
             "inputs length must be batch_size * num_inputs"
         );
 
@@ -931,10 +956,16 @@ impl GpuBackend for WgpuContext {
             let _ = tx2.send(r);
         });
 
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(sub_idx),
-            timeout: None,
-        });
+        // Propagate `device.poll` failures rather than swallowing them —
+        // on device loss (driver reset, OOM in another submission) a
+        // silently-ignored poll error turned into an indefinite wait on
+        // the `rx.recv()` below, looking like a deadlock to callers.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(sub_idx),
+                timeout: None,
+            })
+            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
 
         rx1.recv()
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
@@ -990,6 +1021,15 @@ impl GpuBackend for WgpuContext {
             let vals_f32: Vec<f32> = vals.to_vec();
             return Ok((vals_f32, pattern, vec![]));
         }
+
+        // Guard against u32 overflow in WGSL `bid * num_variables` index
+        // arithmetic. The effective batch_size for sparse-Jacobian dispatch
+        // is `num_colors` (one JVP per color); if the colored tape plus the
+        // variable count exceeds u32, indices would silently wrap.
+        assert!(
+            (num_colors as u64) * (num_variables as u64) <= u32::MAX as u64,
+            "num_colors * num_variables overflows u32 in WGSL shader index arithmetic"
+        );
 
         // Build tangent seed vectors: one per color
         // Each color c gets a seed where input[i].tangent = 1 if colors[i] == c, else 0
@@ -1116,10 +1156,16 @@ impl GpuBackend for WgpuContext {
         slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(sub_idx),
-            timeout: None,
-        });
+        // Propagate `device.poll` failures rather than swallowing them —
+        // on device loss (driver reset, OOM in another submission) a
+        // silently-ignored poll error turned into an indefinite wait on
+        // the `rx.recv()` below, looking like a deadlock to callers.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(sub_idx),
+                timeout: None,
+            })
+            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
         rx.recv()
             .map_err(|e| GpuError::Other(format!("recv: {e}")))?
             .map_err(|e| GpuError::Other(format!("map: {e}")))?;
@@ -1170,7 +1216,7 @@ impl GpuBackend for WgpuContext {
         let nv = tape.num_variables;
 
         assert_eq!(x.len(), ni as usize);
-        assert_eq!(tangent_dirs.len(), (batch_size * ni) as usize);
+        assert_eq!(tangent_dirs.len(), (batch_size as usize) * (ni as usize));
 
         // Guard against u32 overflow in WGSL index arithmetic
         assert!(
@@ -1179,7 +1225,7 @@ impl GpuBackend for WgpuContext {
         );
 
         // Build primal inputs: same x replicated for each batch element
-        let mut primal_inputs = Vec::with_capacity((batch_size * ni) as usize);
+        let mut primal_inputs = Vec::with_capacity((batch_size as usize) * (ni as usize));
         for _ in 0..batch_size {
             primal_inputs.extend_from_slice(x);
         }
@@ -1338,10 +1384,16 @@ impl GpuBackend for WgpuContext {
         hs.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx2.send(r);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(sub_idx),
-            timeout: None,
-        });
+        // Propagate `device.poll` failures rather than swallowing them —
+        // on device loss (driver reset, OOM in another submission) a
+        // silently-ignored poll error turned into an indefinite wait on
+        // the `rx.recv()` below, looking like a deadlock to callers.
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(sub_idx),
+                timeout: None,
+            })
+            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
 
         rx1.recv()
             .map_err(|e| GpuError::Other(format!("{e}")))?

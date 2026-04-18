@@ -151,6 +151,18 @@ pub fn taylor_sqrt<F: Float>(a: &[F], c: &mut [F]) {
         }
         return;
     }
+    if a[0] < F::zero() {
+        // sqrt is undefined on the negative reals. Relying on `.sqrt()`'s
+        // silent NaN propagates the NaN into c[0] but leaves higher-order
+        // coefficients computed from division by `2 * NaN` in a state that
+        // looks like a normal recurrence. Make the degeneracy explicit so
+        // downstream callers don't accidentally consume a mix of finite
+        // and non-finite coefficients.
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     c[0] = a[0].sqrt();
     let two_c0 = F::from(2.0).unwrap() * c[0];
     for k in 1..n {
@@ -434,6 +446,20 @@ pub fn taylor_powf<F: Float>(
     scratch1: &mut [F],
     scratch2: &mut [F],
 ) {
+    // Constant integer exponent fast path: if `b` is a plain scalar (higher
+    // coefficients are zero) and that scalar is an integer, route to
+    // `taylor_powi`. Otherwise `taylor_ln(a)` returns NaN for `a[0] <= 0`,
+    // poisoning the entire result — even for negative-base integer powers
+    // that have well-defined Taylor coefficients.
+    if b[1..].iter().all(|&bk| bk == F::zero()) {
+        let b0 = b[0];
+        if let Some(ni) = b0.to_i32() {
+            if F::from(ni).unwrap() == b0 {
+                taylor_powi(a, ni, c, scratch1, scratch2);
+                return;
+            }
+        }
+    }
     // scratch1 = ln(a)
     taylor_ln(a, scratch1);
     // scratch2 = b * ln(a)
@@ -643,6 +669,12 @@ pub fn taylor_log10<F: Float>(a: &[F], c: &mut [F]) {
 #[inline]
 pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     let n = c.len();
+    // All call sites are already guarded by the compile-time `K >= 1` const
+    // assert in bytecode_tape/taylor.rs, but `taylor_ln_1p` is also callable
+    // directly. `c[0] = a[0].ln_1p()` below unconditionally indexes [0],
+    // so n=0 would panic; surface it as a debug assert with an actionable
+    // message rather than a raw slice panic.
+    debug_assert!(n >= 1, "taylor_ln_1p requires c.len() >= 1");
     scratch[1..n].copy_from_slice(&a[1..n]);
     scratch[0] = F::one() + a[0];
     taylor_ln(scratch, c);
@@ -665,7 +697,36 @@ pub fn taylor_hypot<F: Float>(
     let n = c.len();
     let scale = a[0].abs().max(b[0].abs());
     if scale == F::zero() {
-        // Both leading terms are zero — compute directly (derivatives may be infinite)
+        // Both leading primals are zero. If the *next* order has any signal,
+        // the composite function t ↦ hypot(a(t), b(t)) is smoothly
+        // `|t|·hypot(a(t)/t, b(t)/t)` near t=0. Recursively compute on the
+        // shifted series, then shift the result back by one to represent the
+        // `|t|·…` factor. This mirrors CPU `Taylor::abs` and gives the true
+        // Taylor expansion rather than the `log(0)·exp` path's NaN/Inf.
+        if n > 1 && (a[1] != F::zero() || b[1] != F::zero()) {
+            let mut a_shifted = vec![F::zero(); n];
+            let mut b_shifted = vec![F::zero(); n];
+            a_shifted[..(n - 1)].copy_from_slice(&a[1..n]);
+            b_shifted[..(n - 1)].copy_from_slice(&b[1..n]);
+            let mut inner_c = vec![F::zero(); n];
+            let mut inner_s1 = vec![F::zero(); n];
+            let mut inner_s2 = vec![F::zero(); n];
+            taylor_hypot(
+                &a_shifted,
+                &b_shifted,
+                &mut inner_c,
+                &mut inner_s1,
+                &mut inner_s2,
+            );
+            c[0] = F::zero();
+            c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
+            return;
+        }
+        // Deeper-order zero (a and b both vanish past the first-non-zero
+        // we can detect in the shifted series) or identically-zero — fall
+        // through to the direct square-then-sqrt path, which gives 0 for
+        // the primal and Inf for higher derivatives (the latter matches
+        // the singular-derivative convention at a true zero).
         taylor_mul(a, a, scratch1);
         taylor_mul(b, b, scratch2);
         for k in 0..n {

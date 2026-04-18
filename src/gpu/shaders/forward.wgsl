@@ -125,9 +125,15 @@ fn atanh_f32(x: f32) -> f32 {
 }
 
 fn hypot_f32(a: f32, b: f32) -> f32 {
-    // Factor out max magnitude to avoid overflow for large inputs
+    // Factor out max magnitude to avoid overflow for large inputs.
     let ax = abs(a);
     let ay = abs(b);
+    let inf = bitcast<f32>(0x7f800000u);
+    // IEEE: hypot(±Inf, x) = +Inf for any x (including NaN). The
+    // rescaled formula would otherwise compute `Inf/Inf = NaN` when
+    // both operands are Inf, diverging from CPU f64::hypot and the
+    // CUDA `hypot` builtin.
+    if ax == inf || ay == inf { return inf; }
     let mx = max(ax, ay);
     let mn = min(ax, ay);
     if mx == 0.0 { return 0.0; }
@@ -251,7 +257,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 39u /* CEIL */: { r = ceil(a); }
             case 40u /* ROUND */: { r = round(a); }
             case 41u /* TRUNC */: { r = trunc(a); }
-            case 42u /* FRACT */: { r = fract(a); }
+            // WGSL `fract` is floor-based; CPU `f32::fract()` is truncation-based.
+            case 42u /* FRACT */: { r = a - trunc(a); }
             default: { r = 0.0; }
         }
 

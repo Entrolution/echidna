@@ -71,8 +71,10 @@ fn record_with_customs(
         })
         .collect();
 
-    let _guard = BtapeGuard::new(&mut tape);
-    let output = f(&inputs, &handles, x);
+    let output = {
+        let _guard = BtapeGuard::new(&mut tape);
+        f(&inputs, &handles, x)
+    };
 
     tape.set_output(output.index());
     tape
@@ -294,16 +296,18 @@ fn multiple_custom_ops_on_same_tape() {
 #[test]
 fn custom_op_jvp() {
     // f(x, y) = softplus(x) + y
-    // Test JVP (which exercises forward tangent) via hvp on a 2-input function
+    // Test the Jacobian through a custom op. `jacobian_forward` now asserts
+    // no custom ops (linearization around recording-time primals biases the
+    // result at x ≠ x_record); use the reverse-mode `jacobian` instead, which
+    // honours `CustomOp::partials` exactly.
     let x = [2.0_f64, 3.0];
-    let tape = record_with_customs(&x, vec![Arc::new(Softplus)], |v, h, xv| {
+    let mut tape = record_with_customs(&x, vec![Arc::new(Softplus)], |v, h, xv| {
         let sp_val = softplus(xv[0]);
         let sp = v[0].custom_unary(h[0], sp_val);
         sp + v[1]
     });
 
-    // Use jacobian_forward to test forward tangent mode
-    let jac = tape.jacobian_forward(&x);
+    let jac = tape.jacobian(&x);
     let expected_dx = sigmoid(2.0);
     assert!(
         (jac[0][0] - expected_dx).abs() < 1e-10,

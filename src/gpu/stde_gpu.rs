@@ -25,6 +25,17 @@ pub fn laplacian_gpu<B: GpuBackend>(
     x: &[f32],
     directions: &[&[f32]],
 ) -> Result<EstimatorResult<f32>, GpuError> {
+    // `aggregate_laplacian` reads `result.c2s[i]` assuming the `i`-th entry is
+    // the c2 coefficient for the tape's single scalar output. On multi-output
+    // tapes the layout is `c2s[batch * num_outputs + out]`, and indexing
+    // `c2s[i]` would silently mix outputs. Enforce single-output so the
+    // aggregation matches the layout the backend produces.
+    if backend.num_outputs(tape) != 1 {
+        return Err(GpuError::Other(format!(
+            "laplacian_gpu requires a scalar-output tape; got {} outputs",
+            backend.num_outputs(tape)
+        )));
+    }
     let n = x.len();
     let s = directions.len();
     if s == 0 {
@@ -123,6 +134,14 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
     directions: &[&[f32]],
     control_diagonal: &[f32],
 ) -> Result<EstimatorResult<f32>, GpuError> {
+    // Same single-output constraint as `laplacian_gpu`: the per-sample
+    // `result.c2s[i]` indexing assumes one c2 per batch element.
+    if backend.num_outputs(tape) != 1 {
+        return Err(GpuError::Other(format!(
+            "laplacian_with_control_gpu requires a scalar-output tape; got {} outputs",
+            backend.num_outputs(tape)
+        )));
+    }
     let n = x.len();
     let s = directions.len();
     assert_eq!(

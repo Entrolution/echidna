@@ -89,8 +89,10 @@ fn custom_op_tape_serialization_fails() {
     let handle = tape.register_custom(Arc::new(Scale));
     let idx = tape.new_input(x[0]);
     let input = BReverse::from_tape(x[0], idx);
-    let _guard = BtapeGuard::new(&mut tape);
-    let output = input.custom_unary(handle, 2.0 * x[0]);
+    let output = {
+        let _guard = BtapeGuard::new(&mut tape);
+        input.custom_unary(handle, 2.0 * x[0])
+    };
     tape.set_output(output.index());
 
     let result = serde_json::to_string(&tape);

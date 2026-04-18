@@ -193,6 +193,17 @@ impl<F: Float> super::BytecodeTape<F> {
             "wrong number of inputs"
         );
 
+        // Mirror the invariant enforced by `forward`: input slots must be the
+        // first `num_inputs` opcodes. Without this check the `values_buf[i]
+        // = v` loop below would silently overwrite non-Input slots if a
+        // caller mixed `new_input` / `push_op` out of order.
+        debug_assert!(
+            self.opcodes[..self.num_inputs as usize]
+                .iter()
+                .all(|&op| op == OpCode::Input),
+            "input slots must be contiguous Input opcodes at the start of the tape"
+        );
+
         let n = self.num_variables as usize;
         values_buf.clear();
         values_buf.resize(n, F::zero());

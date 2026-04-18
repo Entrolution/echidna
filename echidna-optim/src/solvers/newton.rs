@@ -1,6 +1,6 @@
 use num_traits::Float;
 
-use crate::convergence::{norm, ConvergenceParams};
+use crate::convergence::{dot, norm, ConvergenceParams};
 use crate::linalg::lu_solve;
 use crate::line_search::{backtracking_armijo, ArmijoParams};
 use crate::objective::Objective;
@@ -91,22 +91,21 @@ pub fn newton<F: Float, O: Objective<F>>(
     for iter in 0..config.convergence.max_iter {
         // Solve H * delta = -g
         let neg_grad: Vec<F> = grad.iter().map(|&g| F::zero() - g).collect();
-        let delta = match lu_solve(&hess, &neg_grad) {
-            Some(d) => d,
-            None => {
-                return OptimResult {
-                    x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter,
-                    func_evals,
-                    termination: TerminationReason::NumericalError,
-                };
-            }
+        let raw_delta = lu_solve(&hess, &neg_grad);
+
+        // Check whether `delta` is a descent direction (gᵀ·delta < 0). An
+        // indefinite Hessian (common near saddle points on non-convex
+        // problems) can produce a direction that points uphill. In that
+        // case, or when the solve fails outright, fall back to steepest
+        // descent: `delta = -grad`. This keeps Newton usable on non-convex
+        // problems instead of returning `NumericalError` or
+        // `LineSearchFailed` at the first saddle.
+        let delta = match raw_delta {
+            Some(d) if dot(&grad, &d) < F::zero() => d,
+            _ => neg_grad.clone(),
         };
 
-        // Line search along Newton direction
+        // Line search along Newton (or fallback steepest-descent) direction
         let ls = match backtracking_armijo(obj, &x, &delta, f_val, &grad, &config.line_search) {
             Some(ls) => ls,
             None => {
@@ -179,8 +178,12 @@ pub fn newton<F: Float, O: Objective<F>>(
             };
         }
 
+        // Relative func_tol: absolute `|f_prev - f_val| < tol` is scale-
+        // blind — a tolerance of 1e-8 means ULP-precision on large-
+        // magnitude objectives (|f| ≈ 1e8) and impossibly tight on tiny
+        // ones. Scale by `(1 + |f|)` so the criterion tracks the problem.
         if config.convergence.func_tol > F::zero()
-            && (f_prev - f_val).abs() < config.convergence.func_tol
+            && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
         {
             return OptimResult {
                 x,
@@ -284,6 +287,19 @@ mod tests {
         let config = NewtonConfig::default();
         let result = newton(&mut obj, &[2.0, 3.0], &config);
 
-        assert_eq!(result.termination, TerminationReason::NumericalError);
+        // Indefinite-fallback path: when the LU solve fails, Newton now
+        // falls back to steepest descent. This test objective is
+        // inconsistent (eval_grad and eval_hessian describe different
+        // functions), so the Armijo search eventually fails. Either
+        // termination is acceptable; the important contract is that the
+        // solver doesn't silently report success on a pathological input.
+        assert!(
+            matches!(
+                result.termination,
+                TerminationReason::NumericalError | TerminationReason::LineSearchFailed
+            ),
+            "expected NumericalError or LineSearchFailed, got {:?}",
+            result.termination
+        );
     }
 }

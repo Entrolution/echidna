@@ -236,6 +236,43 @@ fn sparse_singular_returns_none() {
     assert!(implicit_adjoint_sparse(&mut tape, &z_star, &x, &[1.0, 0.0], &ctx).is_none());
 }
 
+// M31 positive-regression: the Phase 6 mixed-sign probe + residual check
+// must not regress the existing singular-F_z detection. The residual check
+// itself is hard to exercise in isolation because faer's sparse LU is
+// accurate enough that near-singular matrices still produce small
+// residuals (the huge-magnitude solution cancels out under forward-apply).
+// We therefore rely on `sparse_singular_returns_none` above (rank-1 F_z
+// caught by faer's pivot failure) and keep this test as a smoke test for
+// a well-conditioned case that must continue to succeed after the probe
+// rewrite.
+#[test]
+fn m31_well_conditioned_still_succeeds_under_mixed_sign_probe() {
+    // F(z, x) = [z0 - x, z1 - 2 * x]  →  F_z = I (well-conditioned).
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z0 = v[0];
+            let z1 = v[1];
+            let x = v[2];
+            let two = (x / x) + (x / x);
+            vec![z0 - x, z1 - two * x]
+        },
+        &[1.0_f64, 2.0, 1.0],
+    );
+    let z_star = [1.0, 2.0];
+    let x = [1.0];
+    let ctx = SparseImplicitContext::new(&tape, 2);
+
+    // Well-conditioned F_z must survive the mixed-sign probe.
+    let jac = implicit_jacobian_sparse(&mut tape, &z_star, &x, &ctx)
+        .expect("well-conditioned F_z must not be flagged singular");
+    // jac is m × n where n = 1. dz/dx = -F_z^{-1} · F_x, F_z = I, F_x = [[-1],[-2]]
+    // so dz/dx = -[-1, -2] = [1, 2].
+    assert_eq!(jac.len(), 2);
+    assert_eq!(jac[0].len(), 1);
+    assert!((jac[0][0] - 1.0).abs() < 1e-10, "dz0/dx = {}", jac[0][0]);
+    assert!((jac[1][0] - 2.0).abs() < 1e-10, "dz1/dx = {}", jac[1][0]);
+}
+
 // ============================================================
 // Test 6: tridiagonal system — verifies sparsity is exploited
 // ============================================================

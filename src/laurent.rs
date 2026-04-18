@@ -269,9 +269,16 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         }
         let mut c = [F::zero(); K];
         taylor_ops::taylor_recip(&self.coeffs, &mut c);
+        // `pole_order: i32::MIN` cannot be negated in two's complement; a bare
+        // `-self.pole_order` would silently wrap to i32::MIN again, producing
+        // a nonsensical Laurent. Treat overflow as a degenerate value.
+        let negated = match self.pole_order.checked_neg() {
+            Some(n) => n,
+            None => return Self::nan_laurent(),
+        };
         let mut l = Laurent {
             coeffs: c,
-            pole_order: -self.pole_order,
+            pole_order: negated,
         };
         l.normalize();
         l
@@ -362,6 +369,12 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// Integer power.
     #[inline]
     pub fn powi(self, n: i32) -> Self {
+        // Match stdlib `f64::powi(0, 0) = 1` convention before the
+        // all-zero handling: any value raised to the 0th power is 1 by
+        // the num_traits / stdlib contract, even when the base is 0.
+        if n == 0 {
+            return Self::one();
+        }
         if self.is_all_zero() {
             return if n > 0 {
                 Self::zero()
@@ -373,12 +386,17 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         let mut s1 = [F::zero(); K];
         let mut s2 = [F::zero(); K];
         taylor_ops::taylor_powi(&self.coeffs, n, &mut c, &mut s1, &mut s2);
+        // Saturate-to-NaN on pole_order overflow rather than panic — `Float`-
+        // trait consumers (including generic `num_traits::Float::powi`) expect
+        // a finite-or-NaN result, never a panic. `i32::checked_mul` returns
+        // `None` only for extreme pole orders × extreme exponents.
+        let new_pole = match self.pole_order.checked_mul(n) {
+            Some(p) => p,
+            None => return Self::nan_laurent(),
+        };
         let mut l = Laurent {
             coeffs: c,
-            pole_order: self
-                .pole_order
-                .checked_mul(n)
-                .expect("Laurent::powi: pole_order overflow"),
+            pole_order: new_pole,
         };
         l.normalize();
         l
@@ -388,6 +406,20 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     #[inline]
     pub fn powf(self, n: Self) -> Self {
         // a^b = exp(b * ln(a))
+        //
+        // Constant integer exponent fast path: if `n` is a plain scalar
+        // (pole_order == 0, only the primal nonzero) and that scalar is an
+        // integer, dispatch to `powi`. The exp/ln roundtrip otherwise returns
+        // NaN whenever `self.ln()` does — i.e. whenever `self` has a
+        // non-positive leading coefficient or any pole.
+        if n.pole_order == 0 && n.coeffs[1..].iter().all(|&c| c == F::zero()) {
+            let n0 = n.coeffs[0];
+            if let Some(ni) = n0.to_i32() {
+                if F::from(ni).unwrap() == n0 {
+                    return self.powi(ni);
+                }
+            }
+        }
         (n * self.ln()).exp()
     }
 
@@ -727,7 +759,43 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// Euclidean distance: sqrt(self^2 + other^2).
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
-        (self * self + other * other).sqrt()
+        // Rescale both operands by `s = max(|self.coeffs.max_abs()|,
+        // |other.coeffs.max_abs()|)` before squaring. With `a' = a/s` and
+        // `b' = b/s`, `a'² + b'²` stays bounded, so the sqrt never sees an
+        // overflowed input. Multiply the result back by `s` to recover the
+        // true hypot magnitude. Mirrors the rescaling trick already used in
+        // `taylor_hypot`.
+        //
+        // The common case (no overflow risk) also benefits: rescaling shortens
+        // the dynamic range that `taylor_mul`'s Cauchy product accumulates,
+        // reducing intermediate rounding.
+        let max_a = self
+            .coeffs
+            .iter()
+            .fold(F::zero(), |acc, &c| acc.max(c.abs()));
+        let max_b = other
+            .coeffs
+            .iter()
+            .fold(F::zero(), |acc, &c| acc.max(c.abs()));
+        let scale = max_a.max(max_b);
+        if scale == F::zero() {
+            // Both operands identically zero.
+            return Self::zero();
+        }
+        let inv_scale = F::one() / scale;
+        let mut a_scaled = self;
+        let mut b_scaled = other;
+        for c in a_scaled.coeffs.iter_mut() {
+            *c = *c * inv_scale;
+        }
+        for c in b_scaled.coeffs.iter_mut() {
+            *c = *c * inv_scale;
+        }
+        let mut result = (a_scaled * a_scaled + b_scaled * b_scaled).sqrt();
+        for c in result.coeffs.iter_mut() {
+            *c = *c * scale;
+        }
+        result
     }
 
     /// Maximum of two values.

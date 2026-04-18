@@ -37,6 +37,14 @@ impl<F: Float> super::BytecodeTape<F> {
         fwd_buf: &mut Vec<Taylor<F, K>>,
         adj_buf: &mut Vec<Taylor<F, K>>,
     ) -> (Taylor<F, K>, Vec<Taylor<F, K>>) {
+        assert!(
+            self.custom_ops.is_empty(),
+            "taylor_grad: custom ops linearize around recording-time primals, \
+             so Taylor coefficients for K ≥ 2 are systematically biased \
+             through custom ops — not just an O(‖x − x_record‖) error but \
+             a missing second-order contribution. Use `hessian` / `hvp` for \
+             second-order info through custom ops."
+        );
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
         assert_eq!(v.len(), n, "wrong number of directions");
@@ -87,6 +95,16 @@ impl<F: Float> super::BytecodeTape<F> {
         y0: &[F],
         buf: &mut Vec<Taylor<F, K>>,
     ) -> Vec<Taylor<F, K>> {
+        assert!(
+            self.custom_ops.is_empty(),
+            "ode_taylor_step: custom ops linearize around recording-time \
+             primals; the Taylor integrator's higher-order coefficients \
+             would be systematically biased through them. Unroll custom \
+             ops into primitive operations before recording."
+        );
+        const {
+            assert!(K >= 1, "Taylor order K must be ≥ 1");
+        }
         let n = self.num_inputs as usize;
         assert_eq!(y0.len(), n, "y0 length must match num_inputs");
         assert_eq!(

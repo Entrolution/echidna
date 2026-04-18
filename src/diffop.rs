@@ -205,7 +205,14 @@ fn partitions_recurse(
     }
 }
 
-/// Compute the extraction prefactor: `Π_t (q_t! · (j_t!)^{q_t})`
+/// Compute the extraction prefactor: `Π_t (q_t! · (j_t!)^{q_t})`.
+///
+/// Uses direct integer-like products for typical jet orders (exact in f64 for
+/// factorials up to 18!) and falls back to a log-domain accumulation if the
+/// product overflows. The direct path avoids the sub-ULP noise that
+/// `exp(sum(log(i)))` would introduce for small orders, while the fallback
+/// ensures that high-order calls return a clean `+inf` instead of NaN from
+/// `inf * 1` or similar intermediate patterns.
 fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
     let mut prefactor = F::one();
     for &(slot, order) in slot_assignments {
@@ -223,7 +230,24 @@ fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
         }
         prefactor = prefactor * q_fact * j_fact_pow;
     }
-    prefactor
+    if prefactor.is_finite() {
+        return prefactor;
+    }
+    // Integer-path overflow. Recompute in log-domain; if that also overflows,
+    // we return `+inf` (exp saturates cleanly) rather than propagating NaN
+    // from any earlier `inf * 1` multiply.
+    let mut log_pref = F::zero();
+    for &(slot, order) in slot_assignments {
+        for i in 2..=(order as usize) {
+            log_pref = log_pref + F::from(i).unwrap().ln();
+        }
+        let mut log_j_fact = F::zero();
+        for i in 2..=slot {
+            log_j_fact = log_j_fact + F::from(i).unwrap().ln();
+        }
+        log_pref = log_pref + F::from(order as usize).unwrap() * log_j_fact;
+    }
+    log_pref.exp()
 }
 
 // ══════════════════════════════════════════════
@@ -514,7 +538,12 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
 
     let num_results = plan.multi_indices.len();
     let mut derivatives = vec![F::zero(); num_results];
-    let mut value = x.iter().copied().fold(F::zero(), |a, b| a + b); // placeholder
+    // `value` is overwritten by the first non-empty group's pushforward.
+    // For the degenerate empty-plan case (no groups), zero is a defensible
+    // default — the previous `Σx[i]` placeholder looked plausible but
+    // silently returned the sum of inputs if the plan had no groups,
+    // which is a latent wrong-answer hazard.
+    let mut value = F::zero();
 
     for group in &plan.groups {
         let _guard = TaylorDynGuard::<F>::new(group.jet_order);
@@ -561,15 +590,33 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
 /// Returns `(value, derivative)` where `value = u(x)` and `derivative` is the
 /// mixed partial specified by `orders`.
 ///
+/// When every order in `orders` is zero, the function returns
+/// `(u(x), u(x))` — an all-zero multi-index is the identity operator, so
+/// the "derivative" is just `u(x)` itself. This is the mathematically
+/// correct answer and not an error. An earlier version of this docstring
+/// claimed a panic; no such panic exists.
+///
 /// # Panics
 ///
-/// Panics if `orders.len()` does not match `tape.num_inputs()`, or if all
-/// orders are zero.
+/// Panics if `orders.len()` does not match `tape.num_inputs()`.
 pub fn mixed_partial<F: Float + TaylorArenaLocal>(
     tape: &BytecodeTape<F>,
     x: &[F],
     orders: &[u8],
 ) -> (F, F) {
+    // `eval_dyn` will assert `x.len() == tape.num_inputs()`, but a mismatch
+    // between `orders.len()` and `tape.num_inputs()` silently generates a
+    // MultiIndex of the wrong length, which then indexes past the tape's
+    // input count during planning and yields a garbage partial derivative
+    // without panicking. Catch the shape mismatch up front.
+    assert_eq!(
+        orders.len(),
+        tape.num_inputs(),
+        "mixed_partial: orders.len() must equal tape.num_inputs() \
+         (got orders.len()={}, tape.num_inputs()={})",
+        orders.len(),
+        tape.num_inputs(),
+    );
     let mi = MultiIndex::new(orders);
     let plan = JetPlan::plan(orders.len(), &[mi]);
     let result = eval_dyn(&plan, tape, x);

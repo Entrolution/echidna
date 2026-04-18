@@ -110,6 +110,12 @@ pub fn piggyback_tangent_solve<F: Float>(
         if !norm.is_finite() {
             return None;
         }
+        // Detect tangent divergence even when the primal `z_new` itself is
+        // finite: the JVP iteration `z_dot_{k+1} = G_z·z_dot_k + G_x·x_dot`
+        // can produce Inf/NaN tangents that a primal-only norm check misses.
+        if !z_dot_new.iter().all(|v| v.is_finite()) {
+            return None;
+        }
         if norm < tol {
             return Some((z_new, z_dot_new, k + 1));
         }
@@ -171,6 +177,13 @@ pub fn piggyback_adjoint_solve<F: Float>(
 
         let norm = delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
         if !norm.is_finite() {
+            return None;
+        }
+        // A ratio-converging iteration with exponentially-growing `lambda`
+        // magnitudes (spectral radius of `G_z^T` ≥ 1) can produce finite
+        // `norm` while `lambda_new` is Inf/NaN. Explicit finite check
+        // catches the divergence regardless of ratio behaviour.
+        if !lambda_new.iter().all(|v| v.is_finite()) {
             return None;
         }
         if norm < tol {
@@ -249,6 +262,15 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
         let lam_norm = lam_delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
         if !lam_norm.is_finite() {
+            return None;
+        }
+        // Same divergence case as the standalone solvers: a ratio-converging
+        // iteration with exponentially-growing lambda magnitudes can produce
+        // finite `lam_norm` while `lambda_new` itself is Inf/NaN.
+        if !lambda_new.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        if !z_new.iter().all(|v| v.is_finite()) {
             return None;
         }
 

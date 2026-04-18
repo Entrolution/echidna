@@ -286,10 +286,17 @@ fn regression_21_laurent_min_nan_returns_non_nan() {
 }
 
 // ── #22: Laurent powi pole_order overflow ──
+//
+// Historical behaviour: `Laurent::powi` panicked on `pole_order * n` i32
+// overflow. That violates the `num_traits::Float::powi` contract (which
+// must not panic on domain edges). Current behaviour: return `nan_laurent()`.
 
 #[test]
-#[should_panic(expected = "pole_order overflow")]
-fn regression_22_laurent_powi_pole_order_overflow_panics() {
+fn regression_22_laurent_powi_pole_order_overflow_returns_nan() {
     let l = L3::new([1.0, 0.0, 0.0], i32::MAX / 2 + 1);
-    let _ = l.powi(3); // pole_order * 3 overflows i32
+    let r = l.powi(3); // pole_order * 3 overflows i32
+    assert!(
+        r.coeff(r.pole_order()).is_nan(),
+        "overflow should yield NaN Laurent, not panic"
+    );
 }

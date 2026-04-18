@@ -80,6 +80,13 @@ pub trait GpuBackend {
     /// GPU-resident buffers for the tape's opcodes, arguments, and constants.
     fn upload_tape(&self, data: &GpuTapeData) -> Self::TapeBuffers;
 
+    /// Number of declared outputs on the uploaded tape.
+    ///
+    /// Used by estimators like `stde_gpu::laplacian_gpu` to enforce
+    /// single-output assumptions whose coefficient layout depends on
+    /// the tape's output count.
+    fn num_outputs(&self, tape: &Self::TapeBuffers) -> u32;
+
     /// Batched forward evaluation.
     ///
     /// `inputs` is `[f32; batch_size * num_inputs]` (row-major, one point per row).
@@ -437,8 +444,8 @@ pub fn taylor_forward_2nd_batch_chunked<B: GpuBackend>(
     // Cap chunk_size so that WGSL u32 index `bid * nv * K` cannot overflow.
     // K=3 for second-order Taylor jets.
     let nv_k = (num_variables as u64) * 3;
-    if nv_k > 0 {
-        chunk_size = chunk_size.min(u32::MAX as u64 / nv_k);
+    if let Some(cap) = (u32::MAX as u64).checked_div(nv_k) {
+        chunk_size = chunk_size.min(cap);
     }
 
     let chunk_size = chunk_size as u32;

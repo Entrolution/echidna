@@ -5,6 +5,7 @@
 //! skipping — no opcode dispatch overhead. Used internally by [`crate::Reverse`].
 
 use std::cell::Cell;
+use std::marker::PhantomData;
 
 use crate::Float;
 
@@ -302,11 +303,12 @@ pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R
             !ptr.is_null(),
             "No active tape. Use echidna::grad() or similar API."
         );
-        // SAFETY: The TapeGuard guarantees the pointer is valid for the
-        // duration of the closure-based API scope, and only one mutable
-        // reference exists at a time (single-threaded access via thread-local).
-        // The TapeBorrowGuard above ensures no reentrant calls create aliased
-        // &mut references.
+        // SAFETY: TapeGuard's `'a` lifetime statically ties the raw pointer's
+        // validity to the live `&'a mut Tape<F>` borrow on the stack frame
+        // that constructed the guard — the borrow checker rejects any program
+        // in which the guard outlives its tape. Access is single-threaded via
+        // thread-local, and the TapeBorrowGuard above ensures no reentrant
+        // call creates aliased &mut references.
         let tape = unsafe { &mut *ptr };
         f(tape)
     })
@@ -314,24 +316,43 @@ pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R
 
 /// RAII guard that sets a tape as the thread-local active tape and restores
 /// the previous one on drop.
-pub struct TapeGuard<F: TapeThreadLocal> {
+///
+/// The `'a` lifetime ties the guard to the borrow of the tape it was
+/// constructed from, so the borrow checker rejects any pattern where the
+/// guard could outlive its tape.
+///
+/// ```compile_fail
+/// use echidna::tape::{Tape, TapeGuard};
+/// let guard: TapeGuard<f64>;
+/// {
+///     let mut tape: Tape<f64> = Tape::new();
+///     guard = TapeGuard::new(&mut tape);
+/// } // tape dropped, but guard would survive — rejected by the borrow checker.
+/// drop(guard);
+/// ```
+pub struct TapeGuard<'a, F: TapeThreadLocal> {
     prev: *mut Tape<F>,
+    _borrow: PhantomData<&'a mut Tape<F>>,
 }
 
-impl<F: TapeThreadLocal> TapeGuard<F> {
+impl<'a, F: TapeThreadLocal> TapeGuard<'a, F> {
     /// Activate `tape` as the thread-local tape. Returns a guard that restores
     /// the previous tape on drop.
-    pub fn new(tape: &mut Tape<F>) -> Self {
+    #[must_use = "dropping the guard immediately deactivates the tape; bind it to extend the recording scope"]
+    pub fn new(tape: &'a mut Tape<F>) -> Self {
         let prev = F::cell().with(|cell| {
             let prev = cell.get();
             cell.set(tape as *mut Tape<F>);
             prev
         });
-        TapeGuard { prev }
+        TapeGuard {
+            prev,
+            _borrow: PhantomData,
+        }
     }
 }
 
-impl<F: TapeThreadLocal> Drop for TapeGuard<F> {
+impl<'a, F: TapeThreadLocal> Drop for TapeGuard<'a, F> {
     fn drop(&mut self) {
         F::cell().with(|cell| {
             cell.set(self.prev);
