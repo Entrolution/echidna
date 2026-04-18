@@ -267,16 +267,23 @@ impl<F: Float> Dual<F> {
     pub fn atan2(self, other: Self) -> Self {
         // d/dx atan2(y,x) = x/(x²+y²) dy - y/(x²+y²) dx
         let h = self.re.hypot(other.re);
-        let denom = h * h;
-        if denom == F::zero() {
+        if h == F::zero() {
             return Dual {
                 re: self.re.atan2(other.re),
                 eps: F::zero(),
             };
         }
+        // Factor as ((x/h)·dy - (y/h)·dx)/h instead of .../(h*h). Both x/h
+        // and y/h are bounded by 1 (since h = hypot(x,y) ≥ |x|, |y|), so no
+        // intermediate step overflows. The naive h*h form overflows for
+        // |h| > sqrt(f64::MAX) ≈ 1.3e154 and underflows for |h| below
+        // sqrt(f64::MIN_POSITIVE) — silently corrupting otherwise finite
+        // partials.
+        let x_over_h = other.re / h;
+        let y_over_h = self.re / h;
         Dual {
             re: self.re.atan2(other.re),
-            eps: (other.re * self.eps - self.re * other.eps) / denom,
+            eps: (x_over_h * self.eps - y_over_h * other.eps) / h,
         }
     }
 
@@ -304,19 +311,30 @@ impl<F: Float> Dual<F> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(
-            self.re.asinh(),
-            F::one() / (self.re * self.re + F::one()).sqrt(),
-        )
+        // For |x| > 1e8, `x*x + 1` overflows in f64 at |x| > ~1.3e154 and the
+        // derivative silently collapses to 0. Use the algebraically equivalent
+        // |1/x| / sqrt(1 + (1/x)²) form, which stays in-range for any x.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() + inv * inv).sqrt()
+        } else {
+            F::one() / (self.re * self.re + F::one()).sqrt()
+        };
+        self.chain(self.re.asinh(), deriv)
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(
-            self.re.acosh(),
-            F::one() / (self.re * self.re - F::one()).sqrt(),
-        )
+        // Same overflow avoidance as `asinh` — `x*x - 1` overflows for very
+        // large x, silently zeroing the derivative via 1/inf.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() - inv * inv).sqrt()
+        } else {
+            F::one() / (self.re * self.re - F::one()).sqrt()
+        };
+        self.chain(self.re.acosh(), deriv)
     }
 
     /// Inverse hyperbolic tangent.

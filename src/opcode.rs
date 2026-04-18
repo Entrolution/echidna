@@ -345,15 +345,17 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         }
         OpCode::Atan2 => {
             // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            // Use hypot to avoid overflow when a or b is large.
-            // At the origin (a=b=0), the gradient is mathematically undefined;
-            // returning (0, 0) is a defensible convention (matches JAX/PyTorch).
+            // Factor as (b/h)/h and (-a/h)/h to avoid squaring h — h² overflows
+            // for |h| > sqrt(f64::MAX) ≈ 1.3e154 and underflows below
+            // sqrt(f64::MIN_POSITIVE), silently corrupting otherwise finite partials.
+            // b/h and a/h are bounded by 1 (since h = hypot ≥ |a|, |b|).
+            // At the origin (h=0), the gradient is mathematically undefined;
+            // returning (0, 0) matches JAX/PyTorch convention.
             let h = a.hypot(b);
             if h == zero {
                 (zero, zero)
             } else {
-                let denom = h * h;
-                (b / denom, -a / denom)
+                (b / h / h, -a / h / h)
             }
         }
         OpCode::Hypot => {
@@ -446,8 +448,26 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let c = a.cosh();
             (one / (c * c), zero)
         }
-        OpCode::Asinh => (one / (a * a + one).sqrt(), zero),
-        OpCode::Acosh => (one / (a * a - one).sqrt(), zero),
+        OpCode::Asinh => {
+            // For |a| > 1e8, a*a+1 overflows for |a| > sqrt(f64::MAX), collapsing
+            // the derivative to 0. Use |1/a|/sqrt(1+(1/a)²) which stays in-range.
+            let da = if a.abs() > T::from(1e8).unwrap() {
+                let inv = one / a;
+                inv.abs() / (one + inv * inv).sqrt()
+            } else {
+                one / (a * a + one).sqrt()
+            };
+            (da, zero)
+        }
+        OpCode::Acosh => {
+            let da = if a.abs() > T::from(1e8).unwrap() {
+                let inv = one / a;
+                inv.abs() / (one - inv * inv).sqrt()
+            } else {
+                one / (a * a - one).sqrt()
+            };
+            (da, zero)
+        }
         OpCode::Atanh => (one / ((one - a) * (one + a)), zero),
 
         // Misc

@@ -784,14 +784,16 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
 
     fn atan2(self, other: Self) -> Self {
         let h = self.value.hypot(other.value);
-        let denom = h * h;
-        if denom == F::zero() {
+        if h == F::zero() {
             // At the origin, atan2 gradient is mathematically undefined.
             // Returning a constant (zero gradient) matches JAX/PyTorch convention.
             return Reverse::constant(self.value.atan2(other.value));
         }
-        let dx = other.value / denom;
-        let dy = -self.value / denom;
+        // Factor as (value/h)/h to avoid squaring h, which overflows for
+        // |h| > sqrt(f64::MAX) and underflows for very small h even when the
+        // true partial is representable. Both value/h terms are bounded by 1.
+        let dx = other.value / h / h;
+        let dy = -self.value / h / h;
         rev_binary(self, other, self.value.atan2(other.value), dx, dy)
     }
 
@@ -809,19 +811,24 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn asinh(self) -> Self {
-        rev_unary(
-            self,
-            self.value.asinh(),
-            F::one() / (self.value * self.value + F::one()).sqrt(),
-        )
+        // See `Dual::asinh` for the overflow rationale.
+        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.value;
+            inv.abs() / (F::one() + inv * inv).sqrt()
+        } else {
+            F::one() / (self.value * self.value + F::one()).sqrt()
+        };
+        rev_unary(self, self.value.asinh(), deriv)
     }
 
     fn acosh(self) -> Self {
-        rev_unary(
-            self,
-            self.value.acosh(),
-            F::one() / (self.value * self.value - F::one()).sqrt(),
-        )
+        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.value;
+            inv.abs() / (F::one() - inv * inv).sqrt()
+        } else {
+            F::one() / (self.value * self.value - F::one()).sqrt()
+        };
+        rev_unary(self, self.value.acosh(), deriv)
     }
 
     fn atanh(self) -> Self {

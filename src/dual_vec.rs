@@ -281,16 +281,21 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
         let h = self.re.hypot(other.re);
-        let denom = h * h;
-        if denom == F::zero() {
+        if h == F::zero() {
             return DualVec {
                 re: self.re.atan2(other.re),
                 eps: [F::zero(); N],
             };
         }
+        // Factor ((x/h)·dy - (y/h)·dx)/h to avoid h² over/underflow; see
+        // `Dual::atan2` for the numerical argument.
+        let x_over_h = other.re / h;
+        let y_over_h = self.re / h;
         DualVec {
             re: self.re.atan2(other.re),
-            eps: std::array::from_fn(|k| (other.re * self.eps[k] - self.re * other.eps[k]) / denom),
+            eps: std::array::from_fn(|k| {
+                (x_over_h * self.eps[k] - y_over_h * other.eps[k]) / h
+            }),
         }
     }
 
@@ -318,19 +323,26 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(
-            self.re.asinh(),
-            F::one() / (self.re * self.re + F::one()).sqrt(),
-        )
+        // See `Dual::asinh` for the overflow rationale on the |x|>1e8 switch.
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() + inv * inv).sqrt()
+        } else {
+            F::one() / (self.re * self.re + F::one()).sqrt()
+        };
+        self.chain(self.re.asinh(), deriv)
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(
-            self.re.acosh(),
-            F::one() / (self.re * self.re - F::one()).sqrt(),
-        )
+        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
+            let inv = F::one() / self.re;
+            inv.abs() / (F::one() - inv * inv).sqrt()
+        } else {
+            F::one() / (self.re * self.re - F::one()).sqrt()
+        };
+        self.chain(self.re.acosh(), deriv)
     }
 
     /// Inverse hyperbolic tangent.
