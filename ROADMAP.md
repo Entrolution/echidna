@@ -20,6 +20,7 @@ what was left behind.
 | WS 3 | Richer error types for piggyback / sparse_implicit | PR #62 | `Option<T>` → `Result<T, PiggybackError | SparseImplicitError>`; per-module `#[non_exhaustive]` enums; `Send + Sync` compile-time-asserted |
 | WS 4 | Solver diagnostics (L-BFGS / Newton silent-filter surface) | PR #60 | `OptimResult.diagnostics: SolverDiagnostics` per-solver counters |
 | WS 7 | Dense `implicit.rs` Result migration | PR #66 | `implicit_{tangent,adjoint,jacobian,hvp,hessian}` → `Result<T, ImplicitError>`; `lu_factor` non-finite-pivot guard; post-solve non-finite guards on all five publics; echidna-optim 0.9.0 → 0.10.0 |
+| WS 5 | Optim error-API enrichment | _pending merge_ | `PiggybackError::*Divergence` gains `last_norm`; `SparseImplicitError::Residual` gains `tolerance` + `dimension`; `SparseImplicitError::{StructuralFailure, FactorFailed}` gain `source: Box<dyn Error>` with `source()` chain; `MaxIterations` Display no longer leaks `Some(...)` / `None`; echidna-optim 0.10.0 → 0.11.0 |
 
 ---
 
@@ -33,58 +34,6 @@ auto-fix threshold. None block any current work.
 
 ---
 
-## WS 5 — Optim error-API enrichment (P1)
-
-**Deferred from**: WS3 review-fix (PR #62, multi-agent review cycle).
-
-**Prior context**: WS3 converted `piggyback_*_solve` and
-`implicit_*_sparse` to `Result<T, *Error>` with per-module enums.
-The variant set is correct and the `Send + Sync` / `#[non_exhaustive]`
-machinery is in place, but several diagnostic-richness improvements
-were deferred so the breaking-change PR stayed focused. Each item
-below is verified ≥80 in the WS3 review (or just below threshold
-but high-value); none block current callers.
-
-**Problem**: As shipped, the error variants are *distinguishable*
-but not maximally *actionable*. A user catching `Residual` doesn't
-know how far over tolerance they are without re-deriving the
-threshold; a user catching `PrimalDivergence` doesn't know whether
-the iteration overflowed (Inf) or NaN'd from cancellation; chaining
-through `?` loses the underlying faer error context.
-
-**Approach**:
-1. **`SparseImplicitError::Residual` payload**: extend from
-   `{ relative_residual: f64 }` to
-   `{ relative_residual: f64, tolerance: f64, dimension: usize }`.
-   `#[non_exhaustive]` allows additive expansion; threshold
-   computation already lives at the construction site
-   (`src/sparse_implicit.rs` around line 288).
-2. **`PiggybackError` divergence-variant payloads**: extend from
-   `{ iteration: usize }` to
-   `{ iteration: usize, last_norm: f64 }` for `PrimalDivergence` /
-   `TangentDivergence` / `AdjointDivergence`. Captures the failing
-   scalar so users can distinguish Inf-overflow from NaN-cancellation.
-3. **`std::error::Error::source()` chain**: store the underlying
-   faer error as `Box<dyn Error + Send + Sync + 'static>` on
-   `SparseImplicitError::FactorFailed` and `StructuralFailure`;
-   implement `source()` to expose it. faer 0.24 `LuError` carries
-   `SymbolicSingular { index: usize }` which currently gets
-   discarded by `map_err(|_| ...)`.
-4. **`TangentDivergence` solver-path test**: construct a tape where
-   primal stays finite but tangent overflows. Acknowledged-hard
-   in the WS3 plan but tractable: a contraction with `G_x` driven
-   by a non-zero `x_dot` carrying overflow-prone entries.
-
-**Done when**: Each enum-payload addition pinned by a unit test
-that pattern-matches the new fields; `source()` chain returns the
-underlying faer error in a smoke test.
-
-**Effort**: Small-to-medium. ~50-80 lines + tests.
-**Risk**: Low. `#[non_exhaustive]` makes payload additions
-non-breaking for callers using `..` in pattern matches; `..` is
-the dominant idiom in the existing test suite.
-
----
 
 ## WS 6 — Optim error-API consistency polish (P2)
 
@@ -241,14 +190,12 @@ regress further or surprise a future user.
 
 ## Suggested order
 
-1. **WS 5** — medium-impact diagnostic enrichment; users catching
-   the WS3 errors will start asking for these fields once the API
-   sees real adoption.
-2. **WS 6** — naming/typestate cleanup plus the dimension-mismatch
-   `assert!` → `Err` promotion; do before WS3's API freezes in any
-   downstream consumer (cheaper to rename now than later).
-3. **WS 8** — close the last CPU drift surface; future-proofing only.
-4. **WS 9** — academic / boundary cases; only if a user hits one or
+1. **WS 6** — naming/typestate cleanup plus the dimension-mismatch
+   `assert!` → `Err` promotion; do before WS3's and WS5's APIs
+   freeze in any downstream consumer (cheaper to rename now than
+   later).
+2. **WS 8** — close the last CPU drift surface; future-proofing only.
+3. **WS 9** — academic / boundary cases; only if a user hits one or
    if it bundles cheaply with another GPU-codegen workstream
    (vast.ai required for CUDA verification).
 
