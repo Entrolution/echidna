@@ -19,6 +19,7 @@ what was left behind.
 | WS 2 | Higher-order Taylor HYPOT GPU rescale | PR #64 | WGSL + CUDA Taylor jet HYPOT max-rescale; explicit IEEE NaN-propagation guard on both backends |
 | WS 3 | Richer error types for piggyback / sparse_implicit | PR #62 | `Option<T>` → `Result<T, PiggybackError | SparseImplicitError>`; per-module `#[non_exhaustive]` enums; `Send + Sync` compile-time-asserted |
 | WS 4 | Solver diagnostics (L-BFGS / Newton silent-filter surface) | PR #60 | `OptimResult.diagnostics: SolverDiagnostics` per-solver counters |
+| WS 7 | Dense `implicit.rs` Result migration | PR #66 | `implicit_{tangent,adjoint,jacobian,hvp,hessian}` → `Result<T, ImplicitError>`; `lu_factor` non-finite-pivot guard; post-solve non-finite guards on all five publics; echidna-optim 0.9.0 → 0.10.0 |
 
 ---
 
@@ -118,52 +119,24 @@ callers depend on the names.
 4. Hoist `assert_send_sync!` to a workspace macro in
    `echidna-optim/src/lib.rs` (or a small `util` module). Apply to
    `ClarkeError` and `GpuError` while there.
+5. Promote the dimension-mismatch `assert!` calls in `implicit.rs`,
+   `sparse_implicit.rs`, and `piggyback.rs` to an `Err` variant
+   (e.g. `*Error::DimensionMismatch { expected, actual }`). Today
+   these panic on bad inputs while every other failure mode returns
+   an error — asymmetric and unfriendly to library consumers.
+   Deferred from WS7 as out-of-scope; fits naturally with the
+   naming-axis sweep so callers only adopt one breaking change.
 
 **Done when**: Both enums use one naming axis; `MaxIterations` is
 typestate-impossible to construct in a meaningless shape; Display
 output contains no Rust internal syntax; one shared macro covers all
-four error types.
+four error types; dimension-mismatch inputs return `Err` rather than
+panic.
 
-**Effort**: Small. ~50 lines + test updates. Breaking API (variant
-renames are visible to callers).
+**Effort**: Small-to-medium. ~70 lines + test updates. Breaking API
+(variant renames are visible to callers).
 **Risk**: Low. Caught entirely by `cargo check` if any caller
 pattern-matches the renamed variants.
-
----
-
-## WS 7 — Dense `implicit.rs` Result migration
-
-**Deferred from**: WS3 review (PR #62, architecture finding #1) —
-explicitly scoped out of WS3 per ROADMAP boundary.
-
-**Prior context**: WS3 migrated `implicit_*_sparse` to
-`Result<T, SparseImplicitError>` but left dense `implicit.rs` on
-`Option<T>`. The two paths now have asymmetric APIs: a user
-switching between dense/sparse for performance hits an API
-discontinuity for what's logically the same operation.
-
-**Problem**: `implicit_jacobian`, `implicit_tangent`,
-`implicit_adjoint`, `implicit_hvp`, `implicit_hessian` (all in
-`echidna-optim/src/implicit.rs`) still return `Option<Vec<...>>`.
-Their failure modes (singular F_z, NaN propagation, dimension
-mismatch) collapse to the same `None` WS3 fixed for the sparse
-path.
-
-**Approach**: Mirror WS3's sparse design. Define
-`enum ImplicitError { StructuralSingular, NumericSingular,
-Residual { ... } }` (or share `SparseImplicitError` with a rename
-to `ImplicitError` and a re-export under both names — pick after
-checking actual sparse usage). Convert the five public functions.
-Update `tests/implicit.rs`.
-
-**Done when**: No `Option<_>` return on public functions in
-`echidna-optim/src/implicit.rs`; tests use `.is_err()` / variant
-pinning per the WS3 pattern.
-
-**Effort**: Small-to-medium. ~30 lines + ~10 test conversions.
-Breaking API (minor-version bump in echidna-optim — pre-1.0 so
-0.9.0 → 0.10.0).
-**Risk**: Low. Same migration mechanic as WS3, well-rehearsed.
 
 ---
 
@@ -268,15 +241,14 @@ regress further or surprise a future user.
 
 ## Suggested order
 
-1. **WS 7** — quickest mechanical migration; closes a real API
-   discontinuity that already exists between dense and sparse paths.
-2. **WS 5** — medium-impact diagnostic enrichment; users catching
+1. **WS 5** — medium-impact diagnostic enrichment; users catching
    the WS3 errors will start asking for these fields once the API
    sees real adoption.
-3. **WS 6** — naming/typestate cleanup; do before WS3's API freezes
-   in any downstream consumer (cheaper to rename now than later).
-4. **WS 8** — close the last CPU drift surface; future-proofing only.
-5. **WS 9** — academic / boundary cases; only if a user hits one or
+2. **WS 6** — naming/typestate cleanup plus the dimension-mismatch
+   `assert!` → `Err` promotion; do before WS3's API freezes in any
+   downstream consumer (cheaper to rename now than later).
+3. **WS 8** — close the last CPU drift surface; future-proofing only.
+4. **WS 9** — academic / boundary cases; only if a user hits one or
    if it bundles cheaply with another GPU-codegen workstream
    (vast.ai required for CUDA verification).
 
