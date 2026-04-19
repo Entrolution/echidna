@@ -144,9 +144,7 @@ fn variant_display_smoke_test() {
 #[cfg(feature = "sparse-implicit")]
 #[test]
 fn variant_factor_failed_pins_to_factor_failed() {
-    use echidna_optim::{
-        implicit_jacobian_sparse, SparseImplicitContext, SparseImplicitError,
-    };
+    use echidna_optim::{implicit_jacobian_sparse, SparseImplicitContext, SparseImplicitError};
 
     // F(z, x) = [z1 - x, -z1 + x] → F_z = [[0, 1], [0, -1]].
     // Column 0 is identically zero — F_z is structurally singular.

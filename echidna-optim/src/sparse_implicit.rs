@@ -62,7 +62,10 @@ impl fmt::Display for SparseImplicitError {
                 write!(f, "sparse_implicit: failed to build sparse F_z matrix")
             }
             SparseImplicitError::FactorFailed => {
-                write!(f, "sparse_implicit: sparse LU factorization failed (F_z singular)")
+                write!(
+                    f,
+                    "sparse_implicit: sparse LU factorization failed (F_z singular)"
+                )
             }
             SparseImplicitError::NumericSingular => {
                 write!(

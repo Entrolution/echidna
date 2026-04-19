@@ -249,8 +249,7 @@ fn sparse_singular_returns_numeric_singular() {
         "tangent: expected NumericSingular, got {tan_err:?}"
     );
 
-    let adj_err =
-        implicit_adjoint_sparse(&mut tape, &z_star, &x, &[1.0, 0.0], &ctx).unwrap_err();
+    let adj_err = implicit_adjoint_sparse(&mut tape, &z_star, &x, &[1.0, 0.0], &ctx).unwrap_err();
     assert!(
         matches!(adj_err, SparseImplicitError::NumericSingular),
         "adjoint: expected NumericSingular, got {adj_err:?}"
