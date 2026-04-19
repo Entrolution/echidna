@@ -75,14 +75,15 @@ fn variant_primal_divergence_pins_to_primal_divergence() {
     );
 }
 
-// ── 3. MaxIterations on tangent_solve: slow contraction ──
+// ── 3. IterationsExhaustedTangent on tangent_solve: slow contraction ──
 //
 // G(z, x) = 0.99*z + x. Contraction ratio 0.99, so reaching tol=1e-12 from
 // z₀=0 needs ~ln(1e-12)/ln(0.99) ≈ 2750 iterations. max_iter = 50 ensures
-// the loop exhausts; the test pins MaxIterations { z_norm: Some(_),
-// lam_norm: None } — the shape unique to `piggyback_tangent_solve`.
+// the loop exhausts; the test pins `IterationsExhaustedTangent { iteration,
+// z_norm }` — the typestate-split variant specific to
+// `piggyback_tangent_solve`.
 #[test]
-fn variant_max_iterations_tangent_pins_z_norm_only() {
+fn variant_iterations_exhausted_tangent_pins_shape() {
     let (tape, _) = record_multi(
         |v| {
             let z = v[0];
@@ -99,16 +100,16 @@ fn variant_max_iterations_tangent_pins_z_norm_only() {
 
     let err = piggyback_tangent_solve(&tape, &[0.0], &[1.0], &[1.0], 1, 50, 1e-12)
         .expect_err("slow contraction must not converge in 50 steps");
-    assert!(
-        matches!(
-            err,
-            PiggybackError::MaxIterations {
-                z_norm: Some(_),
-                lam_norm: None
-            }
-        ),
-        "expected MaxIterations with z_norm only, got {err:?}"
-    );
+    match err {
+        PiggybackError::IterationsExhaustedTangent { iteration, z_norm } => {
+            assert_eq!(iteration, 50, "iteration must equal max_iter on exhaustion");
+            assert!(
+                z_norm.is_finite() && z_norm > 1e-12,
+                "z_norm must be finite and above tol (got {z_norm})"
+            );
+        }
+        other => panic!("expected IterationsExhaustedTangent, got {other:?}"),
+    }
 }
 
 // ── 4. Display + std::error::Error: smoke test that the trait impls compile
@@ -128,9 +129,23 @@ fn variant_display_smoke_test() {
             iteration: 11,
             last_norm: f64::NAN,
         },
-        PiggybackError::MaxIterations {
-            z_norm: Some(1e-3),
-            lam_norm: None,
+        PiggybackError::IterationsExhaustedTangent {
+            iteration: 50,
+            z_norm: 1e-3,
+        },
+        PiggybackError::IterationsExhaustedAdjoint {
+            iteration: 75,
+            lam_norm: 2.5e-4,
+        },
+        PiggybackError::IterationsExhaustedForwardAdjoint {
+            iteration: 100,
+            z_norm: 1e-3,
+            lam_norm: 2.5e-4,
+        },
+        PiggybackError::DimensionMismatch {
+            field: "z_dot",
+            expected: 3,
+            actual: 2,
         },
     ];
     for err in &cases {
@@ -148,14 +163,15 @@ fn variant_display_smoke_test() {
 // `tests/sparse_implicit.rs::sparse_singular_returns_numeric_singular`
 // pins `NumericSingular` for all three sparse entry points (rank-1 F_z
 // whose LU completes but whose mixed-sign probe produces non-finite
-// output). The test below pins `FactorFailed` via a structurally-
+// output). The test below pins `FactorSingular` via a structurally-
 // degenerate F_z (zero column triggers faer's symbolic singularity
 // detection during `sp_lu()`). The remaining two variants —
-// `StructuralFailure` and `Residual` — have only Display-level coverage
-// (see `sparse_variant_display_smoke_test`). Reliably triggering
-// `Residual` requires a tape whose F_z passes faer's pivot check yet
-// produces a finite-but-inaccurate solution: an empirically narrow
-// regime not worth a fragile test fixture. `StructuralFailure` only
+// `StructuralSingular` and `ResidualExceeded` — have only Display-level
+// coverage (see `sparse_variant_display_smoke_test`). Reliably
+// triggering `ResidualExceeded` requires a tape whose F_z passes
+// faer's pivot check yet produces a finite-but-inaccurate solution:
+// an empirically narrow regime not worth a fragile test fixture.
+// `StructuralSingular` only
 // fires if `try_new_from_triplets` errors, which would indicate a bug
 // in the upstream sparsity-pattern computation rather than user input.
 
@@ -168,7 +184,7 @@ fn variant_factor_failed_pins_to_factor_failed() {
     // Column 0 is identically zero — F_z is structurally singular.
     // faer's sparse LU detects this during symbolic factorization
     // (no candidate pivot for column 0) and returns Err, which maps
-    // to `FactorFailed` before the mixed-sign probe ever runs.
+    // to `FactorSingular` before the mixed-sign probe ever runs.
     let (mut tape, _) = record_multi(
         |v| {
             let z1 = v[1];
@@ -185,8 +201,8 @@ fn variant_factor_failed_pins_to_factor_failed() {
     let err = implicit_jacobian_sparse(&mut tape, &z_star, &x, &ctx)
         .expect_err("structurally singular F_z must error");
     assert!(
-        matches!(err, SparseImplicitError::FactorFailed { .. }),
-        "expected FactorFailed for zero-column F_z, got {err:?}"
+        matches!(err, SparseImplicitError::FactorSingular { .. }),
+        "expected FactorSingular for zero-column F_z, got {err:?}"
     );
 }
 
@@ -204,14 +220,14 @@ fn sparse_variant_display_smoke_test() {
     };
 
     let cases = vec![
-        SparseImplicitError::StructuralFailure {
+        SparseImplicitError::StructuralSingular {
             source: dummy_source(),
         },
-        SparseImplicitError::FactorFailed {
+        SparseImplicitError::FactorSingular {
             source: dummy_source(),
         },
         SparseImplicitError::NumericSingular,
-        SparseImplicitError::Residual {
+        SparseImplicitError::ResidualExceeded {
             relative_residual: 1.234e-3,
             tolerance: 1.5e-8,
             dimension: 42,
@@ -231,7 +247,7 @@ fn sparse_variant_display_smoke_test() {
     // residual, tolerance, and dimension in scientific-notation /
     // decimal form (regression guard against accidental format-spec
     // regressions).
-    let residual = SparseImplicitError::Residual {
+    let residual = SparseImplicitError::ResidualExceeded {
         relative_residual: 1.234e-3,
         tolerance: 1.5e-8,
         dimension: 42,
@@ -239,15 +255,15 @@ fn sparse_variant_display_smoke_test() {
     let msg = format!("{residual}");
     assert!(
         msg.contains("1.234e-3") || msg.contains("1.234e-03"),
-        "Residual Display lost relative_residual scientific-notation: {msg}"
+        "ResidualExceeded Display lost relative_residual scientific-notation: {msg}"
     );
     assert!(
         msg.contains("1.500e-8") || msg.contains("1.500e-08"),
-        "Residual Display lost tolerance scientific-notation: {msg}"
+        "ResidualExceeded Display lost tolerance scientific-notation: {msg}"
     );
     assert!(
         msg.contains("dim = 42") || msg.contains("42"),
-        "Residual Display missing dimension field: {msg}"
+        "ResidualExceeded Display missing dimension field: {msg}"
     );
 }
 
@@ -333,11 +349,11 @@ fn variant_primal_divergence_carries_non_finite_last_norm() {
     }
 }
 
-// ── FactorFailed surfaces the underlying faer LuError via source() ──
+// ── FactorSingular surfaces the underlying faer LuError via source() ──
 //
 // Extends `variant_factor_failed_pins_to_factor_failed`: the zero-
 // column F_z triggers faer's symbolic LU detection. The WS5 migration
-// preserves the faer error as `SparseImplicitError::FactorFailed`'s
+// preserves the faer error as `SparseImplicitError::FactorSingular`'s
 // `source` so callers get the exact failure point
 // (`SymbolicSingular { index }`) rather than the generic wrapper
 // message. faer's `LuError` Display delegates to Debug, so the
@@ -362,12 +378,12 @@ fn variant_factor_failed_exposes_faer_lu_error_via_source() {
     let err = implicit_jacobian_sparse(&mut tape, &z_star, &x, &ctx)
         .expect_err("structurally singular F_z must error");
     assert!(
-        matches!(err, SparseImplicitError::FactorFailed { .. }),
-        "expected FactorFailed, got {err:?}"
+        matches!(err, SparseImplicitError::FactorSingular { .. }),
+        "expected FactorSingular, got {err:?}"
     );
 
     // Walk the source chain. `err.source()` must not collapse to None.
-    let src = std::error::Error::source(&err).expect("FactorFailed must carry a source error");
+    let src = std::error::Error::source(&err).expect("FactorSingular must carry a source error");
     let src_msg = format!("{src}");
     assert!(
         src_msg.contains("SymbolicSingular"),
@@ -375,9 +391,9 @@ fn variant_factor_failed_exposes_faer_lu_error_via_source() {
     );
 }
 
-// ── StructuralFailure carries a source too (construction-literal) ──
+// ── StructuralSingular carries a source too (construction-literal) ──
 //
-// `SparseImplicitError::StructuralFailure` only fires when
+// `SparseImplicitError::StructuralSingular` only fires when
 // `try_new_from_triplets` errors, which in this codebase would
 // indicate a bug in the sparsity-pattern computation rather than
 // user input — noted as empirically rare in the code comment. Rather
@@ -388,10 +404,11 @@ fn variant_factor_failed_exposes_faer_lu_error_via_source() {
 fn variant_structural_failure_exposes_source_via_source_method() {
     use echidna_optim::SparseImplicitError;
 
-    let err = SparseImplicitError::StructuralFailure {
+    let err = SparseImplicitError::StructuralSingular {
         source: Box::new(std::io::Error::other("synthetic triplet-builder failure")),
     };
-    let src = std::error::Error::source(&err).expect("StructuralFailure must carry a source error");
+    let src =
+        std::error::Error::source(&err).expect("StructuralSingular must carry a source error");
     let src_msg = format!("{src}");
     assert!(
         src_msg.contains("synthetic triplet-builder failure"),
@@ -399,31 +416,29 @@ fn variant_structural_failure_exposes_source_via_source_method() {
     );
 }
 
-// ── MaxIterations Display no longer leaks Rust-internal syntax ──
+// ── IterationsExhausted* Display is clean (no Rust-internal tokens) ──
 //
-// Regression guard on the WS5 adjacent-fix. Pre-fix output used
-// `{:?}` on `Option<f64>`, leaking `Some(0.0034)` / `None`. Post-fix
-// emits only the populated norm(s), with scientific notation, and
-// the `(None, None)` case degrades to a bare prefix (no `()`).
+// WS5 introduced a 4-arm match for `MaxIterations` Display to dodge
+// `Some(...)`/`None` leaks from `{:?}` on `Option<f64>`. WS6's
+// typestate split makes each variant carry plain `f64` fields, so
+// there's no Option to format in the first place. This test pins
+// that outcome across all three new variants — and is the direct
+// regression-successor to the WS5 `piggyback_max_iterations_*` test.
 #[test]
-fn piggyback_max_iterations_display_has_no_rust_syntax() {
+fn piggyback_iterations_exhausted_display_is_clean() {
     let cases = [
-        PiggybackError::MaxIterations {
-            z_norm: Some(3.4e-3),
-            lam_norm: Some(1.2e-2),
+        PiggybackError::IterationsExhaustedTangent {
+            iteration: 50,
+            z_norm: 3.4e-3,
         },
-        PiggybackError::MaxIterations {
-            z_norm: Some(3.4e-3),
-            lam_norm: None,
+        PiggybackError::IterationsExhaustedAdjoint {
+            iteration: 75,
+            lam_norm: 2.5e-4,
         },
-        PiggybackError::MaxIterations {
-            z_norm: None,
-            lam_norm: Some(1.2e-2),
-        },
-        // Impossible-by-construction today but guard the defensive arm.
-        PiggybackError::MaxIterations {
-            z_norm: None,
-            lam_norm: None,
+        PiggybackError::IterationsExhaustedForwardAdjoint {
+            iteration: 100,
+            z_norm: 3.4e-3,
+            lam_norm: 1.2e-2,
         },
     ];
 
@@ -435,10 +450,164 @@ fn piggyback_max_iterations_display_has_no_rust_syntax() {
                 "Display leaks Rust-internal token {leak:?}: {msg:?}"
             );
         }
-        // Defensive-arm sanity: no trailing empty parens when both norms are None.
         assert!(
-            !msg.ends_with("()"),
-            "Display ends with empty parens: {msg:?}"
+            msg.contains("max_iter"),
+            "Display missing max_iter descriptor: {msg:?}"
         );
     }
+}
+
+// ── DimensionMismatch pins on each of the three solve-fn enums ──
+
+#[test]
+fn variant_dimension_mismatch_pins_in_implicit_tangent() {
+    use echidna_optim::{implicit_tangent, ImplicitError};
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            vec![z * z - x]
+        },
+        &[2.0_f64, 4.0],
+    );
+    // x_dot length 2 but x length 1 → DimensionMismatch.
+    let err = implicit_tangent(&mut tape, &[2.0], &[4.0], &[1.0, 1.0], 1)
+        .expect_err("wrong x_dot length must error");
+    match err {
+        ImplicitError::DimensionMismatch {
+            field,
+            expected,
+            actual,
+        } => {
+            assert_eq!(field, "x_dot");
+            assert_eq!(expected, 1);
+            assert_eq!(actual, 2);
+        }
+        other => panic!("expected DimensionMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn variant_dimension_mismatch_pins_in_piggyback_tangent_solve() {
+    #[allow(clippy::eq_op)]
+    let (tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            let one = x / x;
+            let two = one + one;
+            vec![(one / two) * z + x]
+        },
+        &[0.0_f64, 1.0],
+    );
+    // x length 1 but x_dot length 2.
+    let err = piggyback_tangent_solve(&tape, &[0.0], &[1.0], &[1.0, 1.0], 1, 50, 1e-12)
+        .expect_err("wrong x_dot length must error");
+    match err {
+        PiggybackError::DimensionMismatch {
+            field,
+            expected,
+            actual,
+        } => {
+            assert_eq!(field, "x_dot");
+            assert_eq!(expected, 1);
+            assert_eq!(actual, 2);
+        }
+        other => panic!("expected DimensionMismatch, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "sparse-implicit")]
+#[test]
+fn variant_dimension_mismatch_pins_in_sparse_tangent() {
+    use echidna_optim::{implicit_tangent_sparse, SparseImplicitContext, SparseImplicitError};
+    let (mut tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            vec![z - x]
+        },
+        &[0.0_f64, 0.0],
+    );
+    let ctx = SparseImplicitContext::new(&tape, 1);
+    // z_star length 2 but num_states = 1.
+    let err = implicit_tangent_sparse(&mut tape, &[0.0, 0.0], &[0.0], &[1.0], &ctx)
+        .expect_err("wrong z_star length must error");
+    assert!(
+        matches!(
+            err,
+            SparseImplicitError::DimensionMismatch {
+                field: "z_star",
+                expected: 1,
+                actual: 2,
+            }
+        ),
+        "expected DimensionMismatch for z_star, got {err:?}"
+    );
+}
+
+#[test]
+fn variant_dimension_mismatch_display_has_field_name() {
+    use echidna_optim::ImplicitError;
+    // Pinned across all three DimensionMismatch-bearing enums — the
+    // Display shape is uniform (`"<prefix>: dimension mismatch for
+    // \`{field}\` (expected {expected}, got {actual})"`) but a typo in
+    // any one `write!` arm would slip through a single-enum test.
+    // Each enum has a distinct `{prefix}` (`implicit:` / `piggyback:`);
+    // the sparse variant is covered below under the feature gate.
+    let implicit_err = ImplicitError::DimensionMismatch {
+        field: "x_dot",
+        expected: 3,
+        actual: 5,
+    };
+    let piggyback_err = PiggybackError::DimensionMismatch {
+        field: "z_bar",
+        expected: 4,
+        actual: 2,
+    };
+
+    for (msg, prefix, field, expected, actual) in [
+        (
+            format!("{implicit_err}"),
+            "implicit",
+            "x_dot",
+            3usize,
+            5usize,
+        ),
+        (format!("{piggyback_err}"), "piggyback", "z_bar", 4, 2),
+    ] {
+        assert!(
+            msg.starts_with(&format!("{prefix}:")),
+            "Display missing `{prefix}:` prefix: {msg}"
+        );
+        assert!(
+            msg.contains(field),
+            "Display missing `field` name {field:?}: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("expected {expected}")) && msg.contains(&format!("got {actual}")),
+            "Display missing expected/actual counts: {msg}"
+        );
+    }
+}
+
+#[cfg(feature = "sparse-implicit")]
+#[test]
+fn variant_dimension_mismatch_display_sparse_has_field_name() {
+    use echidna_optim::SparseImplicitError;
+    let err = SparseImplicitError::DimensionMismatch {
+        field: "x_dot",
+        expected: 3,
+        actual: 5,
+    };
+    let msg = format!("{err}");
+    assert!(
+        msg.starts_with("sparse_implicit:"),
+        "Display missing `sparse_implicit:` prefix: {msg}"
+    );
+    assert!(msg.contains("x_dot"), "Display missing `field` name: {msg}");
+    assert!(
+        msg.contains("expected 3") && msg.contains("got 5"),
+        "Display missing expected/actual counts: {msg}"
+    );
 }

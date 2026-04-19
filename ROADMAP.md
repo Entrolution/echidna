@@ -20,7 +20,8 @@ what was left behind.
 | WS 3 | Richer error types for piggyback / sparse_implicit | PR #62 | `Option<T>` → `Result<T, PiggybackError | SparseImplicitError>`; per-module `#[non_exhaustive]` enums; `Send + Sync` compile-time-asserted |
 | WS 4 | Solver diagnostics (L-BFGS / Newton silent-filter surface) | PR #60 | `OptimResult.diagnostics: SolverDiagnostics` per-solver counters |
 | WS 7 | Dense `implicit.rs` Result migration | PR #66 | `implicit_{tangent,adjoint,jacobian,hvp,hessian}` → `Result<T, ImplicitError>`; `lu_factor` non-finite-pivot guard; post-solve non-finite guards on all five publics; echidna-optim 0.9.0 → 0.10.0 |
-| WS 5 | Optim error-API enrichment | _pending merge_ | `PiggybackError::*Divergence` gains `last_norm`; `SparseImplicitError::Residual` gains `tolerance` + `dimension`; `SparseImplicitError::{StructuralFailure, FactorFailed}` gain `source: Box<dyn Error>` with `source()` chain; `MaxIterations` Display no longer leaks `Some(...)` / `None`; echidna-optim 0.10.0 → 0.11.0 |
+| WS 5 | Optim error-API enrichment | PR #67 | `PiggybackError::*Divergence` gains `last_norm`; `SparseImplicitError::Residual` gains `tolerance` + `dimension`; `SparseImplicitError::{StructuralFailure, FactorFailed}` gain `source: Box<dyn Error>` with `source()` chain; `MaxIterations` Display no longer leaks `Some(...)` / `None`; echidna-optim 0.10.0 → 0.11.0 |
+| WS 6 | Optim error-API consistency polish | _pending merge_ | `MaxIterations` typestate-split into three `IterationsExhausted*` variants; `SparseImplicitError` renames (`*Failure/Failed/Residual → *Singular/Singular/Exceeded`); `echidna::assert_send_sync!` macro hoisted and applied to `ClarkeError` + `GpuError` (previously unguarded); `DimensionMismatch` variant added to all three optim error enums (15 asserts → `Err`); echidna-optim 0.11.0 → 0.12.0 |
 
 ---
 
@@ -34,60 +35,6 @@ auto-fix threshold. None block any current work.
 
 ---
 
-
-## WS 6 — Optim error-API consistency polish (P2)
-
-**Deferred from**: WS3 review-fix (PR #62) architecture review.
-
-**Prior context**: WS3's two error enums were designed independently
-(`PiggybackError` first, then `SparseImplicitError`) and use
-divergent naming axes and structural choices. None of these are
-correctness bugs; they're cleanup that becomes harder once external
-callers depend on the names.
-
-**Problem**:
-- `PiggybackError::MaxIterations { z_norm: Option<f64>, lam_norm: Option<f64> }` allows the impossible `(None, None)` state in the type system. WS4's `SolverDiagnostics` enum solved the analogous problem by per-solver variants — WS3 chose differently.
-- `MaxIterations` Display uses `{:?}` on `Option<f64>`, leaking Rust syntax (`"z_norm = Some(0.0034)"`) into user-facing error messages.
-- `PiggybackError` uses `*Divergence` / `MaxIterations` (failure-class noun); `SparseImplicitError` uses `*Failure` / `*Failed` / `*Singular` / `Residual` (mixed: noun-noun, verb-past-participle, adjective, data-named). No single naming axis.
-- `assert_send_sync` block (7 lines) is copy-pasted in `piggyback.rs` and `sparse_implicit.rs`. Other workspace error types (`ClarkeError`, `GpuError`) lack the guard entirely.
-
-**Approach**:
-1. Split `MaxIterations` into `MaxIterationsTangent { z_norm: f64 }`,
-   `MaxIterationsAdjoint { lam_norm: f64 }`,
-   `MaxIterationsForwardAdjoint { z_norm: f64, lam_norm: f64 }`.
-   `#[non_exhaustive]` absorbs the variant proliferation.
-2. Rewrite `MaxIterations*` Display to emit only the populated
-   norm(s) without `Some(_)`/`None` syntax, e.g.
-   `"piggyback: max_iter exceeded (z_norm = 3.4e-3); raise max_iter or relax tol"`.
-3. Pick one naming axis (suggested:
-   `<Mode><FailureClass>`) and rename across both enums:
-   - `SparseImplicitError`: `StructuralFailure` →
-     `StructuralSingular`, `FactorFailed` → `FactorSingular`,
-     `Residual` → `ResidualExceeded`.
-   - `PiggybackError`: `MaxIterations*` → `IterationsExhausted*`.
-4. Hoist `assert_send_sync!` to a workspace macro in
-   `echidna-optim/src/lib.rs` (or a small `util` module). Apply to
-   `ClarkeError` and `GpuError` while there.
-5. Promote the dimension-mismatch `assert!` calls in `implicit.rs`,
-   `sparse_implicit.rs`, and `piggyback.rs` to an `Err` variant
-   (e.g. `*Error::DimensionMismatch { expected, actual }`). Today
-   these panic on bad inputs while every other failure mode returns
-   an error — asymmetric and unfriendly to library consumers.
-   Deferred from WS7 as out-of-scope; fits naturally with the
-   naming-axis sweep so callers only adopt one breaking change.
-
-**Done when**: Both enums use one naming axis; `MaxIterations` is
-typestate-impossible to construct in a meaningless shape; Display
-output contains no Rust internal syntax; one shared macro covers all
-four error types; dimension-mismatch inputs return `Err` rather than
-panic.
-
-**Effort**: Small-to-medium. ~70 lines + test updates. Breaking API
-(variant renames are visible to callers).
-**Risk**: Low. Caught entirely by `cargo check` if any caller
-pattern-matches the renamed variants.
-
----
 
 ## WS 8 — `Laurent::hypot` kernel migration
 
@@ -190,12 +137,8 @@ regress further or surprise a future user.
 
 ## Suggested order
 
-1. **WS 6** — naming/typestate cleanup plus the dimension-mismatch
-   `assert!` → `Err` promotion; do before WS3's and WS5's APIs
-   freeze in any downstream consumer (cheaper to rename now than
-   later).
-2. **WS 8** — close the last CPU drift surface; future-proofing only.
-3. **WS 9** — academic / boundary cases; only if a user hits one or
+1. **WS 8** — close the last CPU drift surface; future-proofing only.
+2. **WS 9** — academic / boundary cases; only if a user hits one or
    if it bundles cheaply with another GPU-codegen workstream
    (vast.ai required for CUDA verification).
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (echidna)
+- `echidna::assert_send_sync!` macro (`#[macro_export]`) for
+  compile-time `Send + Sync + 'static` assertions on error types.
+  Applied to `ClarkeError` (`src/nonsmooth.rs`) and `GpuError`
+  (`src/gpu/mod.rs`), both of which previously had no guard —
+  future variants carrying non-`Send` / non-`Sync` / non-`'static`
+  payloads now produce a build-time failure at the type definition
+  rather than at the (often distant) call site where the error
+  meets an `async` boundary or a threadpool. Also adopted by
+  `echidna-optim`'s three error types in place of copy-pasted
+  inline `const _: fn() = || { ... }` blocks. The macro tightens
+  the previously-inline `Send + Sync`-only bound by also
+  requiring `'static`; all five error types satisfy it today and
+  no caller relied on a non-`'static` payload, but callers adding
+  an error type with a borrowed field must now use a different
+  pattern.
+
 ### Changed (echidna)
 - **GPU Taylor jet `HYPOT` higher-order coefficients** now match CPU
   `Taylor::hypot` via max-rescale across both WGSL and CUDA codegen
@@ -64,16 +81,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New public types: `SolverDiagnostics` (enum), `LbfgsDiagnostics`,
   `NewtonDiagnostics`, `TrustRegionDiagnostics`.
 - `PiggybackError` enum (`piggyback` module) with variants
-  `PrimalDivergence { iteration }`, `TangentDivergence { iteration }`,
-  `AdjointDivergence { iteration }`, and
-  `MaxIterations { z_norm: Option<f64>, lam_norm: Option<f64> }`.
-  Implements `Display` + `std::error::Error`, `Send + Sync`,
-  `#[non_exhaustive]`.
+  `PrimalDivergence { iteration, last_norm }`,
+  `TangentDivergence { iteration, last_norm }`,
+  `AdjointDivergence { iteration, last_norm }`,
+  `IterationsExhaustedTangent { iteration, z_norm }`,
+  `IterationsExhaustedAdjoint { iteration, lam_norm }`,
+  `IterationsExhaustedForwardAdjoint { iteration, z_norm, lam_norm }`,
+  and `DimensionMismatch { field: &'static str, expected, actual }`.
+  Implements `Display` + `std::error::Error`, `Send + Sync + 'static`,
+  `#[non_exhaustive]`. `last_norm` surfaces the iteration-level
+  relative norm at the detecting point (non-finite on norm-check
+  paths; finite in ratio-converging componentwise cases). The three
+  typestate-split exhaustion variants replace the earlier
+  `MaxIterations { Option<f64>, Option<f64> }` shape; each carries
+  exactly the norm(s) its solver tracks.
 - `SparseImplicitError` enum (`sparse_implicit` module, gated on the
-  `sparse-implicit` feature) with variants `StructuralFailure`,
-  `FactorFailed`, `NumericSingular`, and
-  `Residual { relative_residual: f64 }`. Implements `Display` +
-  `std::error::Error`, `Send + Sync`, `#[non_exhaustive]`.
+  `sparse-implicit` feature) with variants
+  `StructuralSingular { source }`, `FactorSingular { source }`,
+  `NumericSingular`, `ResidualExceeded { relative_residual,
+  tolerance, dimension }`, and `DimensionMismatch { field, expected,
+  actual }`. Implements `Display` + `std::error::Error` (with
+  `source()` returning the underlying
+  `faer::sparse::{CreationError, linalg::LuError}` for the two
+  sourced variants), `Send + Sync + 'static`, `#[non_exhaustive]`.
+  Does not derive `Clone` (the `Box<dyn Error + Send + Sync>`
+  sources aren't `Clone`).
 - `ImplicitError` enum (`implicit` module) with a `Singular` variant.
   Implements `Display` + `std::error::Error`, `Send + Sync`,
   `#[non_exhaustive]`. The single variant collapses three failure
@@ -103,18 +135,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes non-finite independently of `∂F/∂z`, or a nested-dual forward
   pass producing non-finite higher-order coefficients at a
   function-domain boundary.
-- `PiggybackError::MaxIterations` Display no longer emits
-  `Some(0.0034)` / `None` Rust-internal syntax via `{:?}` on
-  `Option<f64>`. The new implementation is an explicit 4-arm match
-  that formats each populated norm in scientific notation and omits
-  the other: e.g. `"piggyback: max_iter exceeded (z_norm = 3.4e-3)"`.
-  The defensive `(None, None)` arm — impossible to construct via the
-  library today — degrades to a bare prefix rather than leaking
-  `"()"`. `Display` output has never been part of a stable contract
-  (Rust idiom treats `Display` as human-facing only); callers that
-  were scraping the previous string form should pattern-match on
-  the enum variant instead.
-
 ### Changed (echidna-optim) — BREAKING
 - `OptimResult` is now `#[non_exhaustive]` so future field additions
   don't keep breaking downstream pattern-destructures. Construct
@@ -153,27 +173,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overflow while the primal/adjoint norm stayed bounded). Captured
   inline at each `Err` return so the reported scalar reflects the
   failing iteration, not the previous one.
-- `SparseImplicitError::Residual` gains `tolerance: f64,
-  dimension: usize` — the probe threshold (`sqrt(eps)·sqrt(m)`) and
-  the state-block dimension `m` (= `num_states`). Callers can now
-  see how far over tolerance the probe solve landed without
-  re-deriving the threshold.
-- `SparseImplicitError::{StructuralFailure, FactorFailed}` gain
+- `SparseImplicitError::ResidualExceeded` (renamed from `Residual`)
+  gains `tolerance: f64, dimension: usize` — the probe threshold
+  (`sqrt(eps)·sqrt(m)`) and the state-block dimension `m`
+  (= `num_states`). Callers can now see how far over tolerance the
+  probe solve landed without re-deriving the threshold.
+- `SparseImplicitError::{StructuralSingular, FactorSingular}`
+  (renamed from `StructuralFailure` / `FactorFailed`) gain
   `source: Box<dyn std::error::Error + Send + Sync + 'static>`;
   `SparseImplicitError` now implements
   `std::error::Error::source()` returning the underlying
   `faer::sparse::CreationError` / `LuError`. Previously
   `map_err(|_| ...)` discarded the faer diagnostic; callers
-  hitting `FactorFailed` typically get `SymbolicSingular { index }`
+  hitting `FactorSingular` typically get `SymbolicSingular { index }`
   from the chained source, pinpointing the failing column.
 - `SparseImplicitError` no longer derives `Clone` (the new
   `Box<dyn Error>` field on two variants is not `Clone`). No
   workspace consumer cloned the type.
-- `echidna-optim` version bumped to `0.11.0` to reflect the
-  breaking variant-field additions (literal construction of
-  `Residual`, `StructuralFailure`, `FactorFailed`, and the three
-  `*Divergence` variants now requires the new fields), plus the
-  removal of the `Clone` derive on `SparseImplicitError`.
+- `PiggybackError::MaxIterations` replaced by three typed variants
+  (typestate split):
+  `IterationsExhaustedTangent { iteration, z_norm }`,
+  `IterationsExhaustedAdjoint { iteration, lam_norm }`,
+  `IterationsExhaustedForwardAdjoint { iteration, z_norm, lam_norm }`.
+  The impossible `(None, None)` state is now unrepresentable; each
+  variant carries exactly the norm(s) its solver tracks, as plain
+  `f64` rather than `Option<f64>`. Each variant also adds
+  `iteration: usize` (= `max_iter`) for parity with the three
+  `*Divergence` variants.
+- `SparseImplicitError` variant renames for naming-axis unity:
+  `StructuralFailure → StructuralSingular`,
+  `FactorFailed → FactorSingular`,
+  `Residual → ResidualExceeded`. Payload fields unchanged; only the
+  names move onto the `<Mode><FailureClass>` axis already used by
+  `NumericSingular`.
+- `PiggybackError`, `SparseImplicitError`, and `ImplicitError` each
+  gain a `DimensionMismatch { field: &'static str, expected: usize,
+  actual: usize }` variant. 14 existing + 1 new operation-time
+  runtime-argument `assert_eq!` sites in public `*_solve` /
+  `implicit_*` fns now surface as this `Err` variant (4 implicit +
+  8 sparse_implicit + 2 piggyback existing + 1 new inline check in
+  `piggyback_tangent_solve`). Construction-time
+  (`SparseImplicitContext::new`), tape-shape (`validate_*`
+  helpers), and step-fn (`piggyback_tangent_step[_with_buf]`)
+  assertions remain panics per the programmer-contract convention.
+- `echidna-optim` version bumped to `0.12.0` to reflect the
+  breaking variant renames, `MaxIterations` typestate split, and
+  new `DimensionMismatch` variant on three error enums.
+
+### Removed (echidna-optim)
+- Inline `const _: fn() = || { ... assert_send_sync ... }` blocks
+  in `echidna-optim/src/piggyback.rs`,
+  `echidna-optim/src/sparse_implicit.rs`, and
+  `echidna-optim/src/implicit.rs` — replaced by the hoisted
+  `echidna::assert_send_sync!` macro invoked once per error type.
+- `PiggybackError::MaxIterations` (see `### Changed` — replaced by
+  three typestate variants).
+- The WS5-introduced 4-arm `MaxIterations` Display match in
+  `piggyback.rs` — superseded by per-variant Display impls in the
+  typestate split; each new variant has a single-arm Display, so
+  the defensive `(None, None)` case no longer exists.
 
 ## [0.8.2] - 2026-04-12
 

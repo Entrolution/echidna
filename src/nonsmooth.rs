@@ -120,3 +120,5 @@ impl fmt::Display for ClarkeError {
 }
 
 impl std::error::Error for ClarkeError {}
+
+crate::assert_send_sync!(ClarkeError);
