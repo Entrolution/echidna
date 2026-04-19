@@ -459,12 +459,19 @@ fn block_diagonal() {
 }
 
 // ============================================================
-// Test 9: dimension mismatch panics
+// Test 9: dimension mismatch returns Err (post-WS6)
 // ============================================================
+//
+// Pre-WS6 this test asserted a panic; WS6 promotes operation-time
+// dimension mismatches to `Err(SparseImplicitError::DimensionMismatch)`
+// so the public `implicit_*_sparse` API can be consumed without a
+// surrounding `catch_unwind`. Construction-time mismatches in
+// `SparseImplicitContext::new` still panic — that's a different rule.
 
 #[test]
-#[should_panic(expected = "z_star length")]
-fn dimension_mismatch_panics() {
+fn dimension_mismatch_returns_err() {
+    use echidna_optim::SparseImplicitError;
+
     let (mut tape, _) = record_multi(
         |v| {
             let z = v[0];
@@ -477,5 +484,17 @@ fn dimension_mismatch_panics() {
     let ctx = SparseImplicitContext::new(&tape, 1);
 
     // Wrong z_star length
-    let _ = implicit_jacobian_sparse(&mut tape, &[1.0, 2.0], &[8.0], &ctx);
+    let err = implicit_jacobian_sparse(&mut tape, &[1.0, 2.0], &[8.0], &ctx)
+        .expect_err("wrong z_star length must error");
+    assert!(
+        matches!(
+            err,
+            SparseImplicitError::DimensionMismatch {
+                field: "z_star",
+                expected: 1,
+                actual: 2,
+            }
+        ),
+        "expected DimensionMismatch for z_star, got {err:?}"
+    );
 }

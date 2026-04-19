@@ -258,6 +258,8 @@ impl std::fmt::Display for GpuError {
 
 impl std::error::Error for GpuError {}
 
+crate::assert_send_sync!(GpuError);
+
 /// Flattened tape representation for GPU upload.
 ///
 /// All arrays are the same length (`num_ops`). The GPU shader walks index 0..num_ops

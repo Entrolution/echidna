@@ -38,21 +38,39 @@ pub enum PiggybackError {
     /// non-finite when detection came from the norm check; finite
     /// when it came from the componentwise `lambda_new` check.
     AdjointDivergence { iteration: usize, last_norm: f64 },
-    /// Reached `max_iter` without satisfying the convergence
-    /// criterion. Both norms are *relative* (`||δ|| / (1 + ||state||)`),
-    /// matching the scale of the `tol` argument — so a value just over
-    /// `tol` signals proximity to convergence and a value many orders
-    /// of magnitude over `tol` signals stagnation. `z_norm` is
-    /// `Some(...)` for solvers that track a primal/tangent norm
-    /// (`piggyback_tangent_solve`, `piggyback_forward_adjoint_solve`);
-    /// `lam_norm` is `Some(...)` for solvers that track an adjoint
-    /// norm (`piggyback_adjoint_solve`,
-    /// `piggyback_forward_adjoint_solve`). At least one of the two is
-    /// always `Some`. The reported value is the final iteration's
-    /// residual, not a min/avg across iterations.
-    MaxIterations {
-        z_norm: Option<f64>,
-        lam_norm: Option<f64>,
+    /// `piggyback_tangent_solve` reached `max_iter` without meeting
+    /// `tol`. `z_norm` is the final iteration's relative primal-delta
+    /// norm (`||z_new - z|| / (1 + ||z||)`) — a value just over `tol`
+    /// signals proximity to convergence; many orders over signals
+    /// stagnation. `iteration` equals `max_iter`.
+    IterationsExhaustedTangent { iteration: usize, z_norm: f64 },
+    /// `piggyback_adjoint_solve` reached `max_iter` without meeting
+    /// `tol`. `lam_norm` is the final iteration's relative adjoint-
+    /// delta norm (`||λ_new - λ|| / (1 + ||λ||)`).
+    IterationsExhaustedAdjoint { iteration: usize, lam_norm: f64 },
+    /// `piggyback_forward_adjoint_solve` reached `max_iter` without
+    /// meeting `tol` on both norms simultaneously. Each field is the
+    /// final iteration's relative norm for the corresponding stream.
+    IterationsExhaustedForwardAdjoint {
+        iteration: usize,
+        z_norm: f64,
+        lam_norm: f64,
+    },
+    /// A runtime-supplied vector argument to a public `*_solve` fn
+    /// had an unexpected length. `field` names the argument (e.g.
+    /// `"z_dot"`, `"z_bar"`), `expected` is the length the API
+    /// requires (typically `num_states` or `x.len()`), `actual` is
+    /// the length the caller supplied.
+    ///
+    /// Note: tape-shape contract mismatches
+    /// (`validate_step_tape`) and step-fn argument mismatches
+    /// (`piggyback_tangent_step[_with_buf]`) continue to panic —
+    /// those are programmer-contract violations, not recoverable
+    /// runtime failures.
+    DimensionMismatch {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
     },
 }
 
@@ -86,36 +104,48 @@ impl fmt::Display for PiggybackError {
                     "piggyback: adjoint diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
                 )
             }
-            // Explicit 4-arm match (not a string-builder) so the
-            // impossible-but-defensive (None, None) case degrades
-            // cleanly to a bare prefix rather than leaking "()" or
-            // panicking.
-            PiggybackError::MaxIterations { z_norm, lam_norm } => match (z_norm, lam_norm) {
-                (Some(z), Some(l)) => write!(
+            PiggybackError::IterationsExhaustedTangent { iteration, z_norm } => {
+                write!(
                     f,
-                    "piggyback: max_iter exceeded (z_norm = {z:.3e}, lam_norm = {l:.3e})"
-                ),
-                (Some(z), None) => {
-                    write!(f, "piggyback: max_iter exceeded (z_norm = {z:.3e})")
-                }
-                (None, Some(l)) => {
-                    write!(f, "piggyback: max_iter exceeded (lam_norm = {l:.3e})")
-                }
-                (None, None) => write!(f, "piggyback: max_iter exceeded"),
-            },
+                    "piggyback: tangent solve reached max_iter = {iteration} (z_norm = {z_norm:.3e})"
+                )
+            }
+            PiggybackError::IterationsExhaustedAdjoint {
+                iteration,
+                lam_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: adjoint solve reached max_iter = {iteration} (lam_norm = {lam_norm:.3e})"
+                )
+            }
+            PiggybackError::IterationsExhaustedForwardAdjoint {
+                iteration,
+                z_norm,
+                lam_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: forward-adjoint solve reached max_iter = {iteration} (z_norm = {z_norm:.3e}, lam_norm = {lam_norm:.3e})"
+                )
+            }
+            PiggybackError::DimensionMismatch {
+                field,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "piggyback: dimension mismatch for `{field}` (expected {expected}, got {actual})"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for PiggybackError {}
 
-// Compile-time check that `PiggybackError` stays `Send + Sync`. Future
-// variants carrying non-`Send`/`Sync` payloads will trigger a build
-// failure here rather than at the (often distant) call site.
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<PiggybackError>();
-};
+echidna::assert_send_sync!(PiggybackError);
 
 /// Validate that a step tape G: R^(m+n) -> R^m has the expected shape.
 ///
@@ -204,7 +234,7 @@ pub fn piggyback_tangent_step_with_buf<F: Float>(
 /// `Err(PiggybackError::PrimalDivergence)` when the primal norm becomes
 /// non-finite, `Err(PiggybackError::TangentDivergence)` when the primal
 /// stays finite but the tangent overflows (ratio-converging case), or
-/// `Err(PiggybackError::MaxIterations { z_norm, lam_norm: None })` when
+/// `Err(PiggybackError::IterationsExhaustedTangent { iteration, z_norm })` when
 /// `max_iter` is reached without satisfying `tol`.
 pub fn piggyback_tangent_solve<F: Float>(
     step_tape: &BytecodeTape<F>,
@@ -215,6 +245,17 @@ pub fn piggyback_tangent_solve<F: Float>(
     max_iter: usize,
     tol: F,
 ) -> Result<(Vec<F>, Vec<F>, usize), PiggybackError> {
+    // Runtime vector-length check at solve-level: surfaces dimension
+    // mismatches as `Err` before the first iteration dispatches to the
+    // step fn (which still panics on bad input as a contract-level
+    // guarantee).
+    if x_dot.len() != x.len() {
+        return Err(PiggybackError::DimensionMismatch {
+            field: "x_dot",
+            expected: x.len(),
+            actual: x_dot.len(),
+        });
+    }
     let m = num_states;
     let mut z = z0.to_vec();
     let mut z_dot = vec![F::zero(); m];
@@ -272,9 +313,9 @@ pub fn piggyback_tangent_solve<F: Float>(
         z_dot = z_dot_new;
     }
 
-    Err(PiggybackError::MaxIterations {
-        z_norm: Some(last_norm),
-        lam_norm: None,
+    Err(PiggybackError::IterationsExhaustedTangent {
+        iteration: max_iter,
+        z_norm: last_norm,
     })
 }
 
@@ -290,7 +331,7 @@ pub fn piggyback_tangent_solve<F: Float>(
 /// Returns `Ok((x_bar, iterations))` on convergence. Returns
 /// `Err(PiggybackError::AdjointDivergence)` when the adjoint norm is
 /// non-finite or `lambda_new` overflows (ratio-converging case), or
-/// `Err(PiggybackError::MaxIterations { z_norm: None, lam_norm })`
+/// `Err(PiggybackError::IterationsExhaustedAdjoint { iteration, lam_norm })`
 /// when `max_iter` is reached without satisfying `tol`.
 pub fn piggyback_adjoint_solve<F: Float>(
     step_tape: &mut BytecodeTape<F>,
@@ -301,9 +342,19 @@ pub fn piggyback_adjoint_solve<F: Float>(
     max_iter: usize,
     tol: F,
 ) -> Result<(Vec<F>, usize), PiggybackError> {
-    validate_step_tape(step_tape, z_star, x, num_states);
+    // Runtime arg-length check first so solve-fn users see
+    // `Err(DimensionMismatch)` in preference to a `validate_step_tape`
+    // panic when both would fire. Matches the check ordering in
+    // `piggyback_tangent_solve`.
     let m = num_states;
-    assert_eq!(z_bar.len(), m, "z_bar length must equal num_states");
+    if z_bar.len() != m {
+        return Err(PiggybackError::DimensionMismatch {
+            field: "z_bar",
+            expected: m,
+            actual: z_bar.len(),
+        });
+    }
+    validate_step_tape(step_tape, z_star, x, num_states);
 
     // Set primal values: forward([z*, x])
     let mut input = Vec::with_capacity(m + x.len());
@@ -363,9 +414,9 @@ pub fn piggyback_adjoint_solve<F: Float>(
         lambda = lambda_new;
     }
 
-    Err(PiggybackError::MaxIterations {
-        z_norm: None,
-        lam_norm: Some(last_norm),
+    Err(PiggybackError::IterationsExhaustedAdjoint {
+        iteration: max_iter,
+        lam_norm: last_norm,
     })
 }
 
@@ -380,7 +431,7 @@ pub fn piggyback_adjoint_solve<F: Float>(
 /// non-finite or `z_new` itself contains non-finite components,
 /// `Err(PiggybackError::AdjointDivergence)` when the adjoint norm or
 /// `lambda_new` overflows, or
-/// `Err(PiggybackError::MaxIterations { z_norm: Some, lam_norm: Some })`
+/// `Err(PiggybackError::IterationsExhaustedForwardAdjoint { iteration, z_norm, lam_norm })`
 /// when `max_iter` is reached without satisfying `tol`.
 pub fn piggyback_forward_adjoint_solve<F: Float>(
     step_tape: &mut BytecodeTape<F>,
@@ -391,9 +442,17 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
     max_iter: usize,
     tol: F,
 ) -> Result<(Vec<F>, Vec<F>, usize), PiggybackError> {
-    validate_step_tape(step_tape, z0, x, num_states);
+    // Runtime arg-length check first — see note on
+    // `piggyback_adjoint_solve`.
     let m = num_states;
-    assert_eq!(z_bar.len(), m, "z_bar length must equal num_states");
+    if z_bar.len() != m {
+        return Err(PiggybackError::DimensionMismatch {
+            field: "z_bar",
+            expected: m,
+            actual: z_bar.len(),
+        });
+    }
+    validate_step_tape(step_tape, z0, x, num_states);
 
     // Pre-allocate input buffer [z, x]
     let mut input = Vec::with_capacity(m + x.len());
@@ -492,8 +551,9 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         lambda = lambda_new;
     }
 
-    Err(PiggybackError::MaxIterations {
-        z_norm: Some(last_z_norm),
-        lam_norm: Some(last_lam_norm),
+    Err(PiggybackError::IterationsExhaustedForwardAdjoint {
+        iteration: max_iter,
+        z_norm: last_z_norm,
+        lam_norm: last_lam_norm,
     })
 }

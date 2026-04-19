@@ -30,6 +30,20 @@ pub enum ImplicitError {
     /// align with a future unified naming axis across dense and sparse
     /// implicit modules) without a breaking change.
     Singular,
+    /// A runtime-supplied vector argument to a public `implicit_*`
+    /// fn had an unexpected length. `field` names the argument
+    /// (e.g. `"x_dot"`, `"z_bar"`, `"v"`, `"w"`), `expected` is the
+    /// length the API requires (typically `num_states` or `x.len()`),
+    /// `actual` is the length the caller supplied.
+    ///
+    /// Tape-shape contract mismatches (checked in `validate_inputs`)
+    /// continue to panic — those are programmer-contract violations,
+    /// not recoverable runtime failures.
+    DimensionMismatch {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl fmt::Display for ImplicitError {
@@ -41,19 +55,23 @@ impl fmt::Display for ImplicitError {
                     "implicit: F_z is singular, ill-conditioned, or produced a non-finite solve"
                 )
             }
+            ImplicitError::DimensionMismatch {
+                field,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "implicit: dimension mismatch for `{field}` (expected {expected}, got {actual})"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for ImplicitError {}
 
-// Compile-time check that `ImplicitError` stays `Send + Sync`. Future
-// variants carrying non-`Send`/`Sync` payloads will trigger a build
-// failure here rather than at the (often distant) call site.
-const _: fn() = || {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<ImplicitError>();
-};
+echidna::assert_send_sync!(ImplicitError);
 
 /// Partition a full Jacobian `J_F` (m × (m+n)) into `F_z` (m × m) and `F_x` (m × n).
 ///
@@ -207,13 +225,13 @@ pub fn implicit_tangent<F: Float>(
     x_dot: &[F],
     num_states: usize,
 ) -> Result<Vec<F>, ImplicitError> {
-    assert_eq!(
-        x_dot.len(),
-        x.len(),
-        "x_dot length ({}) must equal x length ({})",
-        x_dot.len(),
-        x.len()
-    );
+    if x_dot.len() != x.len() {
+        return Err(ImplicitError::DimensionMismatch {
+            field: "x_dot",
+            expected: x.len(),
+            actual: x_dot.len(),
+        });
+    }
     validate_inputs(tape, z_star, x, num_states);
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
 
@@ -263,13 +281,13 @@ pub fn implicit_adjoint<F: Float>(
     z_bar: &[F],
     num_states: usize,
 ) -> Result<Vec<F>, ImplicitError> {
-    assert_eq!(
-        z_bar.len(),
-        num_states,
-        "z_bar length ({}) must equal num_states ({})",
-        z_bar.len(),
-        num_states
-    );
+    if z_bar.len() != num_states {
+        return Err(ImplicitError::DimensionMismatch {
+            field: "z_bar",
+            expected: num_states,
+            actual: z_bar.len(),
+        });
+    }
     validate_inputs(tape, z_star, x, num_states);
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
 
@@ -323,20 +341,20 @@ pub fn implicit_hvp<F: Float>(
 ) -> Result<Vec<F>, ImplicitError> {
     let n = x.len();
     let m = num_states;
-    assert_eq!(
-        v.len(),
-        n,
-        "v length ({}) must equal x length ({})",
-        v.len(),
-        n
-    );
-    assert_eq!(
-        w.len(),
-        n,
-        "w length ({}) must equal x length ({})",
-        w.len(),
-        n
-    );
+    if v.len() != n {
+        return Err(ImplicitError::DimensionMismatch {
+            field: "v",
+            expected: n,
+            actual: v.len(),
+        });
+    }
+    if w.len() != n {
+        return Err(ImplicitError::DimensionMismatch {
+            field: "w",
+            expected: n,
+            actual: w.len(),
+        });
+    }
     validate_inputs(tape, z_star, x, num_states);
 
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);

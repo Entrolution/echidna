@@ -332,20 +332,24 @@ fn adjoint_non_convergent() {
 
     // z* doesn't really exist for this system, but test that adjoint detects divergence.
     // With G_z = 2 and max_iter = 100, lambda doubles each step but reaches only
-    // ~2^101 ≈ 2.5e30 (well below f64::MAX), so the loop hits MaxIterations rather
-    // than overflowing into AdjointDivergence — pin that to catch silent reclassifications.
+    // ~2^101 ≈ 2.5e30 (well below f64::MAX), so the loop hits
+    // IterationsExhaustedAdjoint rather than overflowing into
+    // AdjointDivergence — pin that to catch silent reclassifications.
     let err = piggyback_adjoint_solve(&mut tape, &[1.0], &[1.0], &[1.0], 1, 100, 1e-12)
         .expect_err("should not converge for non-contraction");
-    assert!(
-        matches!(
-            err,
-            PiggybackError::MaxIterations {
-                z_norm: None,
-                lam_norm: Some(_)
-            }
-        ),
-        "expected MaxIterations with lam_norm only, got {err:?}"
-    );
+    match err {
+        PiggybackError::IterationsExhaustedAdjoint {
+            iteration,
+            lam_norm,
+        } => {
+            assert_eq!(iteration, 100, "iteration must equal max_iter");
+            assert!(
+                lam_norm.is_finite(),
+                "lam_norm must be finite (got {lam_norm})"
+            );
+        }
+        other => panic!("expected IterationsExhaustedAdjoint, got {other:?}"),
+    }
 }
 
 // ============================================================
@@ -518,21 +522,26 @@ fn forward_adjoint_non_convergent() {
         &[1.0_f64, 1.0],
     );
 
-    // Both primal and adjoint stay finite for max_iter=100 (~2^100 ≈ 1.3e30), so
-    // MaxIterations fires with both norms tracked. Pin the variant shape to catch
-    // any future regression that drops one of the diagnostic fields.
+    // Both primal and adjoint stay finite for max_iter=100 (~2^100 ≈
+    // 1.3e30), so IterationsExhaustedForwardAdjoint fires with both
+    // norms tracked. Pin the variant shape to catch any future
+    // regression that drops one of the diagnostic fields.
     let err = piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12)
         .expect_err("should not converge for non-contraction");
-    assert!(
-        matches!(
-            err,
-            PiggybackError::MaxIterations {
-                z_norm: Some(_),
-                lam_norm: Some(_)
-            }
-        ),
-        "expected MaxIterations with both norms, got {err:?}"
-    );
+    match err {
+        PiggybackError::IterationsExhaustedForwardAdjoint {
+            iteration,
+            z_norm,
+            lam_norm,
+        } => {
+            assert_eq!(iteration, 100, "iteration must equal max_iter");
+            assert!(
+                z_norm.is_finite() && lam_norm.is_finite(),
+                "both norms must be finite (got z_norm = {z_norm}, lam_norm = {lam_norm})"
+            );
+        }
+        other => panic!("expected IterationsExhaustedForwardAdjoint, got {other:?}"),
+    }
 }
 
 // ============================================================
