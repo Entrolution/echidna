@@ -129,7 +129,16 @@ changes. Breaking API (minor version bump in echidna-optim).
 
 ---
 
-## WS 4 — Solver diagnostics (L-BFGS / Newton silent-filter surface)
+## WS 4 — Solver diagnostics (L-BFGS / Newton silent-filter surface) ✓ DONE
+
+Merged via PR #60 (commit `ee95611`). `OptimResult.diagnostics` now
+exposes per-solver counters via the `SolverDiagnostics` enum:
+`LbfgsDiagnostics` (pairs accepted/rejected/evicted, gamma clamps,
+line-search backtracks), `NewtonDiagnostics` (fallback steps, line-
+search backtracks), `TrustRegionDiagnostics` (CG iters, two split
+radius-shrink branches). `OptimResult` is `#[non_exhaustive]`.
+
+**Original problem statement:**
 
 **Deferred from**: Cycle 6 Phase 6 (commit `f300f4a`), error-handling
 audit.
@@ -169,7 +178,7 @@ don't read it).
 
 ## Suggested order
 
-1. **WS 4** — small, non-breaking, immediate user value.
+1. ~~WS 4~~ — done (PR #60).
 2. **WS 3** — small-to-medium, breaking but contained.
 3. **WS 1** — medium, mechanical, well-guarded.
 4. **WS 2** — medium, needs GPU instance up; schedule around vast.ai
