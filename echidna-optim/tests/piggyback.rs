@@ -2,6 +2,7 @@ use echidna::record_multi;
 use echidna_optim::{
     implicit_tangent, piggyback_adjoint_solve, piggyback_forward_adjoint_solve,
     piggyback_tangent_solve, piggyback_tangent_step, piggyback_tangent_step_with_buf,
+    PiggybackError,
 };
 
 // ============================================================
@@ -329,9 +330,22 @@ fn adjoint_non_convergent() {
         &[1.0_f64, 1.0],
     );
 
-    // z* doesn't really exist for this system, but test that adjoint detects divergence
-    let result = piggyback_adjoint_solve(&mut tape, &[1.0], &[1.0], &[1.0], 1, 100, 1e-12);
-    assert!(result.is_none(), "should not converge for non-contraction");
+    // z* doesn't really exist for this system, but test that adjoint detects divergence.
+    // With G_z = 2 and max_iter = 100, lambda doubles each step but reaches only
+    // ~2^101 ≈ 2.5e30 (well below f64::MAX), so the loop hits MaxIterations rather
+    // than overflowing into AdjointDivergence — pin that to catch silent reclassifications.
+    let err = piggyback_adjoint_solve(&mut tape, &[1.0], &[1.0], &[1.0], 1, 100, 1e-12)
+        .expect_err("should not converge for non-contraction");
+    assert!(
+        matches!(
+            err,
+            PiggybackError::MaxIterations {
+                z_norm: None,
+                lam_norm: Some(_)
+            }
+        ),
+        "expected MaxIterations with lam_norm only, got {err:?}"
+    );
 }
 
 // ============================================================
@@ -504,8 +518,21 @@ fn forward_adjoint_non_convergent() {
         &[1.0_f64, 1.0],
     );
 
-    let result = piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12);
-    assert!(result.is_none(), "should not converge for non-contraction");
+    // Both primal and adjoint stay finite for max_iter=100 (~2^100 ≈ 1.3e30), so
+    // MaxIterations fires with both norms tracked. Pin the variant shape to catch
+    // any future regression that drops one of the diagnostic fields.
+    let err = piggyback_forward_adjoint_solve(&mut tape, &[0.0], &[1.0], &[1.0], 1, 100, 1e-12)
+        .expect_err("should not converge for non-contraction");
+    assert!(
+        matches!(
+            err,
+            PiggybackError::MaxIterations {
+                z_norm: Some(_),
+                lam_norm: Some(_)
+            }
+        ),
+        "expected MaxIterations with both norms, got {err:?}"
+    );
 }
 
 // ============================================================

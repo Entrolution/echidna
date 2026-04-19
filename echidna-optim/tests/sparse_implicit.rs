@@ -4,7 +4,7 @@ use echidna::record_multi;
 use echidna_optim::linalg::lu_solve;
 use echidna_optim::{
     implicit_adjoint, implicit_adjoint_sparse, implicit_jacobian, implicit_jacobian_sparse,
-    implicit_tangent, implicit_tangent_sparse, SparseImplicitContext,
+    implicit_tangent, implicit_tangent_sparse, SparseImplicitContext, SparseImplicitError,
 };
 
 /// Simple Newton root-finder for testing: solve F(z, x) = 0 for z given fixed x.
@@ -207,13 +207,19 @@ fn sparse_adjoint_matches_dense() {
 }
 
 // ============================================================
-// Test 5: singular F_z returns None
+// Test 5: singular F_z returns NumericSingular
 // ============================================================
 
 #[test]
-fn sparse_singular_returns_none() {
+fn sparse_singular_returns_numeric_singular() {
     // F(z, x) = [z0 + z1 - x, 2*z0 + 2*z1 - 2*x]
-    // F_z = [[1,1],[2,2]] which is singular
+    // F_z = [[1,1],[2,2]] which is singular (rank 1).
+    //
+    // faer's sparse LU completes without raising — it only detects
+    // *exact* zero pivots and the elimination order here happens to
+    // hit a tiny but non-zero pivot. The Phase 6 mixed-sign probe
+    // catches it: the solve produces non-finite output, triggering
+    // `NumericSingular`. This pins the safety-net path.
     let (mut tape, _) = record_multi(
         |v| {
             let z0 = v[0];
@@ -231,9 +237,23 @@ fn sparse_singular_returns_none() {
 
     let ctx = SparseImplicitContext::new(&tape, 2);
 
-    assert!(implicit_jacobian_sparse(&mut tape, &z_star, &x, &ctx).is_none());
-    assert!(implicit_tangent_sparse(&mut tape, &z_star, &x, &[1.0], &ctx).is_none());
-    assert!(implicit_adjoint_sparse(&mut tape, &z_star, &x, &[1.0, 0.0], &ctx).is_none());
+    let jac_err = implicit_jacobian_sparse(&mut tape, &z_star, &x, &ctx).unwrap_err();
+    assert!(
+        matches!(jac_err, SparseImplicitError::NumericSingular),
+        "jacobian: expected NumericSingular, got {jac_err:?}"
+    );
+
+    let tan_err = implicit_tangent_sparse(&mut tape, &z_star, &x, &[1.0], &ctx).unwrap_err();
+    assert!(
+        matches!(tan_err, SparseImplicitError::NumericSingular),
+        "tangent: expected NumericSingular, got {tan_err:?}"
+    );
+
+    let adj_err = implicit_adjoint_sparse(&mut tape, &z_star, &x, &[1.0, 0.0], &ctx).unwrap_err();
+    assert!(
+        matches!(adj_err, SparseImplicitError::NumericSingular),
+        "adjoint: expected NumericSingular, got {adj_err:?}"
+    );
 }
 
 // M31 positive-regression: the Phase 6 mixed-sign probe + residual check
@@ -241,10 +261,11 @@ fn sparse_singular_returns_none() {
 // itself is hard to exercise in isolation because faer's sparse LU is
 // accurate enough that near-singular matrices still produce small
 // residuals (the huge-magnitude solution cancels out under forward-apply).
-// We therefore rely on `sparse_singular_returns_none` above (rank-1 F_z
-// caught by faer's pivot failure) and keep this test as a smoke test for
-// a well-conditioned case that must continue to succeed after the probe
-// rewrite.
+// We therefore rely on `sparse_singular_returns_numeric_singular` above
+// (rank-1 F_z whose LU completes without a pivot failure but whose probe
+// solve produces non-finite output → `NumericSingular`) and keep this
+// test as a smoke test for a well-conditioned case that must continue
+// to succeed after the probe rewrite.
 #[test]
 fn m31_well_conditioned_still_succeeds_under_mixed_sign_probe() {
     // F(z, x) = [z0 - x, z1 - 2 * x]  →  F_z = I (well-conditioned).
