@@ -99,18 +99,21 @@ pub fn asinh_deriv<T: Float>(a: T) -> T {
 /// Derivative of `acosh(a) = ln(a + sqrt(a²-1))` with a large-|a|
 /// overflow-safe path.
 ///
-/// For `|a| ≤ 1e8`, returns `1/sqrt(a²-1)` (defined for |a| ≥ 1).
+/// For `|a| ≤ 1e8`, returns `1/sqrt((a-1)·(a+1))`. The factored form
+/// (vs naive `a*a - 1`) avoids catastrophic cancellation near `a = 1`:
+/// at `a = 1 + ε`, `a*a` rounds to `1 + 2ε` and `a*a - 1 = 2ε` loses
+/// the `ε²` contribution, while `(a-1)·(a+1) = ε·(2 + ε)` retains it.
 /// For `|a| > 1e8`, uses `u = 1/a` and `|u|/sqrt(1-u²)`.
 ///
-/// Note: `Dual` and `DualVec` previously used the factored form
-/// `1/sqrt((a-1)·(a+1))` which retains precision near `a = 1` (the
-/// `a*a` form rounds `1 + 2ε + ε²` to `1 + 2ε` for small ε). The
-/// kernel intentionally uses the unfactored form to stay bit-for-bit
-/// consistent with the WGSL / CUDA shaders, which all compute
-/// `sqrt(a*a - 1)`. Adopting the factored form here would create
-/// CPU-vs-GPU drift near `a = 1` — the inverse of WS1's CPU-vs-CPU
-/// drift problem. A coordinated CPU+GPU upgrade is left as a
-/// follow-up workstream that requires GPU runtime verification.
+/// The WGSL shaders (`reverse.wgsl`, `tangent_forward.wgsl`,
+/// `tangent_reverse.wgsl`, plus the `acosh_f32` primal helper in
+/// `forward.wgsl`), the CUDA kernel (`tape_eval.cu` at three derivative
+/// sites), and the Taylor jet codegen (`taylor_codegen.rs` for both
+/// WGSL and CUDA emitters, including the `acosh_f` primal helper) all
+/// use the same factored form so CPU and GPU stay in lockstep. The
+/// regression test `acosh_deriv_factored_form_keeps_precision_near_one`
+/// below pins the f64 behaviour — any swap back to `a*a - 1` will
+/// trip it.
 #[inline]
 pub fn acosh_deriv<T: Float>(a: T) -> T {
     let one = T::one();
@@ -118,6 +121,45 @@ pub fn acosh_deriv<T: Float>(a: T) -> T {
         let inv = one / a;
         inv.abs() / (one - inv * inv).sqrt()
     } else {
-        one / (a * a - one).sqrt()
+        one / ((a - one) * (a + one)).sqrt()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the factored-form precision near `a = 1`. The factored form
+    /// `(a-1)·(a+1)` and the unfactored form `a*a - 1` are mathematically
+    /// equal but produce measurably different f64 results when `a` is
+    /// extremely close to 1: the `a*a` computation rounds away terms of
+    /// order `(a-1)²` because they fall below the f64 precision floor at
+    /// `a ≈ 1`. Tests that the kernel returns a result distinguishable
+    /// from the unfactored form. A swap back to `a*a - 1` would make
+    /// the two sides equal and trip this test.
+    #[test]
+    fn acosh_deriv_factored_form_keeps_precision_near_one() {
+        // Unfactored reference: what `kernels::acosh_deriv` would return
+        // before the factored-form upgrade.
+        fn acosh_deriv_unfactored(a: f64) -> f64 {
+            1.0 / (a * a - 1.0).sqrt()
+        }
+
+        // At ε = 1e-12, `a*a` in f64 loses the ε² = 1e-24 term because
+        // f64 precision around 1 is ~2.2e-16 — way coarser than 1e-24.
+        // The factored product `(a-1)·(a+1) = ε·(2+ε)` keeps the term.
+        let a = 1.0 + 1e-12_f64;
+        let factored = acosh_deriv::<f64>(a);
+        let unfactored = acosh_deriv_unfactored(a);
+
+        let rel_diff = (factored - unfactored).abs() / factored.max(unfactored);
+        // Theory: factored vs unfactored differ by ~ε/(2·(2+ε)) ≈ ε/4
+        // relative — at ε = 1e-12 that's ~2.5e-13, comfortably above the
+        // f64 precision floor (~1e-16). Threshold 1e-13 passes with the
+        // factored form and fails if anyone reverts to `a*a - 1`.
+        assert!(
+            rel_diff > 1e-13,
+            "kernel must use factored (a-1)·(a+1) form: factored={factored}, unfactored={unfactored}, rel_diff={rel_diff:e} (a swap back to a*a-1 would make them equal)"
+        );
     }
 }

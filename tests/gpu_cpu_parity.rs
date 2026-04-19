@@ -376,7 +376,13 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "acosh",
         n_inputs: 1,
         build: build_acosh,
-        // acosh domain is a >= 1.
+        // acosh domain is a >= 1. Near-1 probes are skipped here because
+        // f32 GPU precision at `a = 1 + ε` for small ε is dominated by
+        // the input f32 quantization (`f32(1.00001) ≈ 1.0000099`) rather
+        // than the formula choice — neither factored `(a-1)(a+1)` nor
+        // unfactored `a*a - 1` recovers precision at that floor in f32.
+        // The factored-form regression test for `kernels::acosh_deriv`
+        // lives in `src/kernels/mod.rs` (unit test, f64-only).
         points: &[&[1.5], &[2.0], &[10.0]],
         f32_ulp: 16,
         f64_ulp: 16,

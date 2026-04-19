@@ -457,7 +457,8 @@ extern "C" __global__ void tangent_forward(
             case OP_ACOSH: {
                 r = acosh(a);
                 if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
-                else                  { rt = at / sqrt(a*a - F(1)); }
+                // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
+                else                  { rt = at / sqrt((a - F(1)) * (a + F(1))); }
                 break;
             }
             case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
@@ -604,7 +605,8 @@ extern "C" __global__ void tangent_reverse(
             case OP_ACOSH: {
                 r = acosh(a);
                 if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
-                else                  { rt = at / sqrt(a*a - F(1)); }
+                // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
+                else                  { rt = at / sqrt((a - F(1)) * (a + F(1))); }
                 break;
             }
             case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
@@ -806,7 +808,10 @@ extern "C" __global__ void tangent_reverse(
                     F denom3 = denom*denom*denom;
                     da_eps = -a * at * inv * inv * fabs(inv) / denom3;
                 } else {
-                    F t = sqrt(a*a - F(1));
+                    // Factored (a-1)(a+1) avoids cancellation near a=1; matches
+                    // kernels::acosh_deriv. Both first-order (1/t) and second-
+                    // order (-a*at/t³) benefit from the precision improvement.
+                    F t = sqrt((a - F(1)) * (a + F(1)));
                     da_re = F(1)/t; da_eps = -a*at/(t*t*t);
                 }
                 break;

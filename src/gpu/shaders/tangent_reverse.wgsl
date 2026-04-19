@@ -390,7 +390,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let denom3 = denom * denom * denom;
                     da_eps = -a * at * inv * inv * abs(inv) / denom3;
                 } else {
-                    let t = sqrt(a * a - 1.0);
+                    // Factored form (a-1)(a+1) avoids cancellation
+                    // near a=1; matches kernels::acosh_deriv. Both
+                    // first-order (1/t) and second-order (-a*at/t³)
+                    // benefit from the precision improvement.
+                    let t = sqrt((a - 1.0) * (a + 1.0));
                     da_re = 1.0 / t;
                     da_eps = -a * at / (t * t * t);
                 }

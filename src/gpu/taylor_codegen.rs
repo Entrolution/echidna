@@ -169,7 +169,7 @@ fn write_wgsl_helpers(s: &mut String) {
         "fn sinh_f(x: f32) -> f32 {{ return (exp(x) - exp(-x)) * 0.5; }}
 fn cosh_f(x: f32) -> f32 {{ return (exp(x) + exp(-x)) * 0.5; }}
 fn asinh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x + 1.0)); }}
-fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x - 1.0)); }}
+fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
 fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
 "
     )
@@ -542,9 +542,18 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     writeln!(s, "    return c;\n}}\n").unwrap();
 
     // acosh: c' = a' / sqrt(a² - 1)
+    // v[0] uses the factored form (a-1)·(a+1) to avoid catastrophic
+    // cancellation near a=1 (matches kernels::acosh_deriv). v[i] for
+    // i ≥ 1 stays as asq.v[i] — the higher-order Taylor coefficients
+    // of (a-1)·(a+1) and a²-1 are mathematically identical (both
+    // equal 2·a.v[0]·a.v[i] + Σ_{j+k=i, j,k≥1} a.v[j]·a.v[k]).
     writeln!(s, "fn jet_acosh(a: JetK) -> JetK {{").unwrap();
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
-    write!(s, "    var d: JetK;\n    d.v[0] = asq.v[0] - 1.0;\n").unwrap();
+    write!(
+        s,
+        "    var d: JetK;\n    d.v[0] = (a.v[0] - 1.0) * (a.v[0] + 1.0);\n"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(s, "    d.v[{i}] = asq.v[{i}];").unwrap();
     }
@@ -1425,8 +1434,15 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
                 writeln!(s, "    d.v[{i}] = -asq.v[{i}];").unwrap();
             }
         } else {
-            // asq - 1.0
-            writeln!(s, "    d.v[0] = asq.v[0] - (F)1;").unwrap();
+            // asq - 1.0 — emit factored form for v[0] to retain precision
+            // near a=1; matches kernels::acosh_deriv. Higher-order
+            // coefficients are unchanged (mathematically identical between
+            // the two forms — see jet_acosh emitter for the full argument).
+            writeln!(
+                s,
+                "    d.v[0] = (a.v[0] - (F)1) * (a.v[0] + (F)1);"
+            )
+            .unwrap();
             for i in 1..k {
                 writeln!(s, "    d.v[{i}] = asq.v[{i}];").unwrap();
             }
