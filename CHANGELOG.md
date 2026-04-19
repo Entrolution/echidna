@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (echidna)
+- **Internal**: `Dual`, `DualVec`, and `Reverse` now route per-component
+  partial-derivative computation for `atan`, `atan2`, `asinh`, `acosh`,
+  and `hypot` through the shared `src/kernels/` module — eliminating
+  the CPU-vs-CPU drift surface that produced three Phase 7 bugs (atan
+  large-|a|, hypot Inf, atan2 overflow). No public API change.
+- **Numerics**: `acosh` derivative (and the WGSL `acosh_f32` / CUDA
+  `acosh_f` primal helpers) uniformly switched from the unfactored
+  `sqrt(a²-1)` form to the factored `sqrt((a-1)·(a+1))` form, which
+  retains the `ε²` contribution at `a = 1 + ε` (the unfactored form
+  rounds it away in both f32 and f64). Applied across CPU
+  (`kernels::acosh_deriv`), the three WGSL shaders (`forward.wgsl`,
+  `tangent_forward.wgsl`, `tangent_reverse.wgsl`, plus the WGSL
+  reverse derivative in `reverse.wgsl`), the CUDA kernel
+  (`tape_eval.cu` at all three derivative sites), and the Taylor jet
+  codegen for both backends (`taylor_codegen.rs`, including the
+  primal `acosh_f` helper). All sweeps (forward, reverse,
+  tangent_forward, tangent_reverse) updated. Pinned by a CPU unit test
+  in `kernels::tests` that compares factored vs unfactored output at
+  `a = 1 + 1e-12` and asserts they differ — any swap back trips the
+  test. f32 GPU precision near `a = 1` remains dominated by the
+  input quantisation rather than formula choice, so
+  `tests/gpu_cpu_parity.rs` continues to probe at moderate inputs
+  (`a ∈ {1.5, 2.0, 10.0}`); near-one regression coverage lives in
+  the f64 kernel unit test.
+
 ### Added (echidna-optim)
 - `OptimResult.diagnostics: SolverDiagnostics` exposes per-solver
   internal counts that were previously silent — curvature pair

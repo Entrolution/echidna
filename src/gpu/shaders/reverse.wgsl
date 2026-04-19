@@ -264,7 +264,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let inv = 1.0 / a;
                     da = abs(inv) / sqrt(1.0 - inv * inv);
                 } else {
-                    da = 1.0 / sqrt(a * a - 1.0);
+                    // Factored form (a-1)(a+1) avoids catastrophic
+                    // cancellation near a=1; matches kernels::acosh_deriv.
+                    da = 1.0 / sqrt((a - 1.0) * (a + 1.0));
                 }
             }
             case 35u /* ATANH */: { da = 1.0 / ((1.0 - a) * (1.0 + a)); }

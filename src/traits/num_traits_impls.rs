@@ -6,6 +6,7 @@ use num_traits::{
 
 use crate::dual::Dual;
 use crate::float::Float;
+use crate::kernels;
 use crate::reverse::Reverse;
 use crate::tape::{self, TapeThreadLocal};
 
@@ -792,29 +793,24 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn atan(self) -> Self {
-        // For large |x|, use (1/x)²/(1+(1/x)²) to avoid 1+x² overflow
-        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.value;
-            inv * inv / (F::one() + inv * inv)
-        } else {
-            F::one() / (F::one() + self.value * self.value)
-        };
-        rev_unary(self, self.value.atan(), deriv)
+        rev_unary(self, self.value.atan(), kernels::atan_deriv(self.value))
     }
 
     fn atan2(self, other: Self) -> Self {
+        // At the origin, atan2 gradient is mathematically undefined; return
+        // a tape-free constant (matches the previous behaviour bit-for-bit
+        // including `index() == CONSTANT` for downstream constant-folding
+        // and avoids growing the tape with a dead (0, 0)-partial entry).
         let h = self.value.hypot(other.value);
         if h == F::zero() {
-            // At the origin, atan2 gradient is mathematically undefined.
-            // Returning a constant (zero gradient) matches JAX/PyTorch convention.
             return Reverse::constant(self.value.atan2(other.value));
         }
-        // Factor as (value/h)/h to avoid squaring h, which overflows for
-        // |h| > sqrt(f64::MAX) and underflows for very small h even when the
-        // true partial is representable. Both value/h terms are bounded by 1.
-        let dx = other.value / h / h;
-        let dy = -self.value / h / h;
-        rev_binary(self, other, self.value.atan2(other.value), dx, dy)
+        // `kernels::atan2_partials(a, b)` returns `(∂/∂a, ∂/∂b)` for the
+        // math convention `atan2(a, b)`. With Rust's `f64::atan2(self=y,
+        // other=x)`, `self` maps to kernel `a` and `other` to kernel `b`.
+        // `rev_binary(self, other, ..., d_self, d_other)` matches that order.
+        let (d_self, d_other) = kernels::atan2_partials(self.value, other.value);
+        rev_binary(self, other, self.value.atan2(other.value), d_self, d_other)
     }
 
     fn sinh(self) -> Self {
@@ -831,24 +827,11 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn asinh(self) -> Self {
-        // See `Dual::asinh` for the overflow rationale.
-        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.value;
-            inv.abs() / (F::one() + inv * inv).sqrt()
-        } else {
-            F::one() / (self.value * self.value + F::one()).sqrt()
-        };
-        rev_unary(self, self.value.asinh(), deriv)
+        rev_unary(self, self.value.asinh(), kernels::asinh_deriv(self.value))
     }
 
     fn acosh(self) -> Self {
-        let deriv = if self.value.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.value;
-            inv.abs() / (F::one() - inv * inv).sqrt()
-        } else {
-            F::one() / (self.value * self.value - F::one()).sqrt()
-        };
-        rev_unary(self, self.value.acosh(), deriv)
+        rev_unary(self, self.value.acosh(), kernels::acosh_deriv(self.value))
     }
 
     fn atanh(self) -> Self {
@@ -861,11 +844,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
 
     fn hypot(self, other: Self) -> Self {
         let h = self.value.hypot(other.value);
-        let (dx, dy) = if h == F::zero() {
-            (F::zero(), F::zero())
-        } else {
-            (self.value / h, other.value / h)
-        };
+        let (dx, dy) = kernels::hypot_partials(self.value, other.value, h);
         rev_binary(self, other, h, dx, dy)
     }
 

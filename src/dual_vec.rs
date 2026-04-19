@@ -6,6 +6,7 @@
 
 use std::fmt::{self, Display};
 
+use crate::kernels;
 use crate::Float;
 
 /// Batched forward-mode dual number: a value with N tangent lanes.
@@ -290,32 +291,16 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Arctangent.
     #[inline]
     pub fn atan(self) -> Self {
-        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.re;
-            inv * inv / (F::one() + inv * inv)
-        } else {
-            F::one() / (F::one() + self.re * self.re)
-        };
-        self.chain(self.re.atan(), deriv)
+        self.chain(self.re.atan(), kernels::atan_deriv(self.re))
     }
 
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        let h = self.re.hypot(other.re);
-        if h == F::zero() {
-            return DualVec {
-                re: self.re.atan2(other.re),
-                eps: [F::zero(); N],
-            };
-        }
-        // Factor ((x/h)·dy - (y/h)·dx)/h to avoid h² over/underflow; see
-        // `Dual::atan2` for the numerical argument.
-        let x_over_h = other.re / h;
-        let y_over_h = self.re / h;
+        let (d_self, d_other) = kernels::atan2_partials(self.re, other.re);
         DualVec {
             re: self.re.atan2(other.re),
-            eps: std::array::from_fn(|k| (x_over_h * self.eps[k] - y_over_h * other.eps[k]) / h),
+            eps: std::array::from_fn(|k| d_self * self.eps[k] + d_other * other.eps[k]),
         }
     }
 
@@ -343,28 +328,13 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        // See `Dual::asinh` for the overflow rationale on the |x|>1e8 switch.
-        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.re;
-            inv.abs() / (F::one() + inv * inv).sqrt()
-        } else {
-            F::one() / (self.re * self.re + F::one()).sqrt()
-        };
-        self.chain(self.re.asinh(), deriv)
+        self.chain(self.re.asinh(), kernels::asinh_deriv(self.re))
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        // See `Dual::acosh`: small-|x| branch uses `(x-1)(x+1)` factored form
-        // to avoid catastrophic cancellation near x = 1.
-        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.re;
-            inv.abs() / (F::one() - inv * inv).sqrt()
-        } else {
-            F::one() / ((self.re - F::one()) * (self.re + F::one())).sqrt()
-        };
-        self.chain(self.re.acosh(), deriv)
+        self.chain(self.re.acosh(), kernels::acosh_deriv(self.re))
     }
 
     /// Inverse hyperbolic tangent.
@@ -451,16 +421,18 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
         let h = self.re.hypot(other.re);
+        if h == F::zero() {
+            // See `Dual::hypot`: singular point — short-circuit to zero
+            // tangent regardless of `eps` sign/finiteness.
+            return DualVec {
+                re: h,
+                eps: [F::zero(); N],
+            };
+        }
+        let (da, db) = kernels::hypot_partials(self.re, other.re, h);
         DualVec {
             re: h,
-            eps: if h == F::zero() {
-                [F::zero(); N]
-            } else {
-                // Factor `(x/h)·dx + (y/h)·dy` to keep intermediates bounded.
-                let x_over_h = self.re / h;
-                let y_over_h = other.re / h;
-                std::array::from_fn(|k| x_over_h * self.eps[k] + y_over_h * other.eps[k])
-            },
+            eps: std::array::from_fn(|k| da * self.eps[k] + db * other.eps[k]),
         }
     }
 

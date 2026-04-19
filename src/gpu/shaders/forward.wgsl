@@ -115,8 +115,10 @@ fn asinh_f32(x: f32) -> f32 {
 }
 
 fn acosh_f32(x: f32) -> f32 {
-    // acosh(x) = ln(x + sqrt(x^2 - 1))
-    return log(x + sqrt(x * x - 1.0));
+    // acosh(x) = ln(x + sqrt(x² - 1)). Use factored (x-1)(x+1) under the
+    // sqrt to retain precision near x=1 (`x*x - 1` rounds away the ε²
+    // term in f32 for x = 1+ε). Matches kernels::acosh_deriv convention.
+    return log(x + sqrt((x - 1.0) * (x + 1.0)));
 }
 
 fn atanh_f32(x: f32) -> f32 {

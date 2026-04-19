@@ -295,12 +295,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 34u /* ACOSH */: {
-                r = log(a + sqrt(a * a - 1.0));
+                // Factored form under sqrt for both primal and derivative
+                // — retains the ε² term near a=1; matches forward.wgsl
+                // acosh_f32 helper and kernels::acosh_deriv.
+                r = log(a + sqrt((a - 1.0) * (a + 1.0)));
                 if abs(a) > 1e8 {
                     let inv = 1.0 / a;
                     rt = at * abs(inv) / sqrt(1.0 - inv * inv);
                 } else {
-                    rt = at / sqrt(a * a - 1.0);
+                    rt = at / sqrt((a - 1.0) * (a + 1.0));
                 }
             }
             case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / ((1.0 - a) * (1.0 + a)); }

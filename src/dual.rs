@@ -6,6 +6,7 @@
 
 use std::fmt::{self, Display};
 
+use crate::kernels;
 use crate::Float;
 
 /// Forward-mode dual number: a value paired with its tangent (derivative).
@@ -273,39 +274,16 @@ impl<F: Float> Dual<F> {
     /// Arctangent.
     #[inline]
     pub fn atan(self) -> Self {
-        // For large |x|, 1 + x² overflows to inf, producing 1/inf = 0.
-        // Use 1/x² form instead, which avoids the overflow.
-        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.re;
-            inv * inv / (F::one() + inv * inv)
-        } else {
-            F::one() / (F::one() + self.re * self.re)
-        };
-        self.chain(self.re.atan(), deriv)
+        self.chain(self.re.atan(), kernels::atan_deriv(self.re))
     }
 
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        // d/dx atan2(y,x) = x/(x²+y²) dy - y/(x²+y²) dx
-        let h = self.re.hypot(other.re);
-        if h == F::zero() {
-            return Dual {
-                re: self.re.atan2(other.re),
-                eps: F::zero(),
-            };
-        }
-        // Factor as ((x/h)·dy - (y/h)·dx)/h instead of .../(h*h). Both x/h
-        // and y/h are bounded by 1 (since h = hypot(x,y) ≥ |x|, |y|), so no
-        // intermediate step overflows. The naive h*h form overflows for
-        // |h| > sqrt(f64::MAX) ≈ 1.3e154 and underflows for |h| below
-        // sqrt(f64::MIN_POSITIVE) — silently corrupting otherwise finite
-        // partials.
-        let x_over_h = other.re / h;
-        let y_over_h = self.re / h;
+        let (d_self, d_other) = kernels::atan2_partials(self.re, other.re);
         Dual {
             re: self.re.atan2(other.re),
-            eps: (x_over_h * self.eps - y_over_h * other.eps) / h,
+            eps: d_self * self.eps + d_other * other.eps,
         }
     }
 
@@ -333,36 +311,13 @@ impl<F: Float> Dual<F> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        // For |x| > 1e8, `x*x + 1` overflows in f64 at |x| > ~1.3e154 and the
-        // derivative silently collapses to 0. Use the algebraically equivalent
-        // |1/x| / sqrt(1 + (1/x)²) form, which stays in-range for any x.
-        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.re;
-            inv.abs() / (F::one() + inv * inv).sqrt()
-        } else {
-            F::one() / (self.re * self.re + F::one()).sqrt()
-        };
-        self.chain(self.re.asinh(), deriv)
+        self.chain(self.re.asinh(), kernels::asinh_deriv(self.re))
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        // Two-branch derivative:
-        //   |x| > 1e8   → `|1/x| / sqrt(1 - (1/x)²)` avoids x²-1 overflow.
-        //   |x| ≤ 1e8   → `1 / sqrt((x-1)·(x+1))` avoids catastrophic
-        //                 cancellation near x = 1 that `x²-1` would hit
-        //                 (at x = 1 + ε, `x² = 1 + 2ε + ε²` rounds to
-        //                 `1 + 2ε`, losing the ε² contribution). The
-        //                 factored form stays numerically distinct down
-        //                 to the minimum representable positive number.
-        let deriv = if self.re.abs() > F::from(1e8).unwrap() {
-            let inv = F::one() / self.re;
-            inv.abs() / (F::one() - inv * inv).sqrt()
-        } else {
-            F::one() / ((self.re - F::one()) * (self.re + F::one())).sqrt()
-        };
-        self.chain(self.re.acosh(), deriv)
+        self.chain(self.re.acosh(), kernels::acosh_deriv(self.re))
     }
 
     /// Inverse hyperbolic tangent.
@@ -454,17 +409,20 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
         let h = self.re.hypot(other.re);
+        if h == F::zero() {
+            // Singularity: kernel returns (0, 0) partials, but `0 * eps` is
+            // NaN if `self.eps` or `other.eps` is non-finite. Mirror
+            // `Dual::recip`'s explicit short-circuit to preserve the
+            // bit-for-bit zero-eps convention.
+            return Dual {
+                re: h,
+                eps: F::zero(),
+            };
+        }
+        let (da, db) = kernels::hypot_partials(self.re, other.re, h);
         Dual {
             re: h,
-            eps: if h == F::zero() {
-                F::zero()
-            } else {
-                // Factor as (x/h)·dx + (y/h)·dy to avoid numerator overflow:
-                // `x·dx` alone can overflow for x and dx both large even when
-                // the true tangent is representable. `hypot` does this trick
-                // for the primal; the tangent needs it too.
-                (self.re / h) * self.eps + (other.re / h) * other.eps
-            },
+            eps: da * self.eps + db * other.eps,
         }
     }
 
