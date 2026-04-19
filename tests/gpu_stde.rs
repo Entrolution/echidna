@@ -987,6 +987,159 @@ fn gpu_taylor_kth_multi_batch() {
     assert!(result.coefficients[3][1].abs() < 1e-3);
 }
 
+// ══════════════════════════════════════════════
+//  Section 6: WS2 — Higher-order Taylor HYPOT GPU rescale
+// ══════════════════════════════════════════════
+//
+// Pre-WS2, GPU jet HYPOT computed `jet_mul(a,a) + jet_mul(b,b)` directly
+// — fine for `a.v[0] ~ 10` but `1e20 * 1e20` overflows in f32, leaking
+// Inf/NaN into v[1..K]. WS2 mirrors CPU `taylor_ops::taylor_hypot`'s
+// max-rescale strategy. These tests pin both the rescale's correctness
+// (baseline `hypot(3, 4)`) and the WS2 fix at extreme magnitudes
+// (`hypot(1e20, 1e19)`), plus a documented-divergence ignored test
+// for the singular-origin case where CPU does recursive shift-and-square
+// unwinding the GPU intentionally skips.
+
+#[cfg(feature = "stde")]
+fn check_hypot_jet(
+    ctx: &impl GpuBackend,
+    x0: f64,
+    y0: f64,
+    seed: [f32; 2],
+    label: &str,
+) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]);
+    let x = [x0, y0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32, y0 as f32], &seed, 1)
+        .unwrap();
+
+    let seed_f64 = [seed[0] as f64, seed[1] as f64];
+    let (c0, c1, c2) = echidna::stde::taylor_jet_2nd(&tape, &x, &seed_f64);
+
+    // Finiteness is the WS2 contract: pre-WS2, extreme magnitudes
+    // produced Inf/NaN in v[1..K]. Assert finiteness FIRST so a
+    // regression surfaces with a clear message before tolerance noise.
+    assert!(
+        gpu_result.values[0].is_finite(),
+        "{label} c0 not finite: {}",
+        gpu_result.values[0]
+    );
+    assert!(
+        gpu_result.c1s[0].is_finite(),
+        "{label} c1 not finite: {}",
+        gpu_result.c1s[0]
+    );
+    assert!(
+        gpu_result.c2s[0].is_finite(),
+        "{label} c2 not finite: {}",
+        gpu_result.c2s[0]
+    );
+
+    // Parity vs CPU. Use relative tolerance per existing `check_1d`
+    // pattern; ULP-absolute over-passes for low-magnitude `c2` and
+    // under-passes for high-magnitude `c0` at extreme inputs.
+    let tol: f64 = 1e-2;
+    assert!(
+        (gpu_result.values[0] as f64 - c0).abs() < tol.max(c0.abs() * 1e-4),
+        "{label} c0: gpu={} cpu={}",
+        gpu_result.values[0],
+        c0
+    );
+    assert!(
+        (gpu_result.c1s[0] as f64 - c1).abs() < tol.max(c1.abs() * 1e-4),
+        "{label} c1: gpu={} cpu={}",
+        gpu_result.c1s[0],
+        c1
+    );
+    assert!(
+        (gpu_result.c2s[0] as f64 - c2).abs() < tol.max(c2.abs() * 1e-3),
+        "{label} c2: gpu={} cpu={}",
+        gpu_result.c2s[0],
+        c2
+    );
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_baseline_normal_magnitude() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // hypot(3, 4) at direction (1, 0): c0=5, c1=0.6, c2=0.064.
+    // Confirms the rescale rewrite hasn't regressed normal-magnitude
+    // accuracy.
+    check_hypot_jet(&ctx, 3.0, 4.0, [1.0, 0.0], "wgpu_hypot(3,4) dx");
+    check_hypot_jet(&ctx, 3.0, 4.0, [0.0, 1.0], "wgpu_hypot(3,4) dy");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_extreme_magnitude_finite() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // The WS2 main case: `a.v[0] = 1e20` would overflow `a*a` in f32
+    // pre-WS2, NaN-ing v[1..K]. Post-WS2 the rescale keeps everything
+    // bounded.
+    check_hypot_jet(&ctx, 1e20, 1e19, [1.0, 0.0], "wgpu_hypot(1e20,1e19) dx");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+#[ignore = "Documented WS2 divergence: CPU taylor_hypot recursively unwinds at hypot(0,0); GPU returns the zero jet. Run with `--ignored` to confirm the divergence is still in place."]
+fn ws2_wgpu_hypot_zero_origin_with_nonzero_seed_diverges_from_cpu() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // `hypot(0, 0)` with a non-zero seed: CPU emits non-trivial
+    // higher-order coefficients via shift-and-square; GPU returns
+    // zero jet. This test asserts the CPU-vs-GPU parity that the
+    // GPU code intentionally does NOT achieve — it WILL fail, and
+    // that failure is the contract the ignored marker pins.
+    check_hypot_jet(&ctx, 0.0, 0.0, [1.0, 0.0], "wgpu_hypot(0,0) dx");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_baseline_normal_magnitude() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet(&ctx, 3.0, 4.0, [1.0, 0.0], "cuda_hypot(3,4) dx");
+    check_hypot_jet(&ctx, 3.0, 4.0, [0.0, 1.0], "cuda_hypot(3,4) dy");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_extreme_magnitude_finite() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet(&ctx, 1e20, 1e19, [1.0, 0.0], "cuda_hypot(1e20,1e19) dx");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+#[ignore = "Documented WS2 divergence: see WGSL counterpart."]
+fn ws2_cuda_hypot_zero_origin_with_nonzero_seed_diverges_from_cpu() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet(&ctx, 0.0, 0.0, [1.0, 0.0], "cuda_hypot(0,0) dx");
+}
+
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
 #[test]
 fn gpu_trig_taylor_2nd() {

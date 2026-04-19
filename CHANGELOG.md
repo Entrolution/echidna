@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed (echidna)
+- **GPU Taylor jet `HYPOT` higher-order coefficients** now match CPU
+  `Taylor::hypot` via max-rescale across both WGSL and CUDA codegen
+  (`src/gpu/taylor_codegen.rs`). Pre-WS2, the primal was patched
+  (Phase 7) but `v[1]..v[K-1]` still passed through unscaled
+  `jet_mul(a, a) + jet_mul(b, b)`, overflowing to Inf/NaN at
+  `a.v[0] ~ 1e20` in f32 — silently corrupting GPU Hessians and
+  higher Taylor coefficients of `hypot` at extreme magnitudes.
+  The new emission rescales by `h = max(|a.v[0]|, |b.v[0]|)`,
+  computes the sum-of-squares on the bounded scaled jets, then
+  scales the result back, mirroring `taylor_ops::taylor_hypot`.
+  Both branches explicitly zero higher-order coefficients before
+  early-return (uninitialised `var r: JetK` hazard). **Documented
+  divergence**: at `hypot(0, 0)` with non-zero higher-order seeds,
+  CPU recursively shift-and-square unwinds to non-trivial higher-
+  order jets; GPU returns the zero jet. The recursion isn't
+  codegen-friendly without a `K`-bounded unroll. Pinned by an
+  `#[ignore]`-d test in `tests/gpu_stde.rs`. Pre-WS2 GPU output at
+  the singular origin was already silent NaN/garbage so this is
+  improvement-with-known-limit, not a behaviour break.
 - **Internal**: `Dual`, `DualVec`, and `Reverse` now route per-component
   partial-derivative computation for `atan`, `atan2`, `asinh`, `acosh`,
   and `hypot` through the shared `src/kernels/` module — eliminating
