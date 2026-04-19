@@ -1001,13 +1001,7 @@ fn gpu_taylor_kth_multi_batch() {
 // unwinding the GPU intentionally skips.
 
 #[cfg(feature = "stde")]
-fn check_hypot_jet(
-    ctx: &impl GpuBackend,
-    x0: f64,
-    y0: f64,
-    seed: [f32; 2],
-    label: &str,
-) {
+fn check_hypot_jet(ctx: &impl GpuBackend, x0: f64, y0: f64, seed: [f32; 2], label: &str) {
     use num_traits::Float as _;
     let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]);
     let x = [x0, y0];
@@ -1090,6 +1084,112 @@ fn ws2_wgpu_hypot_extreme_magnitude_finite() {
     // pre-WS2, NaN-ing v[1..K]. Post-WS2 the rescale keeps everything
     // bounded.
     check_hypot_jet(&ctx, 1e20, 1e19, [1.0, 0.0], "wgpu_hypot(1e20,1e19) dx");
+}
+
+#[cfg(feature = "stde")]
+fn check_hypot_jet_nonfinite_input(
+    ctx: &impl GpuBackend,
+    x0: f32,
+    y0: f32,
+    expected_primal_kind: &str, // "inf" or "nan"
+    label: &str,
+) {
+    use num_traits::Float as _;
+    // Build the tape at finite reference values; the GPU is run at
+    // (x0, y0) which may be Inf/NaN. The tape itself is just `hypot(a, b)`.
+    let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]);
+    let (tape, _) = record(f, &[1.0_f64, 1.0]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0, y0], &[1.0f32, 0.0], 1)
+        .unwrap();
+
+    match expected_primal_kind {
+        "inf" => assert!(
+            gpu_result.values[0].is_infinite() && gpu_result.values[0] > 0.0,
+            "{label} c0: expected +Inf, got {}",
+            gpu_result.values[0]
+        ),
+        "nan" => assert!(
+            gpu_result.values[0].is_nan(),
+            "{label} c0: expected NaN, got {}",
+            gpu_result.values[0]
+        ),
+        _ => panic!("unknown expected_primal_kind {expected_primal_kind}"),
+    }
+    // Higher-order coefficients are conventional zero on GPU at the
+    // function-domain boundary (CPU diverges to NaN via `Inf*0=NaN`;
+    // both are defensible at the singularity). Asserting zero pins
+    // the GPU contract — anyone changing the special-case return
+    // values (e.g. omitting the explicit zero loop, regressing back
+    // to NaN) trips here.
+    assert_eq!(
+        gpu_result.c1s[0], 0.0,
+        "{label} c1: expected 0.0 at boundary, got {}",
+        gpu_result.c1s[0]
+    );
+    assert_eq!(
+        gpu_result.c2s[0], 0.0,
+        "{label} c2: expected 0.0 at boundary, got {}",
+        gpu_result.c2s[0]
+    );
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_inf_input_jet_returns_inf_and_zero_higher_order() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // Pins the new Inf-branch code path through the JET evaluator
+    // (phase7_gpu_fixes covers Inf only via the non-jet `forward_batch`).
+    // A regression that drops the `r.v[0] = inf` assignment or the
+    // explicit zero loop will fail here.
+    check_hypot_jet_nonfinite_input(&ctx, f32::INFINITY, 1.0, "inf", "wgpu_hypot(Inf, 1) jet");
+    check_hypot_jet_nonfinite_input(&ctx, 1.0, f32::INFINITY, "inf", "wgpu_hypot(1, Inf) jet");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_nan_input_propagates_not_swallowed() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // Pins IEEE `hypot(NaN, x) = NaN` for the jet path. Without the
+    // explicit NaN guard added in the WS2 review-fix, `fmax(NaN, 0) = 0`
+    // would route this to the `h == 0` branch and silently return zero
+    // — corrupting any downstream computation that depended on NaN
+    // propagation.
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 0.0, "nan", "wgpu_hypot(NaN, 0) jet");
+    check_hypot_jet_nonfinite_input(&ctx, 0.0, f32::NAN, "nan", "wgpu_hypot(0, NaN) jet");
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 1.0, "nan", "wgpu_hypot(NaN, 1) jet");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_inf_input_jet_returns_inf_and_zero_higher_order() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet_nonfinite_input(&ctx, f32::INFINITY, 1.0, "inf", "cuda_hypot(Inf, 1) jet");
+    check_hypot_jet_nonfinite_input(&ctx, 1.0, f32::INFINITY, "inf", "cuda_hypot(1, Inf) jet");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_nan_input_propagates_not_swallowed() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 0.0, "nan", "cuda_hypot(NaN, 0) jet");
+    check_hypot_jet_nonfinite_input(&ctx, 0.0, f32::NAN, "nan", "cuda_hypot(0, NaN) jet");
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 1.0, "nan", "cuda_hypot(NaN, 1) jet");
 }
 
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
