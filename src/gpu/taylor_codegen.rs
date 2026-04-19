@@ -732,10 +732,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     // `taylor_ops::taylor_hypot`: build `a_s = a/h`, `b_s = b/h`,
     // compute `(a_s)² + (b_s)²`, sqrt, then scale back by `h`.
     // Branch order: Inf first, then NaN, then `h == 0` (with the
-    // WS9 one-level shift-and-square unroll), then general —
-    // preserves IEEE `hypot(Inf, NaN) = Inf` and `hypot(NaN, 0) = NaN`.
+    // one-level shift-and-square unroll), then general — preserves
+    // IEEE `hypot(Inf, NaN) = Inf` and `hypot(NaN, 0) = NaN`.
     //
-    // Function-domain-boundary conventions (WS9, matching CPU):
+    // Function-domain-boundary conventions (matching CPU):
     // - `hypot(Inf, finite)` — primal = Inf, higher-order = NaN.
     //   CPU's rescale path produces `Inf * 0 = NaN` in every
     //   coefficient past the primal; GPU now synthesises NaN via
@@ -799,7 +799,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let h = max(aa, bb);").unwrap();
-    // Zero branch (WS9 shift-and-square unroll).
+    // Zero branch (shift-and-square unroll).
     writeln!(s, "                    if (h == 0.0) {{").unwrap();
     if k >= 2 {
         // Build shifted jets: a_shifted.v[i] = a.v[i+1] for i < K-1,
@@ -1824,11 +1824,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     // HYPOT. Full jet-wide max-rescale to keep every coefficient
     // bounded even when `a.v[0] ~ 1e20`. Mirrors CPU
     // `taylor_ops::taylor_hypot` and the WGSL emitter above. Branch
-    // order: Inf first, then NaN, then `h == 0` (with the WS9
-    // one-level shift-and-square unroll), then general — preserves
-    // IEEE `hypot(Inf, NaN) = Inf` and `hypot(NaN, 0) = NaN`.
+    // order: Inf first, then NaN, then `h == 0` (with the one-level
+    // shift-and-square unroll), then general — preserves IEEE
+    // `hypot(Inf, NaN) = Inf` and `hypot(NaN, 0) = NaN`.
     //
-    // Function-domain-boundary conventions (WS9, matching CPU):
+    // Function-domain-boundary conventions (matching CPU):
     // - `hypot(Inf, finite)` — primal = Inf, higher-order = NaN
     //   (CPU's rescale path produces `Inf * 0 = NaN`).
     // - `hypot(0, 0)` with `a.v[1] != 0 || b.v[1] != 0` — one-level
@@ -1878,7 +1878,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     }
     writeln!(s, "            }} else {{").unwrap();
     writeln!(s, "                F h = fmax(aa, bb);").unwrap();
-    // Zero branch (WS9 shift-and-square unroll).
+    // Zero branch (shift-and-square unroll).
     writeln!(s, "                if (h == (F)0) {{").unwrap();
     if k >= 2 {
         writeln!(s, "                    JetK a_shifted;").unwrap();
