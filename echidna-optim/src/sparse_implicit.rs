@@ -34,34 +34,48 @@ use faer::Col;
 /// breaking exhaustive `match`es. Numeric fields use `f64` to match the
 /// monomorphic `f64` API of this module.
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum SparseImplicitError {
     /// Constructing the sparse F_z matrix from triplets failed (e.g.
     /// duplicate entries or pattern mismatch). Almost always indicates
     /// a bug in the sparsity-pattern computation rather than user input.
-    StructuralFailure,
+    /// The underlying `faer::sparse::CreationError` is available via
+    /// [`std::error::Error::source`].
+    StructuralFailure {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     /// faer's sparse LU factorization itself returned an error
     /// (typically signals an exact zero pivot detected during
-    /// elimination — i.e. F_z is exactly singular).
-    FactorFailed,
+    /// elimination — i.e. F_z is exactly singular). The underlying
+    /// `faer::sparse::linalg::LuError` is available via
+    /// [`std::error::Error::source`] and typically surfaces as
+    /// `SymbolicSingular { index }`, pinpointing the failing column.
+    FactorFailed {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     /// LU factorization succeeded but the solve produced a non-finite
     /// solution to the mixed-sign probe — F_z is numerically singular
     /// to working precision in the probed direction.
     NumericSingular,
-    /// LU solve produced a finite solution, but `||F_z·x − rhs|| /
-    /// ||rhs|| = relative_residual` exceeds the
-    /// `sqrt(eps) · sqrt(m)` tolerance — F_z is finite but
-    /// effectively rank-deficient or extremely ill-conditioned.
-    Residual { relative_residual: f64 },
+    /// LU solve produced a finite solution, but
+    /// `||F_z·x − rhs|| / ||rhs|| = relative_residual` exceeds
+    /// `tolerance` (which is `sqrt(eps) · sqrt(dimension)`) — F_z is
+    /// finite but effectively rank-deficient or extremely
+    /// ill-conditioned.
+    Residual {
+        relative_residual: f64,
+        tolerance: f64,
+        dimension: usize,
+    },
 }
 
 impl fmt::Display for SparseImplicitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SparseImplicitError::StructuralFailure => {
+            SparseImplicitError::StructuralFailure { .. } => {
                 write!(f, "sparse_implicit: failed to build sparse F_z matrix")
             }
-            SparseImplicitError::FactorFailed => {
+            SparseImplicitError::FactorFailed { .. } => {
                 write!(
                     f,
                     "sparse_implicit: sparse LU factorization failed (F_z singular)"
@@ -73,17 +87,39 @@ impl fmt::Display for SparseImplicitError {
                     "sparse_implicit: probe solve produced non-finite solution (F_z numerically singular)"
                 )
             }
-            SparseImplicitError::Residual { relative_residual } => {
+            SparseImplicitError::Residual {
+                relative_residual,
+                tolerance,
+                dimension,
+            } => {
                 write!(
                     f,
-                    "sparse_implicit: probe solve residual {relative_residual:.3e} exceeds tolerance (F_z ill-conditioned)"
+                    "sparse_implicit: probe solve residual {relative_residual:.3e} exceeds tolerance {tolerance:.3e} (F_z ill-conditioned, dim = {dimension})"
                 )
             }
         }
     }
 }
 
-impl std::error::Error for SparseImplicitError {}
+impl std::error::Error for SparseImplicitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // `&**source` double-derefs `&Box<dyn Trait>` to `&(dyn Trait)`,
+        // coercing through the `Send + Sync` bounds to the plain
+        // `dyn Error + 'static` that `source()` expects. Equivalent to
+        // relying on trait-upcasting (stable since Rust 1.86) but robust
+        // across toolchain quirks.
+        //
+        // Non-sourced variants are spelled out explicitly (rather than a
+        // wildcard `_`) so that a future `#[non_exhaustive]` variant
+        // carrying a `source` field produces a compiler error here — the
+        // wildcard would silently swallow its chain and defeat the
+        // whole point of `source()`.
+        match self {
+            Self::StructuralFailure { source } | Self::FactorFailed { source } => Some(&**source),
+            Self::NumericSingular | Self::Residual { .. } => None,
+        }
+    }
+}
 
 // Compile-time check that `SparseImplicitError` stays `Send + Sync`. Future
 // variants carrying non-`Send`/`Sync` payloads will trigger a build failure
@@ -247,9 +283,14 @@ fn build_fz_and_factor(
 ) -> Result<faer::sparse::linalg::solvers::Lu<usize, f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let triplets = extract_fz_triplets(ctx, jac_values);
-    let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets)
-        .map_err(|_| SparseImplicitError::StructuralFailure)?;
-    let lu = mat.sp_lu().map_err(|_| SparseImplicitError::FactorFailed)?;
+    let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets).map_err(|e| {
+        SparseImplicitError::StructuralFailure {
+            source: Box::new(e),
+        }
+    })?;
+    let lu = mat.sp_lu().map_err(|e| SparseImplicitError::FactorFailed {
+        source: Box::new(e),
+    })?;
 
     // Mixed-sign probe RHS — avoids the null-space direction an all-ones
     // vector would hit for matrices like `diag(1,-1)` rotated into the
@@ -294,7 +335,11 @@ fn build_fz_and_factor(
     }
     if resid_sq > tol * tol * rhs_sq {
         let relative_residual = (resid_sq / rhs_sq).sqrt();
-        return Err(SparseImplicitError::Residual { relative_residual });
+        return Err(SparseImplicitError::Residual {
+            relative_residual,
+            tolerance: tol,
+            dimension: m,
+        });
     }
 
     Ok(lu)

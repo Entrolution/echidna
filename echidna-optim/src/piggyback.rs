@@ -5,26 +5,39 @@ use echidna::{BytecodeTape, Dual, Float};
 /// Reason a piggyback solve failed to converge.
 ///
 /// Marked `#[non_exhaustive]` so future variants can be added without
-/// breaking exhaustive `match`es. `last_norm` / `last_z_norm` /
-/// `last_lam_norm` fields use `f64` (cast via `Float::to_f64`) for
-/// uniform diagnostic output regardless of the solver's `F` type
-/// — matches the precedent in `implicit.rs`.
+/// breaking exhaustive `match`es. Numeric fields use `f64` (cast via
+/// `Float::to_f64`) for uniform diagnostic output regardless of the
+/// solver's `F` type.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum PiggybackError {
     /// The primal `z_{k+1} = G(z_k, x)` produced a non-finite norm
     /// (relative-norm `||z_new - z||/(1 + ||z||)` is NaN/Inf), or
     /// the primal vector itself contained non-finite components in
-    /// the forward-adjoint loop.
-    PrimalDivergence { iteration: usize },
+    /// the forward-adjoint loop. `last_norm` is the primal-delta
+    /// relative norm at the detecting iteration: non-finite when
+    /// detection came from the norm check (the usual case);
+    /// finite — and itself diagnostic — when detection came from
+    /// the componentwise finite check (primal vector overflowed
+    /// mid-iteration while the step-to-step delta stayed bounded).
+    PrimalDivergence { iteration: usize, last_norm: f64 },
     /// Primal stayed finite but the tangent
     /// `ż_{k+1} = G_z · ż_k + G_x · ẋ` produced non-finite values.
     /// Catches the ratio-converging case where the primal norm
     /// remains bounded while individual tangent components overflow.
-    TangentDivergence { iteration: usize },
+    /// `last_norm` is the primal-delta relative norm at the
+    /// detecting iteration — **finite** by construction here (the
+    /// tangent-only divergence path takes the norm-finite branch
+    /// before the componentwise check fires); surfacing it tells
+    /// the caller the primal iteration was bounded while the JVP
+    /// overflowed.
+    TangentDivergence { iteration: usize, last_norm: f64 },
     /// Adjoint `λ_{k+1} = G_z^T · λ_k + z̄` produced non-finite
-    /// values (norm or individual components).
-    AdjointDivergence { iteration: usize },
+    /// values (norm or individual components). `last_norm` is the
+    /// adjoint-delta relative norm at the detecting iteration:
+    /// non-finite when detection came from the norm check; finite
+    /// when it came from the componentwise `lambda_new` check.
+    AdjointDivergence { iteration: usize, last_norm: f64 },
     /// Reached `max_iter` without satisfying the convergence
     /// criterion. Both norms are *relative* (`||δ|| / (1 + ||state||)`),
     /// matching the scale of the `tol` argument — so a value just over
@@ -46,21 +59,50 @@ pub enum PiggybackError {
 impl fmt::Display for PiggybackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PiggybackError::PrimalDivergence { iteration } => {
-                write!(f, "piggyback: primal diverged at iteration {iteration}")
-            }
-            PiggybackError::TangentDivergence { iteration } => {
-                write!(f, "piggyback: tangent diverged at iteration {iteration}")
-            }
-            PiggybackError::AdjointDivergence { iteration } => {
-                write!(f, "piggyback: adjoint diverged at iteration {iteration}")
-            }
-            PiggybackError::MaxIterations { z_norm, lam_norm } => {
+            PiggybackError::PrimalDivergence {
+                iteration,
+                last_norm,
+            } => {
                 write!(
                     f,
-                    "piggyback: max_iter exceeded (z_norm = {z_norm:?}, lam_norm = {lam_norm:?})"
+                    "piggyback: primal diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
                 )
             }
+            PiggybackError::TangentDivergence {
+                iteration,
+                last_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: tangent diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
+                )
+            }
+            PiggybackError::AdjointDivergence {
+                iteration,
+                last_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: adjoint diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
+                )
+            }
+            // Explicit 4-arm match (not a string-builder) so the
+            // impossible-but-defensive (None, None) case degrades
+            // cleanly to a bare prefix rather than leaking "()" or
+            // panicking.
+            PiggybackError::MaxIterations { z_norm, lam_norm } => match (z_norm, lam_norm) {
+                (Some(z), Some(l)) => write!(
+                    f,
+                    "piggyback: max_iter exceeded (z_norm = {z:.3e}, lam_norm = {l:.3e})"
+                ),
+                (Some(z), None) => {
+                    write!(f, "piggyback: max_iter exceeded (z_norm = {z:.3e})")
+                }
+                (None, Some(l)) => {
+                    write!(f, "piggyback: max_iter exceeded (lam_norm = {l:.3e})")
+                }
+                (None, None) => write!(f, "piggyback: max_iter exceeded"),
+            },
         }
     }
 }
@@ -197,13 +239,29 @@ pub fn piggyback_tangent_solve<F: Float>(
         // primal naturally produces a non-finite norm, so it falls into
         // PrimalDivergence by detection priority.
         if !norm.is_finite() {
-            return Err(PiggybackError::PrimalDivergence { iteration: k });
+            return Err(PiggybackError::PrimalDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
         // Detect tangent divergence even when the primal `z_new` itself is
         // finite: the JVP iteration `z_dot_{k+1} = G_z·z_dot_k + G_x·x_dot`
         // can produce Inf/NaN tangents that a primal-only norm check misses.
         if !z_dot_new.iter().all(|v| v.is_finite()) {
-            return Err(PiggybackError::TangentDivergence { iteration: k });
+            // `norm` is guaranteed finite here — the `!norm.is_finite()`
+            // branch above would have returned `PrimalDivergence` first.
+            // The debug_assert guards against a future refactor that
+            // reorders these checks and silently invalidates the
+            // `TangentDivergence::last_norm` docstring's "finite by
+            // construction" promise.
+            debug_assert!(
+                norm.is_finite(),
+                "TangentDivergence path must see a finite primal norm"
+            );
+            return Err(PiggybackError::TangentDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
         last_norm = norm.to_f64().unwrap_or(f64::NAN);
         if norm < tol {
@@ -274,14 +332,24 @@ pub fn piggyback_adjoint_solve<F: Float>(
 
         let norm = delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
         if !norm.is_finite() {
-            return Err(PiggybackError::AdjointDivergence { iteration: k });
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
         // A ratio-converging iteration with exponentially-growing `lambda`
         // magnitudes (spectral radius of `G_z^T` ≥ 1) can produce finite
         // `norm` while `lambda_new` is Inf/NaN. Explicit finite check
         // catches the divergence regardless of ratio behaviour.
         if !lambda_new.iter().all(|v| v.is_finite()) {
-            return Err(PiggybackError::AdjointDivergence { iteration: k });
+            debug_assert!(
+                norm.is_finite(),
+                "AdjointDivergence componentwise path must see a finite norm"
+            );
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
         last_norm = norm.to_f64().unwrap_or(f64::NAN);
         if norm < tol {
@@ -354,7 +422,10 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
         let z_norm = z_delta_sq.sqrt() / (F::one() + z_sq.sqrt());
         if !z_norm.is_finite() {
-            return Err(PiggybackError::PrimalDivergence { iteration: k });
+            return Err(PiggybackError::PrimalDivergence {
+                iteration: k,
+                last_norm: z_norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
 
         // Adjoint update and convergence: λ_new = G_z^T · λ + z̄
@@ -370,16 +441,38 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
         let lam_norm = lam_delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
         if !lam_norm.is_finite() {
-            return Err(PiggybackError::AdjointDivergence { iteration: k });
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: lam_norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
         // Same divergence case as the standalone solvers: a ratio-converging
         // iteration with exponentially-growing lambda magnitudes can produce
         // finite `lam_norm` while `lambda_new` itself is Inf/NaN.
         if !lambda_new.iter().all(|v| v.is_finite()) {
-            return Err(PiggybackError::AdjointDivergence { iteration: k });
+            debug_assert!(
+                lam_norm.is_finite(),
+                "AdjointDivergence componentwise path must see a finite lam_norm"
+            );
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: lam_norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
+        // Defense-in-depth: a non-finite `z_new[i]` would typically have
+        // already shown up as `!z_norm.is_finite()` above (the delta/sq
+        // loops touch every index), but guard the componentwise case
+        // explicitly so a future refactor of the norm computation can't
+        // silently lose primal-divergence detection.
         if !z_new.iter().all(|v| v.is_finite()) {
-            return Err(PiggybackError::PrimalDivergence { iteration: k });
+            debug_assert!(
+                z_norm.is_finite(),
+                "PrimalDivergence componentwise path must see a finite z_norm"
+            );
+            return Err(PiggybackError::PrimalDivergence {
+                iteration: k,
+                last_norm: z_norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
 
         last_z_norm = z_norm.to_f64().unwrap_or(f64::NAN);

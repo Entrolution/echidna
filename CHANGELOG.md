@@ -103,6 +103,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   goes non-finite independently of `∂F/∂z`, or a nested-dual forward
   pass producing non-finite higher-order coefficients at a
   function-domain boundary.
+- `PiggybackError::MaxIterations` Display no longer emits
+  `Some(0.0034)` / `None` Rust-internal syntax via `{:?}` on
+  `Option<f64>`. The new implementation is an explicit 4-arm match
+  that formats each populated norm in scientific notation and omits
+  the other: e.g. `"piggyback: max_iter exceeded (z_norm = 3.4e-3)"`.
+  The defensive `(None, None)` arm — impossible to construct via the
+  library today — degrades to a bare prefix rather than leaking
+  `"()"`. `Display` output has never been part of a stable contract
+  (Rust idiom treats `Display` as human-facing only); callers that
+  were scraping the previous string form should pattern-match on
+  the enum variant instead.
 
 ### Changed (echidna-optim) — BREAKING
 - `OptimResult` is now `#[non_exhaustive]` so future field additions
@@ -134,8 +145,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.is_none()` → `.is_err()`; `.unwrap()` / `.expect(...)` continue
   to work; callers that pattern-matched on `Some(_) | None` now
   match on `Ok(_) | Err(_)`.
-- `echidna-optim` version bumped to `0.10.0` to reflect the breaking
-  return-type changes.
+- `PiggybackError::{PrimalDivergence, TangentDivergence, AdjointDivergence}`
+  gain `last_norm: f64` — the relative-convergence norm at the
+  detecting iteration. Distinguishes Inf-overflow from
+  NaN-cancellation when non-finite; surfaces a finite bounded value
+  in the ratio-converging case (tangent / `lambda_new` componentwise
+  overflow while the primal/adjoint norm stayed bounded). Captured
+  inline at each `Err` return so the reported scalar reflects the
+  failing iteration, not the previous one.
+- `SparseImplicitError::Residual` gains `tolerance: f64,
+  dimension: usize` — the probe threshold (`sqrt(eps)·sqrt(m)`) and
+  the state-block dimension `m` (= `num_states`). Callers can now
+  see how far over tolerance the probe solve landed without
+  re-deriving the threshold.
+- `SparseImplicitError::{StructuralFailure, FactorFailed}` gain
+  `source: Box<dyn std::error::Error + Send + Sync + 'static>`;
+  `SparseImplicitError` now implements
+  `std::error::Error::source()` returning the underlying
+  `faer::sparse::CreationError` / `LuError`. Previously
+  `map_err(|_| ...)` discarded the faer diagnostic; callers
+  hitting `FactorFailed` typically get `SymbolicSingular { index }`
+  from the chained source, pinpointing the failing column.
+- `SparseImplicitError` no longer derives `Clone` (the new
+  `Box<dyn Error>` field on two variants is not `Clone`). No
+  workspace consumer cloned the type.
+- `echidna-optim` version bumped to `0.11.0` to reflect the
+  breaking variant-field additions (literal construction of
+  `Residual`, `StructuralFailure`, `FactorFailed`, and the three
+  `*Divergence` variants now requires the new fields), plus the
+  removal of the `Clone` derive on `SparseImplicitError`.
 
 ## [0.8.2] - 2026-04-12
 
