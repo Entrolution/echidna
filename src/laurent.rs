@@ -18,6 +18,36 @@ use std::fmt::{self, Display};
 use crate::taylor_ops;
 use crate::Float;
 
+/// Shift a Laurent coefficient array right by `from_pole - to_pole`
+/// positions, zero-filling the leading slots. Used by `Laurent::hypot`
+/// to align two operands at a common pole order before delegating to
+/// `taylor_ops::taylor_hypot`.
+///
+/// If the shift is `>= K`, the entire rebased array is zeros. This
+/// matches the current Laurent `*` / `+` truncation semantics on
+/// fixed-K storage when pole-order differences exceed the available
+/// coefficient window.
+///
+/// `saturating_sub` guards against `i32::MIN` / `i32::MAX` wrap on
+/// subtraction — analogous in spirit (not mechanism) to the
+/// `checked_neg` guard in [`Laurent::recip`], which handles the same
+/// family of pole_order overflow hazards via a different arithmetic
+/// routine.
+#[inline]
+fn rebase_to<F: Float, const K: usize>(coeffs: &[F; K], from_pole: i32, to_pole: i32) -> [F; K] {
+    debug_assert!(
+        from_pole >= to_pole,
+        "rebase_to only shifts right; callers must pass from_pole >= to_pole"
+    );
+    let delta = from_pole.saturating_sub(to_pole) as usize;
+    let mut out = [F::zero(); K];
+    if delta >= K {
+        return out;
+    }
+    out[delta..].copy_from_slice(&coeffs[..K - delta]);
+    out
+}
+
 /// Stack-allocated Laurent coefficient vector.
 ///
 /// `K` = total coefficient count. `coeffs[i]` = coefficient of `t^(pole_order + i)`.
@@ -757,45 +787,65 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     }
 
     /// Euclidean distance: sqrt(self^2 + other^2).
+    ///
+    /// Delegates the coefficient-level rescale + sum-of-squares + sqrt
+    /// arithmetic to [`taylor_ops::taylor_hypot`], the shared CPU HYPOT
+    /// kernel also used by `Taylor::hypot` and `TaylorDyn::hypot`. The
+    /// Laurent-specific prelude rebases both operands to a common pole
+    /// order (`min(self.pole_order, other.pole_order)`) so the
+    /// coefficient arrays are directly comparable before entering the
+    /// kernel; the final `normalize()` restores the Laurent invariant
+    /// (`coeffs[0] != 0` for non-zero series) and shifts `pole_order`
+    /// up when the kernel's `scale == 0` recursive shift-and-square
+    /// produces a leading-zero result.
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
-        // Rescale both operands by `s = max(|self.coeffs.max_abs()|,
-        // |other.coeffs.max_abs()|)` before squaring. With `a' = a/s` and
-        // `b' = b/s`, `a'² + b'²` stays bounded, so the sqrt never sees an
-        // overflowed input. Multiply the result back by `s` to recover the
-        // true hypot magnitude. Mirrors the rescaling trick already used in
-        // `taylor_hypot`.
+        // Both-zero short-circuit: `hypot(0, 0) = 0` in the scalar
+        // sense, but the Laurent representation at the cone-point
+        // singularity is ambiguous. The underlying `taylor_hypot`
+        // kernel produces `[0, Inf, Inf, ...]` (its "singular-
+        // derivative convention at a true zero"), which after
+        // `normalize()` on fixed-K Laurent storage degenerates into
+        // a nonsense pole-of-order-1 with Inf coefficients rather
+        // than the expected clean zero. Short-circuit here so
+        // `Laurent::zero().hypot(Laurent::zero()) == Laurent::zero()`
+        // stays an invariant — the pure cone point carries no
+        // directional information that Laurent can meaningfully
+        // represent.
         //
-        // The common case (no overflow risk) also benefits: rescaling shortens
-        // the dynamic range that `taylor_mul`'s Cauchy product accumulates,
-        // reducing intermediate rounding.
-        let max_a = self
-            .coeffs
-            .iter()
-            .fold(F::zero(), |acc, &c| acc.max(c.abs()));
-        let max_b = other
-            .coeffs
-            .iter()
-            .fold(F::zero(), |acc, &c| acc.max(c.abs()));
-        let scale = max_a.max(max_b);
-        if scale == F::zero() {
-            // Both operands identically zero.
+        // Note: the kernel's `scale == 0` recursive shift-and-square
+        // branch (which handles leading-zero-but-non-trivial higher-
+        // order seeds) is unreachable from normalized Laurent
+        // inputs — `Laurent::new`'s normalization strips leading
+        // zeros into the pole_order, so post-rebase either the
+        // lower-pole operand has a non-zero leading coefficient
+        // (driving a non-zero scale) or both operands are
+        // identically zero (caught above).
+        if self.is_all_zero() && other.is_all_zero() {
             return Self::zero();
         }
-        let inv_scale = F::one() / scale;
-        let mut a_scaled = self;
-        let mut b_scaled = other;
-        for c in a_scaled.coeffs.iter_mut() {
-            *c = *c * inv_scale;
-        }
-        for c in b_scaled.coeffs.iter_mut() {
-            *c = *c * inv_scale;
-        }
-        let mut result = (a_scaled * a_scaled + b_scaled * b_scaled).sqrt();
-        for c in result.coeffs.iter_mut() {
-            *c = *c * scale;
-        }
-        result
+
+        // Pole-order handling: hypot(a, b) has pole_order =
+        // min(a.pole_order, b.pole_order) — the more-negative pole
+        // dominates near t = 0. The higher-pole operand's
+        // coefficient array is shifted right so its t^k contribution
+        // lands at the right slot for the common pole. Coefficients
+        // that fall past the K-th position are truncated, matching
+        // the Laurent `*` / `+` truncation semantics on fixed-K
+        // storage.
+        let common_pole = self.pole_order.min(other.pole_order);
+        let a_rebased = rebase_to(&self.coeffs, self.pole_order, common_pole);
+        let b_rebased = rebase_to(&other.coeffs, other.pole_order, common_pole);
+        let mut out = [F::zero(); K];
+        let mut s1 = [F::zero(); K];
+        let mut s2 = [F::zero(); K];
+        taylor_ops::taylor_hypot(&a_rebased, &b_rebased, &mut out, &mut s1, &mut s2);
+        let mut l = Laurent {
+            coeffs: out,
+            pole_order: common_pole,
+        };
+        l.normalize();
+        l
     }
 
     /// Maximum of two values.

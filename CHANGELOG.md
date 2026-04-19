@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pattern.
 
 ### Changed (echidna)
+- `Laurent::hypot` now routes its rescale + sum-of-squares + sqrt
+  recipe through `taylor_ops::taylor_hypot`, the shared CPU HYPOT
+  kernel already used by `Taylor::hypot` and `TaylorDyn::hypot`.
+  Eliminates the last CPU HYPOT implementation outside the shared
+  kernel. Public signature unchanged; the common matched-pole-order
+  case produces identical output. Mismatched pole orders are
+  handled by an explicit rebase-to-`min(pole_order_a, pole_order_b)`
+  prelude that shifts the higher-pole operand's coefficient array
+  right by the delta (zero-filling leading slots, truncating past
+  index `K-1`) — matches the Laurent `*` / `+` truncation semantics.
+  The cone-singularity case `hypot(zero, zero)` short-circuits
+  ahead of the kernel call so the zero Laurent stays all-zero
+  (delegating through the kernel would produce a pole-of-order-1
+  with Inf coefficients after `normalize()` — nonsense for the
+  cone point). Note: the kernel's `scale == 0` recursive shift-
+  and-square branch is unreachable from normalized Laurent inputs
+  (`Laurent::new`'s normalization absorbs leading zeros into
+  `pole_order`), so it has no Laurent-level behavioural effect.
 - **GPU Taylor jet `HYPOT` higher-order coefficients** now match CPU
   `Taylor::hypot` via max-rescale across both WGSL and CUDA codegen
   (`src/gpu/taylor_codegen.rs`). Pre-WS2, the primal was patched

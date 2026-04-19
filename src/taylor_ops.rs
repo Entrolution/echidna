@@ -684,8 +684,20 @@ pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 
 /// `c = hypot(a, b) = sqrt(a² + b²)`.
 ///
-/// Uses `scratch1` for a², `scratch2` for b², and the result scratch for a²+b².
-/// Rescales inputs by max(|a₀|, |b₀|) to avoid overflow/underflow in the intermediate a²+b².
+/// Shared CPU HYPOT kernel for jet-coefficient arrays. Used by
+/// [`crate::Taylor::hypot`], [`crate::TaylorDyn::hypot`], and
+/// (post-WS8) [`crate::Laurent::hypot`] — the Laurent caller first
+/// rebases operands to a common pole order so the coefficient
+/// arrays become directly comparable, then calls through here.
+///
+/// Uses `scratch1` for a², `scratch2` for b², and the result scratch
+/// for a²+b². Rescales inputs by `max(|a[0]|, |b[0]|)` (leading
+/// coefficients only) to avoid overflow/underflow in the intermediate
+/// a²+b². At `scale == 0` with non-zero higher-order seeds, performs
+/// a recursive shift-and-square: hypot(a, b) near t = 0 with both
+/// leading-zero operands equals `|t|·hypot(a(t)/t, b(t)/t)`, so the
+/// body unwinds to the correct Taylor expansion of that composed
+/// function. Mirrors `Taylor::abs` at the function-domain boundary.
 #[inline]
 pub fn taylor_hypot<F: Float>(
     a: &[F],
