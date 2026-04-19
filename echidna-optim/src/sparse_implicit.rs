@@ -19,12 +19,76 @@
 //! The [`SparseImplicitContext`] precomputes sparsity pattern, graph coloring, and
 //! COO index partitions so they can be reused across multiple evaluation points.
 
+use std::fmt;
+
 use echidna::sparse::{column_coloring, row_coloring, JacobianSparsityPattern};
 use echidna::BytecodeTape;
 
 use faer::linalg::solvers::Solve;
 use faer::sparse::SparseColMat;
 use faer::Col;
+
+/// Reason a sparse implicit-differentiation solve failed.
+///
+/// Marked `#[non_exhaustive]` so future variants can be added without
+/// breaking exhaustive `match`es. Numeric fields use `f64` to match the
+/// monomorphic `f64` API of this module.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum SparseImplicitError {
+    /// Constructing the sparse F_z matrix from triplets failed (e.g.
+    /// duplicate entries or pattern mismatch). Almost always indicates
+    /// a bug in the sparsity-pattern computation rather than user input.
+    StructuralFailure,
+    /// faer's sparse LU factorization itself returned an error
+    /// (typically signals an exact zero pivot detected during
+    /// elimination — i.e. F_z is exactly singular).
+    FactorFailed,
+    /// LU factorization succeeded but the solve produced a non-finite
+    /// solution to the mixed-sign probe — F_z is numerically singular
+    /// to working precision in the probed direction.
+    NumericSingular,
+    /// LU solve produced a finite solution, but `||F_z·x − rhs|| /
+    /// ||rhs|| = relative_residual` exceeds the
+    /// `sqrt(eps) · sqrt(m)` tolerance — F_z is finite but
+    /// effectively rank-deficient or extremely ill-conditioned.
+    Residual { relative_residual: f64 },
+}
+
+impl fmt::Display for SparseImplicitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SparseImplicitError::StructuralFailure => {
+                write!(f, "sparse_implicit: failed to build sparse F_z matrix")
+            }
+            SparseImplicitError::FactorFailed => {
+                write!(f, "sparse_implicit: sparse LU factorization failed (F_z singular)")
+            }
+            SparseImplicitError::NumericSingular => {
+                write!(
+                    f,
+                    "sparse_implicit: probe solve produced non-finite solution (F_z numerically singular)"
+                )
+            }
+            SparseImplicitError::Residual { relative_residual } => {
+                write!(
+                    f,
+                    "sparse_implicit: probe solve residual {relative_residual:.3e} exceeds tolerance (F_z ill-conditioned)"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SparseImplicitError {}
+
+// Compile-time check that `SparseImplicitError` stays `Send + Sync`. Future
+// variants carrying non-`Send`/`Sync` payloads will trigger a build failure
+// here rather than at the (often distant) call site.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<SparseImplicitError>();
+};
 
 /// Precomputed context for sparse implicit differentiation.
 ///
@@ -168,21 +232,21 @@ fn extract_fz_triplets(
 
 /// Build sparse F_z and compute LU factorization.
 ///
-/// Returns `None` if the matrix is singular or construction fails. Numeric
-/// singularity is detected by solving a test system and verifying both
-/// finiteness of the solution and that the residual `||F_z · x - rhs|| /
-/// ||rhs||` is small. The all-ones RHS of the previous probe passed
-/// trivially on matrices with a null space orthogonal to `1`, letting a
-/// near-singular F_z proceed into the downstream solve and return garbage
-/// tangents/adjoints.
+/// Returns `Err` if matrix construction or LU factorization fails, if
+/// the probe solve produces non-finite output, or if the relative
+/// residual exceeds the tolerance. Numeric singularity is detected by
+/// solving a test system with a mixed-sign RHS — this avoids the null-
+/// space direction an all-ones vector would hit for matrices like
+/// `diag(1,-1)` rotated into the state basis.
 fn build_fz_and_factor(
     ctx: &SparseImplicitContext,
     jac_values: &[f64],
-) -> Option<faer::sparse::linalg::solvers::Lu<usize, f64>> {
+) -> Result<faer::sparse::linalg::solvers::Lu<usize, f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let triplets = extract_fz_triplets(ctx, jac_values);
-    let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets).ok()?;
-    let lu = mat.sp_lu().ok()?;
+    let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets)
+        .map_err(|_| SparseImplicitError::StructuralFailure)?;
+    let lu = mat.sp_lu().map_err(|_| SparseImplicitError::FactorFailed)?;
 
     // Mixed-sign probe RHS — avoids the null-space direction an all-ones
     // vector would hit for matrices like `diag(1,-1)` rotated into the
@@ -193,7 +257,7 @@ fn build_fz_and_factor(
     let test_rhs = Col::<f64>::from_fn(m, |i| test_rhs_vec[i]);
     let test_sol = lu.solve(&test_rhs);
     if (0..m).any(|i| !test_sol[i].is_finite()) {
-        return None;
+        return Err(SparseImplicitError::NumericSingular);
     }
 
     // Residual check: compute `F_z · test_sol` via the COO F_z entries and
@@ -202,7 +266,7 @@ fn build_fz_and_factor(
     // (e.g., internal numerical issues that bypass faer's own singularity
     // detection). For faer's well-tested sparse LU the residual is
     // generally near machine-eps even on ill-conditioned matrices — the
-    // primary signal against singularity is `sp_lu().ok()?` above.
+    // primary signal against singularity is the `sp_lu()` error above.
     let test_sol_slice: Vec<f64> = (0..m).map(|i| test_sol[i]).collect();
     let mut applied = vec![0.0_f64; m];
     for &k in &ctx.fz_indices {
@@ -222,11 +286,15 @@ fn build_fz_and_factor(
     // a solve producing residuals many orders of magnitude above machine
     // precision is caught.
     let tol = (f64::EPSILON.sqrt()) * (m as f64).sqrt();
-    if !resid_sq.is_finite() || resid_sq > tol * tol * rhs_sq {
-        return None;
+    if !resid_sq.is_finite() {
+        return Err(SparseImplicitError::NumericSingular);
+    }
+    if resid_sq > tol * tol * rhs_sq {
+        let relative_residual = (resid_sq / rhs_sq).sqrt();
+        return Err(SparseImplicitError::Residual { relative_residual });
     }
 
-    Some(lu)
+    Ok(lu)
 }
 
 /// Compute F_x · v by iterating COO entries.
@@ -310,7 +378,8 @@ fn col_to_vec(col: &Col<f64>, len: usize) -> Vec<f64> {
 /// where F_z and F_x are computed via graph-coloring-compressed forward/reverse passes,
 /// and F_z is factorized using faer's sparse LU.
 ///
-/// Returns `None` if F_z is singular.
+/// Returns `Err(SparseImplicitError)` if F_z is singular or
+/// numerically degenerate; the variant pinpoints which check failed.
 ///
 /// # Panics
 ///
@@ -321,7 +390,7 @@ pub fn implicit_tangent_sparse(
     x: &[f64],
     x_dot: &[f64],
     ctx: &SparseImplicitContext,
-) -> Option<Vec<f64>> {
+) -> Result<Vec<f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
     assert_eq!(
@@ -358,7 +427,7 @@ pub fn implicit_tangent_sparse(
     let rhs = Col::<f64>::from_fn(m, |i| -fx_xdot[i]);
     let sol = lu.solve(&rhs);
 
-    Some(col_to_vec(&sol, m))
+    Ok(col_to_vec(&sol, m))
 }
 
 /// Compute the implicit adjoint `(dz*/dx)^T · z̄` using sparse Jacobian evaluation and sparse LU.
@@ -369,7 +438,8 @@ pub fn implicit_tangent_sparse(
 ///
 /// then computes `x̄ = -F_x^T · λ`.
 ///
-/// Returns `None` if F_z is singular.
+/// Returns `Err(SparseImplicitError)` if F_z is singular or
+/// numerically degenerate; the variant pinpoints which check failed.
 ///
 /// # Panics
 ///
@@ -380,7 +450,7 @@ pub fn implicit_adjoint_sparse(
     x: &[f64],
     z_bar: &[f64],
     ctx: &SparseImplicitContext,
-) -> Option<Vec<f64>> {
+) -> Result<Vec<f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
     assert_eq!(
@@ -419,7 +489,7 @@ pub fn implicit_adjoint_sparse(
     let fx_t_lambda = fx_transpose_matvec(ctx, &jac_values, &lambda_vec);
     let x_bar: Vec<f64> = fx_t_lambda.iter().map(|&v| -v).collect();
 
-    Some(x_bar)
+    Ok(x_bar)
 }
 
 /// Compute the full implicit Jacobian `dz*/dx` (m × n) using sparse LU.
@@ -432,7 +502,8 @@ pub fn implicit_adjoint_sparse(
 /// the pre-grouped `fx_by_col` index.
 ///
 /// Returns a dense m×n matrix since `dz*/dx` has no sparsity guarantee.
-/// Returns `None` if F_z is singular.
+/// Returns `Err(SparseImplicitError)` if F_z is singular or
+/// numerically degenerate; the variant pinpoints which check failed.
 ///
 /// # Panics
 ///
@@ -442,7 +513,7 @@ pub fn implicit_jacobian_sparse(
     z_star: &[f64],
     x: &[f64],
     ctx: &SparseImplicitContext,
-) -> Option<Vec<Vec<f64>>> {
+) -> Result<Vec<Vec<f64>>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
     assert_eq!(
@@ -483,5 +554,5 @@ pub fn implicit_jacobian_sparse(
         }
     }
 
-    Some(result)
+    Ok(result)
 }

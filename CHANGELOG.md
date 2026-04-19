@@ -18,12 +18,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most of its work in fallback or filter paths.
 - New public types: `SolverDiagnostics` (enum), `LbfgsDiagnostics`,
   `NewtonDiagnostics`, `TrustRegionDiagnostics`.
+- `PiggybackError` enum (`piggyback` module) with variants
+  `PrimalDivergence { iteration }`, `TangentDivergence { iteration }`,
+  `AdjointDivergence { iteration }`, and
+  `MaxIterations { z_norm: Option<f64>, lam_norm: Option<f64> }`.
+  Implements `Display` + `std::error::Error`, `Send + Sync`,
+  `#[non_exhaustive]`.
+- `SparseImplicitError` enum (`sparse_implicit` module, gated on the
+  `sparse-implicit` feature) with variants `StructuralFailure`,
+  `FactorFailed`, `NumericSingular`, and
+  `Residual { relative_residual: f64 }`. Implements `Display` +
+  `std::error::Error`, `Send + Sync`, `#[non_exhaustive]`.
 
-### Changed (echidna-optim)
+### Changed (echidna-optim) — BREAKING
 - `OptimResult` is now `#[non_exhaustive]` so future field additions
   don't keep breaking downstream pattern-destructures. Construct
   results via the solver entry points (`lbfgs`, `newton`,
   `trust_region`); never with a struct literal.
+- `piggyback_tangent_solve`, `piggyback_adjoint_solve`, and
+  `piggyback_forward_adjoint_solve` now return
+  `Result<T, PiggybackError>` instead of `Option<T>`. Failure modes
+  that previously collapsed to `None` (primal divergence, tangent
+  divergence, adjoint divergence, max-iter exhaustion) are now
+  distinguishable so callers can decide whether to retry, re-formulate,
+  or give up. Migration: `.is_none()` → `.is_err()`,
+  `.unwrap()` / `.expect(...)` continue to work; callers that pattern-
+  matched on `Some(_) | None` now match on `Ok(_) | Err(_)`.
+- `implicit_tangent_sparse`, `implicit_adjoint_sparse`, and
+  `implicit_jacobian_sparse` now return
+  `Result<T, SparseImplicitError>` instead of `Option<T>`. The error
+  variant pinpoints whether failure was structural (matrix
+  construction), factor-failure (faer LU), numeric singularity (probe
+  produced non-finite output), or residual exceedance (probe finite
+  but `||F_z·x − rhs|| / ||rhs||` over `sqrt(eps)·sqrt(m)`). Same
+  migration path as the piggyback functions.
+- `echidna-optim` version bumped to `0.9.0` to reflect the breaking
+  return-type changes.
 
 ## [0.8.2] - 2026-04-12
 

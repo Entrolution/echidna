@@ -76,7 +76,7 @@ pub use line_search::ArmijoParams;
 pub use objective::{Objective, TapeObjective};
 pub use piggyback::{
     piggyback_adjoint_solve, piggyback_forward_adjoint_solve, piggyback_tangent_solve,
-    piggyback_tangent_step, piggyback_tangent_step_with_buf,
+    piggyback_tangent_step, piggyback_tangent_step_with_buf, PiggybackError,
 };
 pub use result::{
     LbfgsDiagnostics, NewtonDiagnostics, OptimResult, SolverDiagnostics, TerminationReason,
@@ -88,5 +88,5 @@ pub use solvers::trust_region::{trust_region, TrustRegionConfig};
 #[cfg(feature = "sparse-implicit")]
 pub use sparse_implicit::{
     implicit_adjoint_sparse, implicit_jacobian_sparse, implicit_tangent_sparse,
-    SparseImplicitContext,
+    SparseImplicitContext, SparseImplicitError,
 };
