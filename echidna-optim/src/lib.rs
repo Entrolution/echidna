@@ -70,6 +70,7 @@ pub mod sparse_implicit;
 pub use convergence::ConvergenceParams;
 pub use implicit::{
     implicit_adjoint, implicit_hessian, implicit_hvp, implicit_jacobian, implicit_tangent,
+    ImplicitError,
 };
 
 pub use line_search::ArmijoParams;

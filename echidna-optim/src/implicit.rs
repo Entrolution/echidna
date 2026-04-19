@@ -1,6 +1,59 @@
+use std::fmt;
+
 use echidna::{BytecodeTape, Dual, Float};
 
 use crate::linalg::{lu_back_solve, lu_factor, lu_solve};
+
+/// Reason a dense implicit-differentiation call failed.
+///
+/// Marked `#[non_exhaustive]` so future variants can be added without
+/// breaking exhaustive `match`es.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum ImplicitError {
+    /// `F_z` could not be used for a reliable solve. Fires in three
+    /// situations, currently collapsed under one name because the dense
+    /// LU does not expose which branch tripped:
+    ///
+    /// 1. **Structural singularity** — `linalg::lu_factor` encountered
+    ///    an exactly-zero pivot (e.g. a rank-deficient `F_z`).
+    /// 2. **Numeric singularity** — a pivot below `ε·n·‖F_z‖∞` (the
+    ///    relative threshold anchored on the matrix infinity norm).
+    /// 3. **Non-finite input or intermediate** — a NaN or ±Inf reached
+    ///    the LU pivot (rejected up-front by `lu_factor` to prevent
+    ///    silent NaN-tainted factors), or, for `implicit_hvp` /
+    ///    `implicit_hessian`, the nested-dual forward pass produced
+    ///    non-finite higher-order coefficients that would poison the
+    ///    back-solve output.
+    ///
+    /// `#[non_exhaustive]` leaves room to split these cases (or to
+    /// align with a future unified naming axis across dense and sparse
+    /// implicit modules) without a breaking change.
+    Singular,
+}
+
+impl fmt::Display for ImplicitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ImplicitError::Singular => {
+                write!(
+                    f,
+                    "implicit: F_z is singular, ill-conditioned, or produced a non-finite solve"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ImplicitError {}
+
+// Compile-time check that `ImplicitError` stays `Send + Sync`. Future
+// variants carrying non-`Send`/`Sync` payloads will trigger a build
+// failure here rather than at the (often distant) call site.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ImplicitError>();
+};
 
 /// Partition a full Jacobian `J_F` (m × (m+n)) into `F_z` (m × m) and `F_x` (m × n).
 ///
@@ -98,13 +151,13 @@ fn compute_partitioned_jacobian<F: Float>(
 /// The first `num_states` tape inputs are state variables `z`, the remaining are
 /// parameters `x`.
 ///
-/// Returns `None` if `F_z` is singular.
+/// Returns `Err(ImplicitError::Singular)` if `F_z` is singular.
 pub fn implicit_jacobian<F: Float>(
     tape: &mut BytecodeTape<F>,
     z_star: &[F],
     x: &[F],
     num_states: usize,
-) -> Option<Vec<Vec<F>>> {
+) -> Result<Vec<Vec<F>>, ImplicitError> {
     validate_inputs(tape, z_star, x, num_states);
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
 
@@ -112,7 +165,7 @@ pub fn implicit_jacobian<F: Float>(
     let n = x.len();
 
     // LU-factorize F_z once, then solve for each column of -F_x
-    let factors = lu_factor(&f_z)?;
+    let factors = lu_factor(&f_z).ok_or(ImplicitError::Singular)?;
 
     // Build result column by column: solve F_z · col_j = -F_x[:, j]
     let mut result = vec![vec![F::zero(); n]; m];
@@ -124,7 +177,7 @@ pub fn implicit_jacobian<F: Float>(
         }
     }
 
-    Some(result)
+    Ok(result)
 }
 
 /// Compute the implicit tangent `dz*/dx · x_dot` (m-vector).
@@ -135,14 +188,14 @@ pub fn implicit_jacobian<F: Float>(
 /// This solves a single linear system rather than computing the full Jacobian,
 /// which is more efficient when only one direction is needed.
 ///
-/// Returns `None` if `F_z` is singular.
+/// Returns `Err(ImplicitError::Singular)` if `F_z` is singular.
 pub fn implicit_tangent<F: Float>(
     tape: &mut BytecodeTape<F>,
     z_star: &[F],
     x: &[F],
     x_dot: &[F],
     num_states: usize,
-) -> Option<Vec<F>> {
+) -> Result<Vec<F>, ImplicitError> {
     assert_eq!(
         x_dot.len(),
         x.len(),
@@ -168,7 +221,7 @@ pub fn implicit_tangent<F: Float>(
     let neg_fx_xdot: Vec<F> = fx_xdot.iter().map(|&v| F::zero() - v).collect();
 
     // Solve F_z · z_dot = -(F_x · x_dot)
-    lu_solve(&f_z, &neg_fx_xdot)
+    lu_solve(&f_z, &neg_fx_xdot).ok_or(ImplicitError::Singular)
 }
 
 /// Compute the implicit adjoint `(dz*/dx)^T · z_bar` (n-vector).
@@ -179,14 +232,14 @@ pub fn implicit_tangent<F: Float>(
 /// This is the reverse-mode (adjoint) form, useful when `n > m` or when
 /// propagating gradients backward through an implicit layer.
 ///
-/// Returns `None` if `F_z` is singular.
+/// Returns `Err(ImplicitError::Singular)` if `F_z` is singular.
 pub fn implicit_adjoint<F: Float>(
     tape: &mut BytecodeTape<F>,
     z_star: &[F],
     x: &[F],
     z_bar: &[F],
     num_states: usize,
-) -> Option<Vec<F>> {
+) -> Result<Vec<F>, ImplicitError> {
     assert_eq!(
         z_bar.len(),
         num_states,
@@ -202,7 +255,7 @@ pub fn implicit_adjoint<F: Float>(
 
     // Solve F_z^T · lambda = z_bar
     let f_z_t = transpose(&f_z);
-    let lambda = lu_solve(&f_z_t, z_bar)?;
+    let lambda = lu_solve(&f_z_t, z_bar).ok_or(ImplicitError::Singular)?;
 
     // Compute x_bar = -F_x^T · lambda
     let f_x_t = transpose(&f_x);
@@ -213,7 +266,7 @@ pub fn implicit_adjoint<F: Float>(
         }
     }
 
-    Some(x_bar)
+    Ok(x_bar)
 }
 
 /// Compute the implicit Hessian-vector-vector product `d²z*/dx² · v · w` (m-vector).
@@ -228,7 +281,7 @@ pub fn implicit_adjoint<F: Float>(
 /// Uses nested `Dual<Dual<F>>` forward passes to compute the second-order correction
 /// in a single O(tape_length) pass per direction pair.
 ///
-/// Returns `None` if `F_z` is singular.
+/// Returns `Err(ImplicitError::Singular)` if `F_z` is singular.
 pub fn implicit_hvp<F: Float>(
     tape: &mut BytecodeTape<F>,
     z_star: &[F],
@@ -236,7 +289,7 @@ pub fn implicit_hvp<F: Float>(
     v: &[F],
     w: &[F],
     num_states: usize,
-) -> Option<Vec<F>> {
+) -> Result<Vec<F>, ImplicitError> {
     let n = x.len();
     let m = num_states;
     assert_eq!(
@@ -256,7 +309,7 @@ pub fn implicit_hvp<F: Float>(
     validate_inputs(tape, z_star, x, num_states);
 
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
-    let factors = lu_factor(&f_z)?;
+    let factors = lu_factor(&f_z).ok_or(ImplicitError::Singular)?;
 
     // First-order sensitivities: ż_v = -F_z^{-1} · (F_x · v)
     let mut fx_v = vec![F::zero(); m];
@@ -300,7 +353,18 @@ pub fn implicit_hvp<F: Float>(
     let neg_rhs: Vec<F> = rhs.iter().map(|&val| F::zero() - val).collect();
     let h = lu_back_solve(&factors, &neg_rhs);
 
-    Some(h)
+    // Guard against non-finite output. `forward_tangent` is an infallible
+    // straight-line pass; if any tape op on the `Dual<Dual<F>>` inputs
+    // produced NaN or ±Inf (e.g. a pathological higher-order derivative
+    // at a function-domain boundary), it lands in `buf[idx].eps.eps`,
+    // flows into the back-solve, and without this check would escape as
+    // `Ok(vec![NaN, ...])` — violating the contract that `Ok` implies a
+    // finite result.
+    if h.iter().any(|v| !v.is_finite()) {
+        return Err(ImplicitError::Singular);
+    }
+
+    Ok(h)
 }
 
 /// Compute the full implicit Hessian tensor `d²z*/dx²` (m × n × n).
@@ -311,19 +375,19 @@ pub fn implicit_hvp<F: Float>(
 /// Cost: `n(n+1)/2` nested `Dual<Dual<F>>` forward passes plus `n(n+1)/2` back-solves,
 /// all sharing a single LU factorization of `F_z`.
 ///
-/// Returns `None` if `F_z` is singular.
+/// Returns `Err(ImplicitError::Singular)` if `F_z` is singular.
 pub fn implicit_hessian<F: Float>(
     tape: &mut BytecodeTape<F>,
     z_star: &[F],
     x: &[F],
     num_states: usize,
-) -> Option<Vec<Vec<Vec<F>>>> {
+) -> Result<Vec<Vec<Vec<F>>>, ImplicitError> {
     let n = x.len();
     let m = num_states;
     validate_inputs(tape, z_star, x, num_states);
 
     let (f_z, f_x) = compute_partitioned_jacobian(tape, z_star, x, num_states);
-    let factors = lu_factor(&f_z)?;
+    let factors = lu_factor(&f_z).ok_or(ImplicitError::Singular)?;
 
     // First-order sensitivity columns: S[:,j] = -F_z^{-1} · F_x[:,j]
     let mut sens_cols: Vec<Vec<F>> = Vec::with_capacity(n);
@@ -362,6 +426,14 @@ pub fn implicit_hessian<F: Float>(
             let neg_rhs: Vec<F> = rhs.iter().map(|&val| F::zero() - val).collect();
             let h = lu_back_solve(&factors, &neg_rhs);
 
+            // Same non-finite guard as `implicit_hvp`. A single bad (j, k)
+            // pair from a pathological higher-order derivative would
+            // otherwise corrupt one symmetric plane of the returned tensor
+            // while leaving the rest apparently valid.
+            if h.iter().any(|v| !v.is_finite()) {
+                return Err(ImplicitError::Singular);
+            }
+
             for i in 0..m {
                 result[i][j][k] = h[i];
                 result[i][k][j] = h[i]; // Symmetric
@@ -369,5 +441,5 @@ pub fn implicit_hessian<F: Float>(
         }
     }
 
-    Some(result)
+    Ok(result)
 }

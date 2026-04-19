@@ -74,6 +74,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FactorFailed`, `NumericSingular`, and
   `Residual { relative_residual: f64 }`. Implements `Display` +
   `std::error::Error`, `Send + Sync`, `#[non_exhaustive]`.
+- `ImplicitError` enum (`implicit` module) with a `Singular` variant.
+  Implements `Display` + `std::error::Error`, `Send + Sync`,
+  `#[non_exhaustive]`. The single variant collapses three failure
+  modes that the dense LU does not currently distinguish:
+  exactly-zero pivot (structural), pivot below `ε·n·‖F_z‖∞`
+  (numerical), or non-finite pivot / second-order RHS (NaN / ±Inf
+  caught by the newly added finite-pivot guard in `lu_factor` and by
+  post-solve guards in `implicit_hvp` / `implicit_hessian`). Sparse's
+  richer variant set doesn't carry over because dense runs only one
+  pivot-level check; future subdivision remains additive.
+
+### Fixed (echidna-optim)
+- `linalg::lu_factor` now rejects non-finite pivots (NaN / ±Inf) up
+  front. IEEE comparisons against NaN return `false`, so without this
+  guard a NaN pivot silently passed both the exact-zero and
+  tolerance checks and propagated through the stored LU factors as a
+  successful solve — callers downstream (including the dense
+  `implicit_*` entry points and the Newton solver) then returned
+  NaN-tainted results under an `Ok` / `Some` label. A NaN / ±Inf
+  pivot now short-circuits to `None`, surfaced to `implicit_*`
+  callers as `ImplicitError::Singular`. `implicit_hvp` and
+  `implicit_hessian` additionally check their back-solve output for
+  non-finite entries, catching NaN produced inside the nested-dual
+  forward pass (e.g. at function-domain boundaries) that wouldn't
+  reach `lu_factor`.
 
 ### Changed (echidna-optim) — BREAKING
 - `OptimResult` is now `#[non_exhaustive]` so future field additions
@@ -97,7 +122,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produced non-finite output), or residual exceedance (probe finite
   but `||F_z·x − rhs|| / ||rhs||` over `sqrt(eps)·sqrt(m)`). Same
   migration path as the piggyback functions.
-- `echidna-optim` version bumped to `0.9.0` to reflect the breaking
+- `implicit_tangent`, `implicit_adjoint`, `implicit_jacobian`,
+  `implicit_hvp`, and `implicit_hessian` now return
+  `Result<T, ImplicitError>` instead of `Option<T>`, closing the API
+  asymmetry with the sparse counterparts shipped alongside. Same
+  migration mechanic as the piggyback / sparse_implicit conversions:
+  `.is_none()` → `.is_err()`; `.unwrap()` / `.expect(...)` continue
+  to work; callers that pattern-matched on `Some(_) | None` now
+  match on `Ok(_) | Err(_)`.
+- `echidna-optim` version bumped to `0.10.0` to reflect the breaking
   return-type changes.
 
 ## [0.8.2] - 2026-04-12
