@@ -78,7 +78,10 @@ pub use piggyback::{
     piggyback_adjoint_solve, piggyback_forward_adjoint_solve, piggyback_tangent_solve,
     piggyback_tangent_step, piggyback_tangent_step_with_buf,
 };
-pub use result::{OptimResult, TerminationReason};
+pub use result::{
+    LbfgsDiagnostics, NewtonDiagnostics, OptimResult, SolverDiagnostics, TerminationReason,
+    TrustRegionDiagnostics,
+};
 pub use solvers::lbfgs::{lbfgs, LbfgsConfig};
 pub use solvers::newton::{newton, NewtonConfig};
 pub use solvers::trust_region::{trust_region, TrustRegionConfig};

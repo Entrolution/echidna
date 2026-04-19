@@ -4,7 +4,7 @@ use crate::convergence::{dot, norm, ConvergenceParams};
 use crate::linalg::lu_solve;
 use crate::line_search::{backtracking_armijo, ArmijoParams};
 use crate::objective::Objective;
-use crate::result::{OptimResult, TerminationReason};
+use crate::result::{NewtonDiagnostics, OptimResult, SolverDiagnostics, TerminationReason};
 
 /// Configuration for the Newton solver.
 #[derive(Debug, Clone)]
@@ -45,6 +45,7 @@ pub fn newton<F: Float, O: Objective<F>>(
     config: &NewtonConfig<F>,
 ) -> OptimResult<F> {
     let n = x0.len();
+    let mut diag = NewtonDiagnostics::default();
 
     if config.convergence.max_iter == 0 {
         return OptimResult {
@@ -55,6 +56,7 @@ pub fn newton<F: Float, O: Objective<F>>(
             iterations: 0,
             func_evals: 0,
             termination: TerminationReason::NumericalError,
+            diagnostics: SolverDiagnostics::Newton(diag),
         };
     }
 
@@ -73,6 +75,7 @@ pub fn newton<F: Float, O: Objective<F>>(
             iterations: 0,
             func_evals,
             termination: TerminationReason::NumericalError,
+            diagnostics: SolverDiagnostics::Newton(diag),
         };
     }
 
@@ -85,6 +88,7 @@ pub fn newton<F: Float, O: Objective<F>>(
             iterations: 0,
             func_evals,
             termination: TerminationReason::GradientNorm,
+            diagnostics: SolverDiagnostics::Newton(diag),
         };
     }
 
@@ -102,7 +106,10 @@ pub fn newton<F: Float, O: Objective<F>>(
         // `LineSearchFailed` at the first saddle.
         let delta = match raw_delta {
             Some(d) if dot(&grad, &d) < F::zero() => d,
-            _ => neg_grad.clone(),
+            _ => {
+                diag.fallback_steps += 1;
+                neg_grad.clone()
+            }
         };
 
         // Line search along Newton (or fallback steepest-descent) direction
@@ -117,10 +124,12 @@ pub fn newton<F: Float, O: Objective<F>>(
                     iterations: iter,
                     func_evals,
                     termination: TerminationReason::LineSearchFailed,
+                    diagnostics: SolverDiagnostics::Newton(diag),
                 };
             }
         };
         func_evals += ls.evals;
+        diag.line_search_backtracks += ls.evals.saturating_sub(1);
 
         // Update x
         let mut step_norm_sq = F::zero();
@@ -150,6 +159,7 @@ pub fn newton<F: Float, O: Objective<F>>(
                 iterations: iter + 1,
                 func_evals,
                 termination: TerminationReason::NumericalError,
+                diagnostics: SolverDiagnostics::Newton(diag),
             };
         }
 
@@ -163,6 +173,7 @@ pub fn newton<F: Float, O: Objective<F>>(
                 iterations: iter + 1,
                 func_evals,
                 termination: TerminationReason::GradientNorm,
+                diagnostics: SolverDiagnostics::Newton(diag),
             };
         }
 
@@ -175,6 +186,7 @@ pub fn newton<F: Float, O: Objective<F>>(
                 iterations: iter + 1,
                 func_evals,
                 termination: TerminationReason::StepSize,
+                diagnostics: SolverDiagnostics::Newton(diag),
             };
         }
 
@@ -193,6 +205,7 @@ pub fn newton<F: Float, O: Objective<F>>(
                 iterations: iter + 1,
                 func_evals,
                 termination: TerminationReason::FunctionChange,
+                diagnostics: SolverDiagnostics::Newton(diag),
             };
         }
     }
@@ -205,6 +218,7 @@ pub fn newton<F: Float, O: Objective<F>>(
         iterations: config.convergence.max_iter,
         func_evals,
         termination: TerminationReason::MaxIterations,
+        diagnostics: SolverDiagnostics::Newton(diag),
     }
 }
 

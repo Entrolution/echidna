@@ -2,7 +2,7 @@ use num_traits::Float;
 
 use crate::convergence::{dot, norm, ConvergenceParams};
 use crate::objective::Objective;
-use crate::result::{OptimResult, TerminationReason};
+use crate::result::{OptimResult, SolverDiagnostics, TerminationReason, TrustRegionDiagnostics};
 
 /// Configuration for the trust-region solver.
 #[derive(Debug, Clone)]
@@ -60,6 +60,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
     config: &TrustRegionConfig<F>,
 ) -> OptimResult<F> {
     let n = x0.len();
+    let mut diag = TrustRegionDiagnostics::default();
 
     if config.convergence.max_iter == 0
         || config.initial_radius <= F::zero()
@@ -73,6 +74,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             iterations: 0,
             func_evals: 0,
             termination: TerminationReason::NumericalError,
+            diagnostics: SolverDiagnostics::TrustRegion(diag),
         };
     }
 
@@ -97,6 +99,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             iterations: 0,
             func_evals,
             termination: TerminationReason::NumericalError,
+            diagnostics: SolverDiagnostics::TrustRegion(diag),
         };
     }
 
@@ -109,6 +112,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             iterations: 0,
             func_evals,
             termination: TerminationReason::GradientNorm,
+            diagnostics: SolverDiagnostics::TrustRegion(diag),
         };
     }
 
@@ -117,8 +121,11 @@ pub fn trust_region<F: Float, O: Objective<F>>(
     let three_quarter = F::one() - quarter;
 
     for iter in 0..config.convergence.max_iter {
-        // Solve the trust-region subproblem with Steihaug-Toint CG
-        let step = steihaug_cg(obj, &x, &grad, radius, max_cg, &mut func_evals);
+        // Solve the trust-region subproblem with Steihaug-Toint CG.
+        // Returns `(step, cg_iters)` so we can accumulate inner-loop
+        // counts into `TrustRegionDiagnostics::cg_inner_iters`.
+        let (step, cg_iters) = steihaug_cg(obj, &x, &grad, radius, max_cg, &mut func_evals);
+        diag.cg_inner_iters += cg_iters;
 
         // Predicted reduction: -g^T s - 0.5 * s^T H s
         // Note: this recomputes H*s outside of CG. For stateful objectives (e.g.,
@@ -155,12 +162,14 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                 iterations: iter + 1,
                 func_evals,
                 termination: TerminationReason::NumericalError,
+                diagnostics: SolverDiagnostics::TrustRegion(diag),
             };
         }
 
         // Guard: reject step unconditionally when predicted reduction is non-positive.
         // The quadratic model predicts the step makes things worse — the subproblem is unreliable.
         if predicted <= F::zero() {
+            diag.radius_shrinks_bad_model += 1;
             let shrunk = quarter * radius;
             if shrunk < config.min_radius {
                 return OptimResult {
@@ -171,6 +180,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                     iterations: iter + 1,
                     func_evals,
                     termination: TerminationReason::NumericalError,
+                    diagnostics: SolverDiagnostics::TrustRegion(diag),
                 };
             }
             radius = shrunk;
@@ -198,6 +208,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         // solver now reports `NumericalError` instead of silently clamping
         // to `min_radius` and spinning to `MaxIterations`.
         if rho < quarter {
+            diag.radius_shrinks_low_rho += 1;
             let shrunk = quarter * radius;
             if shrunk < config.min_radius {
                 return OptimResult {
@@ -208,6 +219,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                     iterations: iter + 1,
                     func_evals,
                     termination: TerminationReason::NumericalError,
+                    diagnostics: SolverDiagnostics::TrustRegion(diag),
                 };
             }
             radius = shrunk;
@@ -235,6 +247,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                     iterations: iter + 1,
                     func_evals,
                     termination: TerminationReason::NumericalError,
+                    diagnostics: SolverDiagnostics::TrustRegion(diag),
                 };
             }
 
@@ -248,6 +261,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                     iterations: iter + 1,
                     func_evals,
                     termination: TerminationReason::GradientNorm,
+                    diagnostics: SolverDiagnostics::TrustRegion(diag),
                 };
             }
 
@@ -260,6 +274,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                     iterations: iter + 1,
                     func_evals,
                     termination: TerminationReason::StepSize,
+                    diagnostics: SolverDiagnostics::TrustRegion(diag),
                 };
             }
 
@@ -279,6 +294,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                     iterations: iter + 1,
                     func_evals,
                     termination: TerminationReason::FunctionChange,
+                    diagnostics: SolverDiagnostics::TrustRegion(diag),
                 };
             }
         }
@@ -293,13 +309,15 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         iterations: config.convergence.max_iter,
         func_evals,
         termination: TerminationReason::MaxIterations,
+        diagnostics: SolverDiagnostics::TrustRegion(diag),
     }
 }
 
 /// Steihaug-Toint truncated CG for the trust-region subproblem.
 ///
 /// Approximately minimizes `m(s) = g^T s + 0.5 s^T H s` subject to `||s|| <= radius`.
-/// Returns the step `s`.
+/// Returns `(step, cg_iters)` where `cg_iters` is the inner-loop iteration
+/// count surfaced into `TrustRegionDiagnostics::cg_inner_iters` by the caller.
 fn steihaug_cg<F: Float, O: Objective<F>>(
     obj: &mut O,
     x: &[F],
@@ -307,7 +325,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
     radius: F,
     max_iter: usize,
     func_evals: &mut usize,
-) -> Vec<F> {
+) -> (Vec<F>, usize) {
     let n = grad.len();
     let mut s = vec![F::zero(); n];
     let mut r: Vec<F> = grad.to_vec();
@@ -320,7 +338,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
     // true zero-residual case is caught by the loop body on iteration 0.
     let cg_tol = F::epsilon().sqrt() * r_dot_r.sqrt();
 
-    for _ in 0..max_iter {
+    for cg_iter in 0..max_iter {
         // H * d via hvp
         let (_, hd) = obj.hvp(x, &d);
         *func_evals += 1;
@@ -333,7 +351,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
             for i in 0..n {
                 s[i] = s[i] + tau * d[i];
             }
-            return s;
+            return (s, cg_iter + 1);
         }
 
         let alpha = r_dot_r / d_hd;
@@ -348,7 +366,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
             for i in 0..n {
                 s[i] = s[i] + tau * d[i];
             }
-            return s;
+            return (s, cg_iter + 1);
         }
 
         s = s_next;
@@ -360,7 +378,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
         let r_dot_r_new = dot(&r, &r);
 
         if r_dot_r_new.sqrt() < cg_tol {
-            return s;
+            return (s, cg_iter + 1);
         }
 
         let beta = r_dot_r_new / r_dot_r;
@@ -371,7 +389,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
         }
     }
 
-    s
+    (s, max_iter)
 }
 
 /// Find `tau > 0` such that `||s + tau * d|| = radius`.

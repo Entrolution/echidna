@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (echidna-optim)
+- `OptimResult.diagnostics: SolverDiagnostics` exposes per-solver
+  internal counts that were previously silent — curvature pair
+  acceptance / rejection / memory eviction in L-BFGS, gamma clamp
+  hits, line-search backtracks, Newton steepest-descent fallback
+  steps, and trust-region CG iterations and radius-shrink branch
+  counts (split into `bad_model` vs `low_rho`). Use these to detect
+  when a solver reports `GradientNorm` convergence but actually spent
+  most of its work in fallback or filter paths.
+- New public types: `SolverDiagnostics` (enum), `LbfgsDiagnostics`,
+  `NewtonDiagnostics`, `TrustRegionDiagnostics`.
+
+### Changed (echidna-optim)
+- `OptimResult` is now `#[non_exhaustive]` so future field additions
+  don't keep breaking downstream pattern-destructures. Construct
+  results via the solver entry points (`lbfgs`, `newton`,
+  `trust_region`); never with a struct literal.
+
 ## [0.8.2] - 2026-04-12
 
 ### Fixed
