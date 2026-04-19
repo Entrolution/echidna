@@ -46,7 +46,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-echidna = "0.8"
+echidna = "0.9"
 ```
 
 ### Gradient via reverse mode
@@ -157,7 +157,7 @@ assert!((d2_dxdy - 2.0).abs() < 1e-6);
 Enable features in `Cargo.toml`:
 
 ```toml
-echidna = { version = "0.4", features = ["bytecode", "taylor"] }
+echidna = { version = "0.9", features = ["bytecode", "taylor"] }
 ```
 
 ## API
@@ -308,7 +308,7 @@ The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and im
 
 ```toml
 [dependencies]
-echidna-optim = "0.8"
+echidna-optim = "0.12"
 ```
 
 Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).

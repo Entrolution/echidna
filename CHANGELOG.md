@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-19
+
+**Coordinated release:** `echidna` 0.9.0 and `echidna-optim` 0.12.0.
+`echidna-optim`'s dep on `echidna` updated from `0.8.2` to `0.9.0`.
+
 ### Added (echidna)
 - `echidna::assert_send_sync!` macro (`#[macro_export]`) for
   compile-time `Send + Sync + 'static` assertions on error types.

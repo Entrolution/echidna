@@ -686,9 +686,9 @@ pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 ///
 /// Shared CPU HYPOT kernel for jet-coefficient arrays. Used by
 /// [`crate::Taylor::hypot`], [`crate::TaylorDyn::hypot`], and
-/// (post-WS8) [`crate::Laurent::hypot`] — the Laurent caller first
-/// rebases operands to a common pole order so the coefficient
-/// arrays become directly comparable, then calls through here.
+/// [`crate::Laurent::hypot`]. The Laurent caller first rebases
+/// operands to a common pole order so the coefficient arrays
+/// become directly comparable, then calls through here.
 ///
 /// Uses `scratch1` for a², `scratch2` for b², and the result scratch
 /// for a²+b². Rescales inputs by `max(|a[0]|, |b[0]|)` (leading
