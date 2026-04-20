@@ -100,6 +100,25 @@ cargo bench --features gpu-wgpu --bench gpu
 cargo bench --features bytecode --bench comparison
 ```
 
+### Formal Specifications
+
+Two subsystems have TLA+ specifications under `specs/` that are model-checked in CI:
+
+- `src/checkpoint.rs` — gradient checkpointing (Revolve, online, hints)
+- `src/bytecode_tape/optimize.rs` — bytecode tape optimizer (CSE + DCE, idempotency)
+
+The [`.github/workflows/specs.yml`](.github/workflows/specs.yml) job runs automatically on any push or PR touching `specs/**` or either source file. If you change these files, expect the specs job to run — a failure means your change either broke an invariant or the spec needs updating alongside the code. Treat the two as a pair.
+
+To run the specs locally (requires Java 11+ and `tla2tools.jar` in `specs/`):
+
+```bash
+# Fastest (seconds each) — good for iterative work
+java -cp specs/tla2tools.jar tlc2.TLC -config specs/revolve/Revolve.cfg specs/revolve/Revolve.tla
+java -cp specs/tla2tools.jar tlc2.TLC -config specs/tape_optimizer/Idempotency.cfg specs/tape_optimizer/Idempotency.tla
+```
+
+See [`specs/README.md`](specs/README.md) for the full suite, invariant-to-code cross-reference, and recommended parameter sweeps.
+
 ### Security Audits
 
 Run dependency audits before submitting PRs:
@@ -125,6 +144,7 @@ cargo deny check
 - [ ] No clippy warnings
 - [ ] Documentation is updated if needed
 - [ ] CHANGELOG.md is updated for user-facing changes
+- [ ] If `src/checkpoint.rs` or `src/bytecode_tape/optimize.rs` changed, the TLA+ specs in `specs/` still pass (see [Formal Specifications](#formal-specifications))
 
 ### PR Description
 

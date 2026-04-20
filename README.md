@@ -1,6 +1,7 @@
 # echidna
 
 [![CI](https://github.com/Entrolution/echidna/actions/workflows/ci.yml/badge.svg)](https://github.com/Entrolution/echidna/actions/workflows/ci.yml)
+[![TLA+ Specs](https://github.com/Entrolution/echidna/actions/workflows/specs.yml/badge.svg)](https://github.com/Entrolution/echidna/actions/workflows/specs.yml)
 [![Crates.io](https://img.shields.io/crates/v/echidna.svg)](https://crates.io/crates/echidna)
 [![Docs.rs](https://docs.rs/echidna/badge.svg)](https://docs.rs/echidna)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
@@ -257,6 +258,15 @@ echidna uses a two-tier AD architecture:
 2. **Graph mode (BytecodeTape)**: `BReverse<F>` records operations to an SoA bytecode tape. The tape is recorded once and evaluated many times at different inputs. Optimization passes (CSE, DCE, algebraic simplification, constant folding) reduce tape size. The bytecode tape enables Hessians, sparse derivatives, GPU acceleration, checkpointing, nonsmooth AD, and cross-country elimination.
 
 Types compose via nesting: `Dual<BReverse<f64>>` gives forward-over-reverse for Hessian-vector products, `Taylor<BReverse<f64>, K>` gives Taylor-over-reverse, and `Dual<Dual<f64>>` gives forward-over-forward.
+
+## Formal Specifications
+
+Core algorithms are modelled in TLA+ and verified with the TLC model checker:
+
+- **Gradient checkpointing** (`src/checkpoint.rs`) — base Revolve, online thinning, and hint-based allocation, with budget, coverage, and spacing invariants.
+- **Bytecode tape optimizer** (`src/bytecode_tape/optimize.rs`) — CSE + DCE structural invariants and idempotency of `optimize(optimize(t)) = optimize(t)`.
+
+The specs run in CI on every change to `specs/**`, `src/checkpoint.rs`, or `src/bytecode_tape/optimize.rs` via the [TLA+ Specs workflow](.github/workflows/specs.yml), so the invariant-to-code cross-references stay honest. See [`specs/README.md`](specs/README.md) for the full cross-reference table and local model-checking instructions.
 
 ## Comparison
 
