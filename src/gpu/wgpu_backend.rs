@@ -54,8 +54,20 @@ impl WgpuContext {
             .await
             .ok()?;
 
+        // wgpu 29 tightened downlevel defaults — `max_storage_buffers_per_shader_stage`
+        // dropped. The tangent-reverse pipeline binds 13 storage buffers (5 in the
+        // tape layout + 8 in the tangent-reverse I/O layout); request that explicitly
+        // and fall back to whatever the adapter allows if it's higher.
+        let required_limits = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 13,
+            ..wgpu::Limits::downlevel_defaults()
+        }
+        .using_resolution(adapter.limits());
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_limits,
+                ..wgpu::DeviceDescriptor::default()
+            })
             .await
             .ok()?;
 
@@ -119,7 +131,10 @@ impl WgpuContext {
         // Forward pipeline
         let fwd_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_forward_pl"),
-            bind_group_layouts: &[&tape_bind_group_layout, &forward_io_bind_group_layout],
+            bind_group_layouts: &[
+                Some(&tape_bind_group_layout),
+                Some(&forward_io_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -140,7 +155,10 @@ impl WgpuContext {
         // Reverse pipeline
         let rev_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_reverse_pl"),
-            bind_group_layouts: &[&tape_bind_group_layout, &reverse_io_bind_group_layout],
+            bind_group_layouts: &[
+                Some(&tape_bind_group_layout),
+                Some(&reverse_io_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -173,7 +191,10 @@ impl WgpuContext {
 
         let tfwd_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_tangent_fwd_pl"),
-            bind_group_layouts: &[&tape_bind_group_layout, &tangent_fwd_io_bind_group_layout],
+            bind_group_layouts: &[
+                Some(&tape_bind_group_layout),
+                Some(&tangent_fwd_io_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -210,7 +231,10 @@ impl WgpuContext {
 
         let trev_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_tangent_rev_pl"),
-            bind_group_layouts: &[&tape_bind_group_layout, &tangent_rev_io_bind_group_layout],
+            bind_group_layouts: &[
+                Some(&tape_bind_group_layout),
+                Some(&tangent_rev_io_bind_group_layout),
+            ],
             immediate_size: 0,
         });
 
@@ -244,8 +268,8 @@ impl WgpuContext {
         let taylor2_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_taylor_fwd_2nd_pl"),
             bind_group_layouts: &[
-                &tape_bind_group_layout,
-                &taylor_fwd_2nd_io_bind_group_layout,
+                Some(&tape_bind_group_layout),
+                Some(&taylor_fwd_2nd_io_bind_group_layout),
             ],
             immediate_size: 0,
         });
