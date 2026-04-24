@@ -508,8 +508,8 @@ mod tests {
         let dispatch_limit = MAX_WORKGROUPS_PER_DIM * TAYLOR_WORKGROUP_SIZE;
         chunk_size = chunk_size.min(dispatch_limit);
         let nv_k = (num_variables as u64) * 3;
-        if nv_k > 0 {
-            chunk_size = chunk_size.min(u32::MAX as u64 / nv_k);
+        if let Some(cap) = (u32::MAX as u64).checked_div(nv_k) {
+            chunk_size = chunk_size.min(cap);
         }
         Some(chunk_size as u32)
     }
@@ -550,7 +550,7 @@ mod tests {
     fn chunking_single_variable() {
         let chunk = compute_chunk_size(1, WGPU_MAX_BUFFER_BYTES).unwrap();
         assert!(chunk > 0, "should handle single variable");
-        let product = chunk as u64 * 1 * 3;
+        let product = (chunk as u64) * 3;
         assert!(product <= u32::MAX as u64);
     }
 

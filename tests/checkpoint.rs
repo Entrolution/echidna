@@ -1,5 +1,5 @@
 #![cfg(feature = "bytecode")]
-
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 use echidna::{record, BReverse};
 use num_traits::Float;
 use std::path::Path;
@@ -59,7 +59,7 @@ fn linear_step() {
     let loss = |x: &[BReverse<f64>]| {
         let mut s = x[0];
         for i in 1..x.len() {
-            s = s + x[i];
+            s += x[i];
         }
         s
     };
@@ -171,7 +171,7 @@ fn euler_step_ode() {
     let loss = |x: &[BReverse<f64>]| {
         let mut s = x[0];
         for i in 1..x.len() {
-            s = s + x[i];
+            s += x[i];
         }
         s
     };
@@ -349,7 +349,7 @@ fn online_convergence() {
         xp[i] += eps;
         xm[i] -= eps;
 
-        let factor = (1.0 - h).powi(steps as i32);
+        let factor = (1.0 - h).powi(steps);
         let sp: Vec<f64> = xp.iter().map(|&v| v * factor).collect();
         let sm: Vec<f64> = xm.iter().map(|&v| v * factor).collect();
         let lp: f64 = sp.iter().map(|&v| v * v).sum();
@@ -702,7 +702,7 @@ fn disk_large_state() {
     let loss = |x: &[BReverse<f64>]| {
         let mut s = BReverse::constant(0.0_f64);
         for &xi in x {
-            s = s + xi * xi;
+            s += xi * xi;
         }
         s
     };

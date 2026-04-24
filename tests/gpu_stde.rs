@@ -60,7 +60,7 @@ fn gpu_taylor_2nd_polynomial() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -88,7 +88,7 @@ fn gpu_taylor_2nd_rosenbrock_matches_cpu() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x);
+    let (tape_f64, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -132,7 +132,7 @@ fn gpu_taylor_2nd_batch_sizes() {
     };
 
     let x = [2.0_f64, 3.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -439,7 +439,7 @@ fn gpu_laplacian_matches_cpu() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x);
+    let (tape_f64, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -485,7 +485,7 @@ fn gpu_hessian_diagonal_matches_cpu() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x);
+    let (tape_f64, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -521,7 +521,7 @@ fn gpu_polynomial_exact_laplacian() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -552,7 +552,7 @@ fn gpu_polynomial_exact_hessian_diagonal() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -578,7 +578,7 @@ fn gpu_chunked_single_chunk() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -641,7 +641,7 @@ fn gpu_chunked_multi_chunk() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -714,7 +714,7 @@ fn gpu_chunked_exact_boundary() {
     };
 
     let x = [2.0_f64, 3.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -756,7 +756,7 @@ fn gpu_chunked_zero_batch() {
     };
 
     let x = [1.0_f64, 2.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -792,7 +792,7 @@ fn gpu_taylor_kth_polynomial_all_orders() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -856,7 +856,7 @@ fn gpu_taylor_kth_k3_matches_2nd() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -961,7 +961,7 @@ fn gpu_taylor_kth_multi_batch() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -1239,6 +1239,7 @@ enum CoeffClass {
 }
 
 #[cfg(feature = "stde")]
+#[allow(clippy::too_many_arguments)] // test helper exercising a specific GPU kernel signature
 fn check_hypot_jet_non_finite_higher(
     ctx: &impl GpuBackend,
     x0: f64,
@@ -1395,7 +1396,7 @@ fn gpu_trig_taylor_2nd() {
     };
 
     let x = [1.0_f64, 0.5];
-    let (tape, _) = record(|v| trig_func(v), &x);
+    let (tape, _) = record(trig_func, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 

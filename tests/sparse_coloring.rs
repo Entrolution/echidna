@@ -1,5 +1,5 @@
 #![cfg(feature = "bytecode")]
-
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 use echidna::record_multi;
 use echidna::sparse::{
     column_coloring, greedy_coloring, row_coloring, JacobianSparsityPattern, SparsityPattern,

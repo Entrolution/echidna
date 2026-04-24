@@ -446,10 +446,10 @@ fn hypot_both_identically_zero() {
     assert_eq!(r.pole_order(), 0);
     for k in 0..4 {
         assert_eq!(
-            r.coeff(k as i32),
+            r.coeff(k),
             0.0,
             "hypot(zero, zero) must stay all-zero; coeff({k}) = {}",
-            r.coeff(k as i32)
+            r.coeff(k)
         );
     }
 }

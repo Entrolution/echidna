@@ -723,7 +723,7 @@ fn cse_preserves_multi_output() {
     }
 
     let x = [2.0_f64, 3.0, 4.0];
-    let (mut tape, values) = record_multi(|v| shared_sub(v), &x);
+    let (mut tape, values) = record_multi(shared_sub, &x);
 
     assert_relative_eq!(values[0], 10.0, max_relative = 1e-12); // 2*3 + 4
     assert_relative_eq!(values[1], 24.0, max_relative = 1e-12); // 2*3 * 4

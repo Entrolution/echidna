@@ -1,3 +1,8 @@
+// Shared bench helpers. Each `benches/*.rs` binary compiles this module
+// separately and uses only a subset of the helpers, so the unused ones trigger
+// `dead_code` per binary. Silence it at the module level rather than per-fn.
+#![allow(dead_code)]
+
 use echidna::Scalar;
 
 // ─── Rosenbrock ────────────────────────────────────────────────────────────
@@ -27,7 +32,11 @@ pub fn rosenbrock_f64(x: &[f64]) -> f64 {
 // ─── Tridiagonal ───────────────────────────────────────────────────────────
 
 pub fn tridiagonal<T: Scalar>(x: &[T]) -> T {
-    let mut sum = x[0] - x[0]; // zero with correct type
+    // `x[0] - x[0]` is an idiom for "zero of the generic AD scalar type" since
+    // `Scalar` does not expose a `zero()` constructor. The subtraction is
+    // intentional, not a mistake.
+    #[allow(clippy::eq_op)]
+    let mut sum = x[0] - x[0];
     for i in 0..x.len() - 1 {
         sum = sum + x[i] * x[i + 1];
     }

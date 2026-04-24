@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 use echidna::{grad, Dual, Scalar};
 
 #[cfg(feature = "bytecode")]
@@ -124,43 +125,31 @@ fn cross_validate(
 #[test]
 fn cross_validate_rosenbrock_2d() {
     let x = [1.5, 2.0];
-    cross_validate(
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        &x,
-        "rosenbrock-2d",
-    );
+    cross_validate(rosenbrock, rosenbrock, rosenbrock, &x, "rosenbrock-2d");
 }
 
 #[test]
 fn cross_validate_rosenbrock_10d() {
     let x: Vec<f64> = (0..10).map(|i| 0.5 + 0.1 * i as f64).collect();
-    cross_validate(
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        &x,
-        "rosenbrock-10d",
-    );
+    cross_validate(rosenbrock, rosenbrock, rosenbrock, &x, "rosenbrock-10d");
 }
 
 #[test]
 fn cross_validate_beale() {
     let x = [1.0, 0.5];
-    cross_validate(|v| beale(v), |v| beale(v), |v| beale(v), &x, "beale");
+    cross_validate(beale, beale, beale, &x, "beale");
 }
 
 #[test]
 fn cross_validate_sphere_5d() {
     let x = [1.0, -2.0, 3.0, -0.5, 0.7];
-    cross_validate(|v| sphere(v), |v| sphere(v), |v| sphere(v), &x, "sphere-5d");
+    cross_validate(sphere, sphere, sphere, &x, "sphere-5d");
 }
 
 #[test]
 fn cross_validate_booth() {
     let x = [2.0, 3.0];
-    cross_validate(|v| booth(v), |v| booth(v), |v| booth(v), &x, "booth");
+    cross_validate(booth, booth, booth, &x, "booth");
 }
 
 /// Test transcendental-heavy function.
@@ -171,13 +160,7 @@ fn trig_mix<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn cross_validate_trig_mix() {
     let x = [1.0, 2.0];
-    cross_validate(
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        &x,
-        "trig-mix",
-    );
+    cross_validate(trig_mix, trig_mix, trig_mix, &x, "trig-mix");
 }
 
 /// Ackley function (2D): lots of trig and exp.
@@ -203,7 +186,7 @@ fn ackley<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn cross_validate_ackley() {
     let x = [0.5, -0.3];
-    cross_validate(|v| ackley(v), |v| ackley(v), |v| ackley(v), &x, "ackley");
+    cross_validate(ackley, ackley, ackley, &x, "ackley");
 }
 
 /// Test: forward and reverse agree on a deeply nested function.
@@ -218,13 +201,7 @@ fn deep_nest<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn cross_validate_deep_nest() {
     let x = [0.5];
-    cross_validate(
-        |v| deep_nest(v),
-        |v| deep_nest(v),
-        |v| deep_nest(v),
-        &x,
-        "deep-nest",
-    );
+    cross_validate(deep_nest, deep_nest, deep_nest, &x, "deep-nest");
 }
 
 /// Sum of pairwise products — exercises fan-out heavily.
@@ -242,9 +219,9 @@ fn pairwise_products<T: Scalar>(x: &[T]) -> T {
 fn cross_validate_pairwise_products() {
     let x = [1.0, 2.0, 3.0, 4.0, 5.0];
     cross_validate(
-        |v| pairwise_products(v),
-        |v| pairwise_products(v),
-        |v| pairwise_products(v),
+        pairwise_products,
+        pairwise_products,
+        pairwise_products,
         &x,
         "pairwise-products",
     );
@@ -264,9 +241,9 @@ fn logistic_chain<T: Scalar>(x: &[T]) -> T {
 fn cross_validate_logistic_chain() {
     let x = [0.5];
     cross_validate(
-        |v| logistic_chain(v),
-        |v| logistic_chain(v),
-        |v| logistic_chain(v),
+        logistic_chain,
+        logistic_chain,
+        logistic_chain,
         &x,
         "logistic-chain",
     );
@@ -334,10 +311,10 @@ fn cross_validate_all(
 fn cross_validate_all_rosenbrock_2d() {
     let x = [1.5, 2.0];
     cross_validate_all(
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
+        rosenbrock,
+        rosenbrock,
+        rosenbrock,
+        rosenbrock,
         &x,
         "all-rosenbrock-2d",
     );
@@ -347,14 +324,7 @@ fn cross_validate_all_rosenbrock_2d() {
 #[test]
 fn cross_validate_all_trig_mix() {
     let x = [1.0, 2.0];
-    cross_validate_all(
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        &x,
-        "all-trig-mix",
-    );
+    cross_validate_all(trig_mix, trig_mix, trig_mix, trig_mix, &x, "all-trig-mix");
 }
 
 #[cfg(feature = "bytecode")]
@@ -362,10 +332,10 @@ fn cross_validate_all_trig_mix() {
 fn cross_validate_all_deep_nest() {
     let x = [0.5];
     cross_validate_all(
-        |v| deep_nest(v),
-        |v| deep_nest(v),
-        |v| deep_nest(v),
-        |v| deep_nest(v),
+        deep_nest,
+        deep_nest,
+        deep_nest,
+        deep_nest,
         &x,
         "all-deep-nest",
     );
@@ -376,10 +346,10 @@ fn cross_validate_all_deep_nest() {
 fn cross_validate_all_logistic_chain() {
     let x = [0.5];
     cross_validate_all(
-        |v| logistic_chain(v),
-        |v| logistic_chain(v),
-        |v| logistic_chain(v),
-        |v| logistic_chain(v),
+        logistic_chain,
+        logistic_chain,
+        logistic_chain,
+        logistic_chain,
         &x,
         "all-logistic-chain",
     );
@@ -437,7 +407,7 @@ fn cross_validate_hvp(
 fn hvp_cross_validate_rosenbrock() {
     let x = [1.5, 2.0];
     let v = [0.7, -0.3];
-    cross_validate_hvp(|v| rosenbrock(v), &x, &v, "rosenbrock-hvp");
+    cross_validate_hvp(rosenbrock, &x, &v, "rosenbrock-hvp");
 }
 
 #[cfg(feature = "bytecode")]
@@ -445,7 +415,7 @@ fn hvp_cross_validate_rosenbrock() {
 fn hvp_cross_validate_beale() {
     let x = [1.0, 0.5];
     let v = [1.0, -1.0];
-    cross_validate_hvp(|v| beale(v), &x, &v, "beale-hvp");
+    cross_validate_hvp(beale, &x, &v, "beale-hvp");
 }
 
 #[cfg(feature = "bytecode")]
@@ -453,7 +423,7 @@ fn hvp_cross_validate_beale() {
 fn hvp_cross_validate_sphere() {
     let x = [1.0, -2.0, 3.0, -0.5, 0.7];
     let v = [0.1, 0.2, -0.3, 0.4, -0.5];
-    cross_validate_hvp(|v| sphere(v), &x, &v, "sphere-hvp");
+    cross_validate_hvp(sphere, &x, &v, "sphere-hvp");
 }
 
 #[cfg(feature = "bytecode")]
@@ -461,7 +431,7 @@ fn hvp_cross_validate_sphere() {
 fn hvp_cross_validate_booth() {
     let x = [2.0, 3.0];
     let v = [1.0, 1.0];
-    cross_validate_hvp(|v| booth(v), &x, &v, "booth-hvp");
+    cross_validate_hvp(booth, &x, &v, "booth-hvp");
 }
 
 #[cfg(feature = "bytecode")]
@@ -469,7 +439,7 @@ fn hvp_cross_validate_booth() {
 fn hvp_cross_validate_trig_mix() {
     let x = [1.0, 2.0];
     let v = [0.5, -0.5];
-    cross_validate_hvp(|v| trig_mix(v), &x, &v, "trig-mix-hvp");
+    cross_validate_hvp(trig_mix, &x, &v, "trig-mix-hvp");
 }
 
 // ══════════════════════════════════════════════
@@ -546,37 +516,19 @@ fn cross_validate_f32(
 #[test]
 fn cross_validate_f32_rosenbrock() {
     let x: Vec<f32> = vec![1.5, 2.0];
-    cross_validate_f32(
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        |v| rosenbrock(v),
-        &x,
-        "rosenbrock-f32",
-    );
+    cross_validate_f32(rosenbrock, rosenbrock, rosenbrock, &x, "rosenbrock-f32");
 }
 
 #[test]
 fn cross_validate_f32_trig_mix() {
     let x: Vec<f32> = vec![1.0, 2.0];
-    cross_validate_f32(
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        |v| trig_mix(v),
-        &x,
-        "trig-mix-f32",
-    );
+    cross_validate_f32(trig_mix, trig_mix, trig_mix, &x, "trig-mix-f32");
 }
 
 #[test]
 fn cross_validate_f32_sphere() {
     let x: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    cross_validate_f32(
-        |v| sphere(v),
-        |v| sphere(v),
-        |v| sphere(v),
-        &x,
-        "sphere-5d-f32",
-    );
+    cross_validate_f32(sphere, sphere, sphere, &x, "sphere-5d-f32");
 }
 
 #[cfg(feature = "stde")]

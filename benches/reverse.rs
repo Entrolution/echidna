@@ -1,5 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use echidna::{grad, Scalar};
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use echidna::grad;
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -15,7 +17,7 @@ fn bench_reverse_gradient(c: &mut Criterion) {
         });
 
         group.bench_with_input(BenchmarkId::new("rosenbrock_rev", n), &x, |b, x| {
-            b.iter(|| black_box(grad(|v| rosenbrock(v), black_box(x))))
+            b.iter(|| black_box(grad(rosenbrock, black_box(x))))
         });
 
         group.bench_with_input(BenchmarkId::new("rosenbrock_fd", n), &x, |b, x| {
@@ -23,7 +25,7 @@ fn bench_reverse_gradient(c: &mut Criterion) {
         });
 
         group.bench_with_input(BenchmarkId::new("rastrigin_rev", n), &x, |b, x| {
-            b.iter(|| black_box(grad(|v| rastrigin(v), black_box(x))))
+            b.iter(|| black_box(grad(rastrigin, black_box(x))))
         });
     }
     group.finish();
@@ -57,7 +59,7 @@ fn bench_reverse_crossover(c: &mut Criterion) {
         });
 
         group.bench_with_input(BenchmarkId::new("reverse_1_pass", n), &x, |b, x| {
-            b.iter(|| black_box(grad(|v| rosenbrock(v), black_box(x))))
+            b.iter(|| black_box(grad(rosenbrock, black_box(x))))
         });
     }
     group.finish();

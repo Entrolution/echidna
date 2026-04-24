@@ -35,7 +35,7 @@ fn grad_rosenbrock_2d() {
     // df/dx = -2(1-x) - 400x(y-x²)
     // df/dy = 200(y-x²)
     let x = [1.5_f64, 2.0];
-    let g = grad(|v| rosenbrock(v), &x);
+    let g = grad(rosenbrock, &x);
     let expected_dx = -2.0 * (1.0 - x[0]) - 400.0 * x[0] * (x[1] - x[0] * x[0]);
     let expected_dy = 200.0 * (x[1] - x[0] * x[0]);
     assert_relative_eq!(g[0], expected_dx, max_relative = 1e-10);
@@ -46,7 +46,7 @@ fn grad_rosenbrock_2d() {
 fn grad_rosenbrock_at_minimum() {
     // At the minimum (1,1,...,1), gradient should be zero.
     let x = vec![1.0; 10];
-    let g = grad(|v| rosenbrock(v), &x);
+    let g = grad(rosenbrock, &x);
     for gi in &g {
         assert!(
             gi.abs() < 1e-12,
@@ -60,7 +60,7 @@ fn grad_rosenbrock_at_minimum() {
 fn grad_rosenbrock_100d() {
     // Smoke test: gradient of 100-dimensional Rosenbrock.
     let x: Vec<f64> = (0..100).map(|i| 0.5 + 0.01 * i as f64).collect();
-    let g = grad(|v| rosenbrock(v), &x);
+    let g = grad(rosenbrock, &x);
     assert_eq!(g.len(), 100);
     // Just check it doesn't panic and produces finite values.
     for gi in &g {

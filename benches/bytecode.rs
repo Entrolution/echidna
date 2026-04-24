@@ -1,6 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use echidna::{grad, record, BReverse, Scalar};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use echidna::{grad, record, BReverse};
 use num_traits::Float;
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -12,23 +13,23 @@ fn bench_bytecode_vs_adept(c: &mut Criterion) {
         let x = make_input(n);
 
         group.bench_with_input(BenchmarkId::new("adept_grad", n), &x, |b, x| {
-            b.iter(|| black_box(grad(|v| rosenbrock(v), black_box(x))))
+            b.iter(|| black_box(grad(rosenbrock, black_box(x))))
         });
 
         group.bench_with_input(BenchmarkId::new("bytecode_gradient", n), &x, |b, x| {
             b.iter(|| {
-                let (mut tape, _) = record(|v| rosenbrock(v), black_box(x));
+                let (mut tape, _) = record(rosenbrock, black_box(x));
                 black_box(tape.gradient(x))
             })
         });
 
         group.bench_with_input(BenchmarkId::new("rastrigin_adept", n), &x, |b, x| {
-            b.iter(|| black_box(grad(|v| rastrigin(v), black_box(x))))
+            b.iter(|| black_box(grad(rastrigin, black_box(x))))
         });
 
         group.bench_with_input(BenchmarkId::new("rastrigin_bytecode", n), &x, |b, x| {
             b.iter(|| {
-                let (mut tape, _) = record(|v| rastrigin(v), black_box(x));
+                let (mut tape, _) = record(rastrigin, black_box(x));
                 black_box(tape.gradient(x))
             })
         });
@@ -50,7 +51,7 @@ fn bench_tape_reuse(c: &mut Criterion) {
                 |b, _x| {
                     b.iter(|| {
                         for _ in 0..n_evals {
-                            black_box(grad(|v| rosenbrock(v), black_box(&x2)));
+                            black_box(grad(rosenbrock, black_box(&x2)));
                         }
                     })
                 },
@@ -61,7 +62,7 @@ fn bench_tape_reuse(c: &mut Criterion) {
                 &x,
                 |b, x| {
                     b.iter(|| {
-                        let (mut tape, _) = record(|v| rosenbrock(v), black_box(x));
+                        let (mut tape, _) = record(rosenbrock, black_box(x));
                         for _ in 0..n_evals {
                             black_box(tape.gradient(&x2));
                         }
@@ -77,7 +78,7 @@ fn bench_buf_reuse(c: &mut Criterion) {
     let mut group = c.benchmark_group("gradient_buf_reuse");
     for n in [2, 10, 100] {
         let x = make_input(n);
-        let (mut tape, _) = record(|v| rosenbrock(v), &x);
+        let (mut tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("gradient", n), &x, |b, x| {
             b.iter(|| black_box(tape.gradient(black_box(x))))
@@ -96,7 +97,7 @@ fn bench_hvp(c: &mut Criterion) {
     for n in [2, 10, 100] {
         let x = make_input(n);
         let v = make_direction(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("fwd_over_rev", n), &x, |b, x| {
             b.iter(|| black_box(tape.hvp(black_box(x), black_box(&v))))
@@ -104,7 +105,7 @@ fn bench_hvp(c: &mut Criterion) {
 
         let h = 1e-5;
         group.bench_with_input(BenchmarkId::new("finite_diff", n), &x, |b, x| {
-            let (mut tape2, _) = record(|v| rosenbrock(v), x);
+            let (mut tape2, _) = record(rosenbrock, x);
             let xp: Vec<f64> = x.iter().zip(v.iter()).map(|(xi, vi)| xi + h * vi).collect();
             let xm: Vec<f64> = x.iter().zip(v.iter()).map(|(xi, vi)| xi - h * vi).collect();
             b.iter(|| {
@@ -126,7 +127,7 @@ fn bench_hessian(c: &mut Criterion) {
     let mut group = c.benchmark_group("hessian");
     for n in [2, 10] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("full_hessian", n), &x, |b, x| {
             b.iter(|| black_box(tape.hessian(black_box(x))))
@@ -140,7 +141,7 @@ fn bench_hvp_buf_reuse(c: &mut Criterion) {
     for n in [2, 10, 100] {
         let x = make_input(n);
         let v = make_direction(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("hvp", n), &x, |b, x| {
             b.iter(|| black_box(tape.hvp(black_box(x), black_box(&v))))
@@ -162,7 +163,7 @@ fn bench_sparse_hessian(c: &mut Criterion) {
 
     for n in [10, 50, 100] {
         let x = make_input(n);
-        let (tape_tri, _) = record(|v| tridiagonal(v), &x);
+        let (tape_tri, _) = record(tridiagonal, &x);
 
         group.bench_with_input(BenchmarkId::new("tridiag_dense", n), &x, |b, x| {
             b.iter(|| black_box(tape_tri.hessian(black_box(x))))
@@ -173,9 +174,10 @@ fn bench_sparse_hessian(c: &mut Criterion) {
         });
     }
 
-    for n in [10] {
+    {
+        let n = 10;
         let x = make_input(n);
-        let (tape_ros, _) = record(|v| rosenbrock(v), &x);
+        let (tape_ros, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("rosenbrock_dense", n), &x, |b, x| {
             b.iter(|| black_box(tape_ros.hessian(black_box(x))))
@@ -292,7 +294,7 @@ fn bench_hessian_vec(c: &mut Criterion) {
     let mut group = c.benchmark_group("hessian_vec");
     for n in [2, 10, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("hessian", n), &x, |b, x| {
             b.iter(|| black_box(tape.hessian(black_box(x))))
@@ -314,7 +316,7 @@ fn bench_sparse_hessian_vec(c: &mut Criterion) {
 
     for n in [10, 50, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| tridiagonal(v), &x);
+        let (tape, _) = record(tridiagonal, &x);
 
         group.bench_with_input(BenchmarkId::new("sparse_hessian", n), &x, |b, x| {
             b.iter(|| black_box(tape.sparse_hessian(black_box(x))))

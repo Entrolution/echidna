@@ -21,7 +21,7 @@ fn multi_output<T: Scalar>(x: &[T]) -> Vec<T> {
 #[test]
 fn gradient_par_matches_serial() {
     let x = [1.5_f64, 2.5];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+    let (mut tape, _) = record(rosenbrock, &x);
 
     let serial = tape.gradient(&x);
     let parallel = tape.gradient_par(&x);
@@ -34,7 +34,7 @@ fn gradient_par_matches_serial() {
 #[test]
 fn gradient_par_at_multiple_points() {
     let x0 = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record(|v| trig_mix(v), &x0);
+    let (mut tape, _) = record(trig_mix, &x0);
 
     for &(a, b, c) in &[(0.5, 1.0, 0.1), (2.0, 3.0, -1.0), (0.0, 0.0, 0.0)] {
         let xv = [a, b, c];
@@ -57,7 +57,7 @@ fn gradient_par_at_multiple_points() {
 #[test]
 fn jacobian_par_matches_serial() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record_multi(|v| multi_output(v), &x);
+    let (mut tape, _) = record_multi(multi_output, &x);
 
     let serial = tape.jacobian(&x);
     let parallel = tape.jacobian_par(&x);
@@ -73,7 +73,7 @@ fn jacobian_par_matches_serial() {
 #[test]
 fn hessian_par_matches_serial() {
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let (val_s, grad_s, hess_s) = tape.hessian(&x);
     let (val_p, grad_p, hess_p) = tape.hessian_par(&x);
@@ -97,7 +97,7 @@ fn hessian_par_matches_serial() {
 #[test]
 fn sparse_hessian_par_matches_serial() {
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let (val_s, grad_s, pat_s, hval_s) = tape.sparse_hessian(&x);
     let (val_p, grad_p, pat_p, hval_p) = tape.sparse_hessian_par(&x);
@@ -120,7 +120,7 @@ fn sparse_hessian_par_matches_serial() {
 #[test]
 fn sparse_jacobian_par_matches_serial() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record_multi(|v| multi_output(v), &x);
+    let (mut tape, _) = record_multi(multi_output, &x);
 
     let (out_s, pat_s, jval_s) = tape.sparse_jacobian(&x);
     let (out_p, pat_p, jval_p) = tape.sparse_jacobian_par(&x);
@@ -146,7 +146,7 @@ fn gradient_par_is_immutable() {
     // We call it twice concurrently-compatible (though sequentially here)
     // to show it doesn't mutate.
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let g1 = tape.gradient_par(&x);
     let g2 = tape.gradient_par(&[2.0, 3.0]);
