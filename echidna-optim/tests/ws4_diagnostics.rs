@@ -104,9 +104,14 @@ fn lbfgs_rosenbrock_accepts_curvature_pairs() {
 #[test]
 fn lbfgs_memory_eviction_count_matches_accepted_minus_memory() {
     let mut obj = Rosenbrock;
-    let mut cfg = LbfgsConfig::<f64>::default();
-    cfg.memory = 3;
-    cfg.convergence.max_iter = 50;
+    let cfg = LbfgsConfig::<f64> {
+        memory: 3,
+        convergence: echidna_optim::ConvergenceParams {
+            max_iter: 50,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
     let result = lbfgs(&mut obj, &[0.0, 0.0], &cfg);
     let d = lbfgs_diag(&result.diagnostics);
     // Eviction = max(0, accepted - memory). The memory-eviction branch

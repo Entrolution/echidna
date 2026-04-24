@@ -1,5 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use echidna::record;
+use num_traits::Float;
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -9,7 +11,7 @@ fn bench_diffop_mixed_partial(c: &mut Criterion) {
     let mut group = c.benchmark_group("diffop_mixed_partial");
     for n in [2, 5, 10] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         // Second-order diagonal: d²u/dx₀²
         let mut orders = vec![0u8; n];
@@ -49,7 +51,7 @@ fn bench_diffop_hessian_vs_tape(c: &mut Criterion) {
     let mut group = c.benchmark_group("diffop_hessian_vs_tape");
     for n in [2, 5] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("diffop_hessian", n), &x, |b, x| {
             b.iter(|| black_box(echidna::diffop::hessian(&tape, black_box(x))))

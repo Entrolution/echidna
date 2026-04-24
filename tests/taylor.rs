@@ -1,5 +1,5 @@
 #![cfg(feature = "taylor")]
-
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 use approx::assert_relative_eq;
 use echidna::{Scalar, Taylor, TaylorDyn, TaylorDynGuard};
 
@@ -193,7 +193,7 @@ mod bytecode_tests {
 
     #[test]
     fn forward_tangent_with_taylor() {
-        let (tape, _) = echidna::record(|x| simple_function(x), &[1.0]);
+        let (tape, _) = echidna::record(simple_function, &[1.0]);
         let mut buf = Vec::new();
         let x0 = 1.0_f64;
         let inputs = [Taylor::<f64, 3>::variable(x0)];
@@ -210,7 +210,7 @@ mod bytecode_tests {
 
     #[test]
     fn forward_tangent_with_taylor_dyn() {
-        let (tape, _) = echidna::record(|x| simple_function(x), &[1.0]);
+        let (tape, _) = echidna::record(simple_function, &[1.0]);
         let mut buf = Vec::new();
         let x0 = 1.0_f64;
         let _guard = TaylorDynGuard::<f64>::new(3);
@@ -229,7 +229,7 @@ mod bytecode_tests {
 
     #[test]
     fn forward_tangent_multivar_taylor() {
-        let (tape, _) = echidna::record(|x| multivar_function(x), &[1.0, 2.0]);
+        let (tape, _) = echidna::record(multivar_function, &[1.0, 2.0]);
         let mut buf = Vec::new();
         let inputs = [
             Taylor::<f64, 3>::variable(1.0),
@@ -270,7 +270,7 @@ mod bytecode_tests {
     fn taylor_grad_k2_gradient_matches_hvp_sum_of_squares() {
         let x = [1.0, 2.0, 3.0];
         let v = [0.5, -1.0, 0.3];
-        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+        let (tape, _) = echidna::record(sum_of_squares, &x);
 
         let (hvp_grad, _) = tape.hvp(&x, &v);
         let (_, adj) = tape.taylor_grad::<2>(&x, &v);
@@ -284,7 +284,7 @@ mod bytecode_tests {
     fn taylor_grad_k2_gradient_matches_hvp_cubic_mix() {
         let x = [1.5, -0.5, 2.0];
         let v = [1.0, 0.0, -1.0];
-        let (tape, _) = echidna::record(|x| cubic_mix(x), &x);
+        let (tape, _) = echidna::record(cubic_mix, &x);
 
         let (hvp_grad, _) = tape.hvp(&x, &v);
         let (_, adj) = tape.taylor_grad::<2>(&x, &v);
@@ -298,7 +298,7 @@ mod bytecode_tests {
     fn taylor_grad_k2_hvp_matches_hvp() {
         let x = [1.0, 2.0, 3.0];
         let v = [0.5, -1.0, 0.3];
-        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+        let (tape, _) = echidna::record(sum_of_squares, &x);
 
         let (_, hvp_vec) = tape.hvp(&x, &v);
         let (_, adj) = tape.taylor_grad::<2>(&x, &v);
@@ -312,7 +312,7 @@ mod bytecode_tests {
     fn taylor_grad_k3_matches_third_order_hvvp_same_direction() {
         let x = [1.5, -0.5, 2.0];
         let v = [1.0, 0.5, -1.0];
-        let (tape, _) = echidna::record(|x| cubic_mix(x), &x);
+        let (tape, _) = echidna::record(cubic_mix, &x);
 
         // third_order_hvvp with v1=v, v2=v gives the same-direction case
         let (grad_ref, hvp_ref, third_ref) = tape.third_order_hvvp(&x, &v, &v);
@@ -329,7 +329,7 @@ mod bytecode_tests {
     fn taylor_grad_k3_gradient_matches_standard_gradient() {
         let x = [1.5, -0.5, 2.0];
         let v = [1.0, 0.0, -1.0];
-        let (mut tape, _) = echidna::record(|x| cubic_mix(x), &x);
+        let (mut tape, _) = echidna::record(cubic_mix, &x);
 
         let grad_ref = tape.gradient(&x);
         let (_, adj) = tape.taylor_grad::<3>(&x, &v);
@@ -342,7 +342,7 @@ mod bytecode_tests {
     #[test]
     fn taylor_grad_k2_full_hessian_via_basis() {
         let x = [1.0, 2.0, 3.0];
-        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+        let (tape, _) = echidna::record(sum_of_squares, &x);
         let n = 3;
 
         let (_, _, hess_ref) = tape.hessian(&x);
@@ -362,7 +362,7 @@ mod bytecode_tests {
     fn taylor_grad_linear_higher_order_zero() {
         let x = [2.0, 3.0];
         let v = [1.0, -1.0];
-        let (tape, _) = echidna::record(|x| linear_fn(x), &x);
+        let (tape, _) = echidna::record(linear_fn, &x);
 
         let (output, adj) = tape.taylor_grad::<3>(&x, &v);
 
@@ -394,7 +394,7 @@ mod bytecode_tests {
         // d³(df/dx)/dt³ = 0 → derivative(3) = 0
         let x = [2.0];
         let v = [1.0];
-        let (tape, _) = echidna::record(|x| cube_1d(x), &x);
+        let (tape, _) = echidna::record(cube_1d, &x);
 
         let (output, adj) = tape.taylor_grad::<4>(&x, &v);
 
@@ -417,7 +417,7 @@ mod bytecode_tests {
         // Hessian is diagonal: H = diag(exp(x0), -sin(x1))
         let x = [1.0, 0.5];
         let v = [1.0, 0.0]; // direction along x0 only
-        let (tape, _) = echidna::record(|x| exp_plus_sin(x), &x);
+        let (tape, _) = echidna::record(exp_plus_sin, &x);
 
         let (_, adj) = tape.taylor_grad::<2>(&x, &v);
 
@@ -439,7 +439,7 @@ mod bytecode_tests {
     fn taylor_grad_with_buf_reuse() {
         let x = [1.0, 2.0, 3.0];
         let v = [0.5, -1.0, 0.3];
-        let (tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+        let (tape, _) = echidna::record(sum_of_squares, &x);
 
         let mut fwd_buf = Vec::new();
         let mut adj_buf = Vec::new();
@@ -461,7 +461,7 @@ mod bytecode_tests {
     fn taylor_grad_zero_direction() {
         let x = [1.0, 2.0, 3.0];
         let v = [0.0, 0.0, 0.0]; // zero direction
-        let (mut tape, _) = echidna::record(|x| sum_of_squares(x), &x);
+        let (mut tape, _) = echidna::record(sum_of_squares, &x);
 
         let (_, adj) = tape.taylor_grad::<3>(&x, &v);
 

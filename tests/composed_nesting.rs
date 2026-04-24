@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 //! Tests for composable mode nesting (R12).
 //!
 //! Forward-wrapping-reverse compositions: `Dual<BReverse<f64>>`, `Dual<Reverse<f64>>`,

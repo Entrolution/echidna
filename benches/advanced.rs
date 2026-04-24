@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use echidna::{record, record_multi, Scalar};
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -10,7 +11,7 @@ fn bench_cross_country(c: &mut Criterion) {
     for n in [5, 10, 20] {
         let x = make_input(n);
 
-        let (mut tape, _) = record_multi(|v| pde_poisson_vec(v), &x);
+        let (mut tape, _) = record_multi(pde_poisson_vec, &x);
 
         group.bench_with_input(BenchmarkId::new("cross_country", n), &x, |b, x| {
             b.iter(|| black_box(tape.jacobian_cross_country(black_box(x))))
@@ -28,7 +29,7 @@ fn bench_sparse_jacobian(c: &mut Criterion) {
     for n in [10, 50, 100] {
         let x = make_input(n);
 
-        let (mut tape, _) = record_multi(|v| pde_poisson_vec(v), &x);
+        let (mut tape, _) = record_multi(pde_poisson_vec, &x);
 
         group.bench_with_input(BenchmarkId::new("sparse", n), &x, |b, x| {
             b.iter(|| black_box(tape.sparse_jacobian(black_box(x))))
@@ -54,7 +55,7 @@ fn bench_nonsmooth_overhead(c: &mut Criterion) {
     for n in [2, 10, 100] {
         let x = make_input(n);
 
-        let (mut tape, _) = record(|v| abs_sum(v), &x);
+        let (mut tape, _) = record(abs_sum, &x);
 
         group.bench_with_input(BenchmarkId::new("forward", n), &x, |b, x| {
             b.iter(|| {
@@ -78,7 +79,7 @@ fn bench_clarke(c: &mut Criterion) {
             .map(|i| if i < 2 { 1e-12 } else { 0.5 + 0.01 * i as f64 })
             .collect();
 
-        let (mut tape, _) = record(|v| abs_sum(v), &x);
+        let (mut tape, _) = record(abs_sum, &x);
 
         group.bench_with_input(BenchmarkId::new("clarke_jacobian", n), &x, |b, x| {
             b.iter(|| black_box(tape.clarke_jacobian(black_box(x), 0.1, Some(10))))

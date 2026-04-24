@@ -1,6 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
 use echidna::record;
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -26,8 +27,8 @@ fn bench_forward_batch(c: &mut Criterion) {
         let x0 = vec![1.0_f32; 2];
         let (tape, _) = record(
             |v| {
-                let one = f32::from(1.0);
-                let hundred = f32::from(100.0);
+                let one = 1.0;
+                let hundred = 100.0;
                 let dx = v[0] - one;
                 let t = v[1] - v[0] * v[0];
                 dx * dx + hundred * t * t
@@ -56,7 +57,7 @@ fn bench_forward_batch(c: &mut Criterion) {
     {
         let n = 50;
         let x0: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
-        let (tape, _) = record(|v| rosenbrock(v), &x0);
+        let (tape, _) = record(rosenbrock, &x0);
         let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
         let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -81,7 +82,7 @@ fn bench_forward_batch(c: &mut Criterion) {
     {
         let n = 10;
         let x0: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
-        let (tape, _) = record(|v| rosenbrock(v), &x0);
+        let (tape, _) = record(rosenbrock, &x0);
         let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
         let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -115,7 +116,7 @@ fn bench_gradient_batch(c: &mut Criterion) {
 
     for &n in &[2usize, 10, 50] {
         let x0: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
-        let (tape, _) = record(|v| rosenbrock(v), &x0);
+        let (tape, _) = record(rosenbrock, &x0);
         let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
         let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -149,7 +150,7 @@ fn bench_gpu_vs_cpu(c: &mut Criterion) {
 
     let n = 10;
     let x0: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -220,7 +221,7 @@ fn bench_transfer_overhead(c: &mut Criterion) {
 
     let n = 10;
     let x0: Vec<f32> = (0..n).map(|i| i as f32 * 0.1).collect();
-    let (tape, _) = record(|v| rosenbrock(v), &x0);
+    let (tape, _) = record(rosenbrock, &x0);
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
 
     // Measure upload cost
@@ -261,7 +262,7 @@ fn bench_gpu_taylor_2nd(c: &mut Criterion) {
     let n = 100;
     let x0: Vec<f32> = make_input(n).iter().map(|&v| v as f32).collect();
     let x0_f64: Vec<f64> = make_input(n);
-    let (tape, _) = record(|v| rosenbrock(v), &x0_f64);
+    let (tape, _) = record(rosenbrock, &x0_f64);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -272,7 +273,7 @@ fn bench_gpu_taylor_2nd(c: &mut Criterion) {
             primals.extend_from_slice(&x0);
             let seed: Vec<f32> = (0..n)
                 .map(|i| {
-                    if (b as usize * n + i) % 2 == 0 {
+                    if (b as usize * n + i).is_multiple_of(2) {
                         1.0
                     } else {
                         -1.0
@@ -314,7 +315,7 @@ fn bench_gpu_laplacian_vs_cpu(c: &mut Criterion) {
     let n = 100;
     let x_f64: Vec<f64> = make_input(n);
     let x_f32: Vec<f32> = x_f64.iter().map(|&v| v as f32).collect();
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x_f64);
+    let (tape_f64, _) = record(rosenbrock, &x_f64);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
 
@@ -371,7 +372,7 @@ fn bench_gpu_hessian_diag_vs_cpu(c: &mut Criterion) {
     for &n in &[100usize, 500] {
         let x_f64: Vec<f64> = make_input(n);
         let x_f32: Vec<f32> = x_f64.iter().map(|&v| v as f32).collect();
-        let (tape_f64, _) = record(|v| rosenbrock(v), &x_f64);
+        let (tape_f64, _) = record(rosenbrock, &x_f64);
         let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
         let gpu_tape = ctx.upload_tape(&gpu_data);
 

@@ -204,7 +204,7 @@ mod bytecode_tests {
     #[test]
     fn hessian_vec_matches_hessian_n2() {
         let x = vec![0.5_f64, 0.51];
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         let (val1, grad1, hess1) = tape.hessian(&x);
         let (val2, grad2, hess2) = tape.hessian_vec::<4>(&x);
@@ -251,8 +251,8 @@ mod bytecode_tests {
     #[test]
     fn api_hessian_vec() {
         let x = vec![1.5_f64, 2.0];
-        let (val1, grad1, hess1) = echidna::hessian(|v| rosenbrock(v), &x);
-        let (val2, grad2, hess2) = echidna::hessian_vec::<_, 4>(|v| rosenbrock(v), &x);
+        let (val1, grad1, hess1) = echidna::hessian(rosenbrock, &x);
+        let (val2, grad2, hess2) = echidna::hessian_vec::<_, 4>(rosenbrock, &x);
 
         assert!((val1 - val2).abs() < 1e-10);
         for i in 0..2 {
@@ -267,7 +267,7 @@ mod bytecode_tests {
     fn hessian_vec_various_sizes() {
         for n in [2, 3, 5] {
             let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
-            let (tape, _) = record(|v| rosenbrock(v), &x);
+            let (tape, _) = record(rosenbrock, &x);
             let (_, _, hess1) = tape.hessian(&x);
 
             for batch_size in ["1", "2", "4", "8"] {

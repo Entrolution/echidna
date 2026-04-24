@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use echidna::record;
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -9,7 +10,13 @@ fn make_rademacher_directions(n: usize, s: usize) -> Vec<Vec<f64>> {
     (0..s)
         .map(|si| {
             (0..n)
-                .map(|i| if (si * n + i) % 2 == 0 { 1.0 } else { -1.0 })
+                .map(|i| {
+                    if (si * n + i).is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                })
                 .collect()
         })
         .collect()
@@ -19,7 +26,7 @@ fn bench_stde_laplacian(c: &mut Criterion) {
     let mut group = c.benchmark_group("stde_laplacian");
     for n in [10, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         for s in [5, 10, 50] {
             let dirs = make_rademacher_directions(n, s);
@@ -52,7 +59,7 @@ fn bench_stde_hessian_diag(c: &mut Criterion) {
     let mut group = c.benchmark_group("stde_hessian_diag");
     for n in [10, 50, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("stde_diag", n), &x, |b, x| {
             b.iter(|| black_box(echidna::stde::hessian_diagonal(&tape, black_box(x))))
@@ -74,7 +81,7 @@ fn bench_stde_jet(c: &mut Criterion) {
     for n in [2, 10, 100] {
         let x = make_input(n);
         let v = make_direction(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("taylor_jet_2nd", n), &x, |b, x| {
             b.iter(|| {
@@ -112,7 +119,7 @@ fn bench_stde_hutchpp(c: &mut Criterion) {
 
     for n in [10, 50, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         let sketch = make_rademacher_directions(n, k);
         let stoch = make_rademacher_directions(n, s);
@@ -159,7 +166,7 @@ fn bench_stde_diagonal_kth_order(c: &mut Criterion) {
     let mut group = c.benchmark_group("stde_diagonal_kth_order");
     for n in [10, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         for k in [2, 3, 4] {
             group.bench_with_input(BenchmarkId::new(format!("k{}", k), n), &x, |b, x| {
@@ -185,7 +192,7 @@ fn bench_stde_diagonal_const_vs_dyn(c: &mut Criterion) {
     let mut group = c.benchmark_group("stde_diagonal_const_vs_dyn");
     for n in [10, 100] {
         let x = make_input(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         // Const-generic ORDER=4 (k=3)
         group.bench_with_input(BenchmarkId::new("const_k3", n), &x, |b, x| {
@@ -230,7 +237,7 @@ fn bench_stde_sparse(c: &mut Criterion) {
     let mut group = c.benchmark_group("stde_sparse");
     let n = 100;
     let x = make_input(n);
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     // Laplacian operator
     let lap: DiffOp<f64> = DiffOp::laplacian(n);

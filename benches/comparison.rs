@@ -1,7 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use echidna::{grad, record};
 use nalgebra::DVector;
 use num_dual::DualNum;
+use std::hint::black_box;
 
 use ad_trait::differentiable_function::{DifferentiableFunctionTrait, ForwardAD, ReverseAD};
 use ad_trait::function_engine::FunctionEngine;
@@ -28,8 +30,8 @@ fn two_output_nd<D: DualNum<f64> + Clone>(x: &[D]) -> [D; 2] {
     let mut s1 = D::from(0.0);
     let mut s2 = D::from(0.0);
     for i in 0..x.len() {
-        s1 = s1 + x[i].clone() * x[i].clone();
-        s2 = s2 + x[i].clone().sin();
+        s1 += x[i].clone() * x[i].clone();
+        s2 += x[i].clone().sin();
     }
     [s1, s2]
 }
@@ -92,13 +94,13 @@ fn bench_gradient_comparison(c: &mut Criterion) {
 
         // echidna reverse-mode gradient
         group.bench_with_input(BenchmarkId::new("echidna_grad", n), &x, |b, x| {
-            b.iter(|| black_box(grad(|v| rosenbrock(v), black_box(x))))
+            b.iter(|| black_box(grad(rosenbrock, black_box(x))))
         });
 
         // echidna bytecode gradient
         group.bench_with_input(BenchmarkId::new("echidna_bytecode", n), &x, |b, x| {
             b.iter(|| {
-                let (mut tape, _) = record(|v| rosenbrock(v), black_box(x));
+                let (mut tape, _) = record(rosenbrock, black_box(x));
                 black_box(tape.gradient(x))
             })
         });
@@ -109,7 +111,7 @@ fn bench_gradient_comparison(c: &mut Criterion) {
             b.iter(|| {
                 let (f, g) = num_dual::gradient(
                     |v: DVector<num_dual::DualDVec64>| rosenbrock_nd(v.as_slice()),
-                    black_box(x_dv.clone()),
+                    black_box(x_dv),
                 );
                 black_box((f, g))
             })
@@ -142,13 +144,13 @@ fn bench_jacobian_comparison(c: &mut Criterion) {
 
         // echidna forward-mode Jacobian
         group.bench_with_input(BenchmarkId::new("echidna_fwd", n), &x, |b, x| {
-            b.iter(|| black_box(echidna::jacobian(|v| two_output_echidna(v), black_box(x))))
+            b.iter(|| black_box(echidna::jacobian(two_output_echidna, black_box(x))))
         });
 
         // echidna bytecode Jacobian (reverse)
         group.bench_with_input(BenchmarkId::new("echidna_rev", n), &x, |b, x| {
             b.iter(|| {
-                let (mut tape, _) = echidna::record_multi(|v| two_output_echidna(v), black_box(x));
+                let (mut tape, _) = echidna::record_multi(two_output_echidna, black_box(x));
                 black_box(tape.jacobian(x))
             })
         });
@@ -162,7 +164,7 @@ fn bench_jacobian_comparison(c: &mut Criterion) {
                         let out = two_output_nd(v.as_slice());
                         DVector::from_column_slice(&out)
                     },
-                    black_box(x_dv.clone()),
+                    black_box(x_dv),
                 );
                 black_box((f, jac))
             })
@@ -179,7 +181,7 @@ fn bench_hessian_comparison(c: &mut Criterion) {
         let x = make_input(n);
 
         // echidna fwd-over-rev Hessian
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
         group.bench_with_input(BenchmarkId::new("echidna_hessian", n), &x, |b, x| {
             b.iter(|| black_box(tape.hessian(black_box(x))))
         });
@@ -190,7 +192,7 @@ fn bench_hessian_comparison(c: &mut Criterion) {
             b.iter(|| {
                 let (f, g, h) = num_dual::hessian(
                     |v: DVector<num_dual::Dual2DVec64>| rosenbrock_nd(v.as_slice()),
-                    black_box(x_dv.clone()),
+                    black_box(x_dv),
                 );
                 black_box((f, g, h))
             })

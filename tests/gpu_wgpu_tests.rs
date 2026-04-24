@@ -58,7 +58,7 @@ fn forward_batch_rosenbrock() {
 
     // Record tape at f64
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     // Generate 100 test points
     let points: Vec<Vec<f64>> = (0..100)
@@ -102,7 +102,7 @@ fn forward_batch_trig() {
     };
 
     let x0 = [0.5_f64, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -142,7 +142,7 @@ fn forward_batch_single_point() {
     };
 
     let x0 = [2.0_f64, 3.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     tape.forward(&[2.0, 3.0]);
     let cpu_val = tape.output_value();
@@ -170,7 +170,7 @@ fn forward_batch_large() {
     };
 
     let x0 = [1.0_f64, 1.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let batch_size = 10_000u32;
     let points: Vec<Vec<f64>> = (0..batch_size)
@@ -227,7 +227,7 @@ fn forward_batch_f32_native() {
 
     // Record tape directly at f32
     let x0 = [1.0_f32, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -259,7 +259,7 @@ fn gradient_batch_rosenbrock() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -307,7 +307,7 @@ fn gradient_batch_trig() {
     };
 
     let x0 = [0.5_f64, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let points: Vec<Vec<f64>> = (0..20)
         .map(|i| {
@@ -351,7 +351,7 @@ fn gradient_batch_single_point() {
     };
 
     let x0 = [2.0_f64, 3.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let cpu_grad = tape.gradient(&[2.0, 3.0]);
 
@@ -387,7 +387,7 @@ fn sparse_jacobian_multi_output() {
     };
 
     let x0 = [1.0_f32, 2.0];
-    let (mut tape, _) = echidna::record_multi(|v| multi_output_func(v), &x0);
+    let (mut tape, _) = echidna::record_multi(multi_output_func, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -430,7 +430,7 @@ fn hvp_batch_rosenbrock() {
     };
 
     let x0 = [1.0_f32, 2.0];
-    let (tape, _) = record(|v| rosenbrock(v), &x0);
+    let (tape, _) = record(rosenbrock, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -473,7 +473,7 @@ fn hvp_batch_trig() {
     };
 
     let x0 = [0.5_f32, 0.7];
-    let (tape, _) = record(|v| trig_func(v), &x0);
+    let (tape, _) = record(trig_func, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -516,7 +516,7 @@ fn sparse_hessian_rosenbrock() {
     };
 
     let x0 = [1.0_f32, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -570,7 +570,7 @@ fn sparse_hessian_trig() {
     };
 
     let x0 = [0.5_f32, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);

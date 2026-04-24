@@ -29,7 +29,7 @@ fn third_order_hvvp_simple_quadratic() {
     // d/dv2(H*v1) where v2 = [0, 1]:
     //   d/dy[2y] = 2, d/dy[2x] = 0 → [2, 0]
     let x = [3.0_f64, 2.0];
-    let (tape, _) = record(|v| simple_quadratic(v), &x);
+    let (tape, _) = record(simple_quadratic, &x);
 
     let v1 = [1.0, 0.0];
     let v2 = [0.0, 1.0];
@@ -81,7 +81,7 @@ fn third_order_hvvp_same_direction() {
     //   d/dx[2y + 2x] = 2, d/dy[2y + 2x] = 2 → 4
     //   d/dx[2x + 6y] = 2, d/dy[2x + 6y] = 6 → 8
     let x = [3.0_f64, 2.0];
-    let (tape, _) = record(|v| simple_quadratic(v), &x);
+    let (tape, _) = record(simple_quadratic, &x);
 
     let v = [1.0, 1.0];
     let (_, hvp, third) = tape.third_order_hvvp(&x, &v, &v);
@@ -118,7 +118,7 @@ fn third_order_cubic() {
     // H*v1 = [6x * v1[0]] = [6*2*1] = [12] at x=2
     // d/dv2(H*v1) = [6 * v1[0] * v2[0]] = [6] at v1=v2=[1]
     let x = [2.0_f64];
-    let (tape, _) = record(|v| cubic(v), &x);
+    let (tape, _) = record(cubic, &x);
 
     let v = [1.0];
     let (gradient, hvp, third) = tape.third_order_hvvp(&x, &v, &v);
@@ -140,7 +140,7 @@ fn third_order_cubic() {
 fn third_order_hvvp_gradient_matches_standard() {
     // Verify that the gradient from third_order_hvvp matches the standard gradient
     let x = [1.5_f64, 2.5];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+    let (mut tape, _) = record(rosenbrock, &x);
 
     let standard_grad = tape.gradient(&x);
     let (third_grad, _, _) = tape.third_order_hvvp(&x, &[1.0, 0.0], &[1.0, 0.0]);
@@ -154,7 +154,7 @@ fn third_order_hvvp_gradient_matches_standard() {
 fn third_order_hvvp_matches_hvp() {
     // Verify that the HVP from third_order_hvvp matches the standard HVP
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let v1 = [1.0, 0.0];
     let (_, standard_hvp) = tape.hvp(&x, &v1);
@@ -174,13 +174,13 @@ fn third_order_hvvp_matches_hvp() {
 fn third_order_zero_directions() {
     // With zero directions, HVP and third-order should be zero
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let zero = [0.0, 0.0];
     let (gradient, hvp, third) = tape.third_order_hvvp(&x, &zero, &zero);
 
     // Gradient is still correct
-    let (mut tape2, _) = record(|v| rosenbrock(v), &x);
+    let (mut tape2, _) = record(rosenbrock, &x);
     let expected_grad = tape2.gradient(&x);
     for (g, e) in gradient.iter().zip(expected_grad.iter()) {
         assert!((g - e).abs() < 1e-10);

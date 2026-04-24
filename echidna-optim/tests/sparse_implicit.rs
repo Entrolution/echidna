@@ -316,10 +316,10 @@ fn tridiagonal_system() {
                 // 2*z[i] via z[i] + z[i] — no spurious dependency on other inputs
                 let mut val = z[i] + z[i] - x[i];
                 if i > 0 {
-                    val = val - z[i - 1];
+                    val -= z[i - 1];
                 }
                 if i < m - 1 {
-                    val = val - z[i + 1];
+                    val -= z[i + 1];
                 }
                 f.push(val);
             }

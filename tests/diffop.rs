@@ -1,5 +1,5 @@
 #![cfg(feature = "diffop")]
-
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 use approx::assert_relative_eq;
 use echidna::diffop::{JetPlan, MultiIndex};
 use echidna::{BReverse, BytecodeTape, Scalar};
@@ -246,14 +246,14 @@ fn mixed_fourth_order_cross_nonzero() {
 #[test]
 fn hessian_cross_validation_rosenbrock() {
     let x = [0.5, 1.0, 1.5];
-    let tape = record_fn(|v| rosenbrock(v), &x);
+    let tape = record_fn(rosenbrock, &x);
 
     let (val_tape, _grad_tape, hess_tape) = tape.hessian(&x);
     let (val_diffop, grad_diffop, hess_diffop) = echidna::diffop::hessian(&tape, &x);
 
     assert_relative_eq!(val_tape, val_diffop, epsilon = 1e-10);
 
-    let grad_ref = echidna::grad(|v| rosenbrock(v), &x);
+    let grad_ref = echidna::grad(rosenbrock, &x);
     for i in 0..x.len() {
         assert_relative_eq!(grad_diffop[i], grad_ref[i], epsilon = 1e-6);
     }
@@ -276,7 +276,7 @@ fn hessian_cross_validation_multiple_points() {
     ];
 
     for x in &points {
-        let tape = record_fn(|v| rosenbrock(v), x);
+        let tape = record_fn(rosenbrock, x);
         let (_, _, hess_tape) = tape.hessian(x);
         let (_, _, hess_diffop) = echidna::diffop::hessian(&tape, x);
 
@@ -318,8 +318,8 @@ fn plan_reuse() {
 #[test]
 fn first_order_matches_gradient() {
     let x = [1.0, 2.0, 3.0];
-    let tape = record_fn(|v| rosenbrock(v), &x);
-    let grad_ref = echidna::grad(|v| rosenbrock(v), &x);
+    let tape = record_fn(rosenbrock, &x);
+    let grad_ref = echidna::grad(rosenbrock, &x);
 
     for i in 0..x.len() {
         let mi = MultiIndex::partial(3, i);

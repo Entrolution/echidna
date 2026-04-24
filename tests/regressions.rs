@@ -467,13 +467,13 @@ mod phase1c_sparsity {
 
     #[test]
     fn sparsity_custom_binary_op() {
-        let (mut tape, _) = record(|x| x[0] * x[1] + x[0].sin(), &[1.0, 2.0]);
+        let (tape, _) = record(|x| x[0] * x[1] + x[0].sin(), &[1.0, 2.0]);
         let dense = tape.hessian(&[1.0, 2.0]);
         let (_, _, pattern, _sparse_vals) = tape.sparse_hessian(&[1.0, 2.0]);
 
         for i in 0..2 {
             for j in 0..=i {
-                if (dense.2[i][j] as f64).abs() > 1e-12 {
+                if dense.2[i][j].abs() > 1e-12 {
                     assert!(
                         pattern.contains(i, j),
                         "dense H[{i},{j}]={} missing from sparse pattern",

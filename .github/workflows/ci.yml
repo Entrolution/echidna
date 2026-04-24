@@ -53,10 +53,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (all non-CUDA features)
-        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu" -- -D warnings
+        run: cargo clippy --all-targets --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu" -- -D warnings
 
       - name: Clippy (echidna-optim)
-        run: cargo clippy -p echidna-optim --all-features -- -D warnings
+        run: cargo clippy --all-targets -p echidna-optim --all-features -- -D warnings
 
 
   docs:
