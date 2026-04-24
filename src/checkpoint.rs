@@ -78,11 +78,13 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
     // who need the optimal O(n · log n) Revolve schedule should size
     // `num_checkpoints` to `log2(num_steps)` or larger.
     let mut all_positions = revolve_schedule(num_steps, num_checkpoints);
+    // SPEC: BudgetInvariant — stored checkpoint count never exceeds num_checkpoints.
     all_positions.truncate(num_checkpoints);
     let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
     // -- Forward pass: run all steps, saving at most num_checkpoints states --
     let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::with_capacity(num_checkpoints + 1);
+    // SPEC: InitialStateStored — (step 0, x0) is always the first stored checkpoint.
     checkpoints.push((0, x0.to_vec()));
 
     let mut current_state = x0.to_vec();
@@ -97,6 +99,7 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
         );
 
         let next_step = s + 1;
+        // SPEC: PositionRangeInvariant — only step indices in `[1, num_steps)` are stored.
         if next_step < num_steps && checkpoint_positions.contains(&next_step) {
             checkpoints.push((next_step, current_state.clone()));
         }
@@ -160,6 +163,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 
     // Checkpoint buffer: buffer[0] is always (0, x0), pinned during thinning.
     let mut buffer: Vec<(usize, Vec<F>)> = Vec::with_capacity(num_checkpoints);
+    // SPEC: PinnedOrigin — buffer[0] holds (0, x0) and is preserved across thinning.
     buffer.push((0, x0.to_vec()));
 
     let mut spacing = 1usize;
@@ -179,6 +183,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
         );
 
         // Save checkpoint if on the spacing grid.
+        // SPEC: UniformSpacing — saved steps after buffer[0] are multiples of `spacing`.
         if step_index.is_multiple_of(spacing) {
             buffer.push((step_index, current_state.clone()));
         }
@@ -189,6 +194,8 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
         }
 
         // Thin when buffer is full.
+        // SPEC: BufferBudget — thinning triggers when buffer.len() >= num_checkpoints,
+        // keeping buffer.len() bounded by num_checkpoints across the loop.
         if buffer.len() >= num_checkpoints {
             // Keep buffer[0] (pinned). Among buffer[1..], skip the first (closest to
             // buffer[0]) and keep every other entry to maintain uniform spacing.
@@ -196,6 +203,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
                 buffer[1..].iter().skip(1).step_by(2).cloned().collect();
             buffer.truncate(1);
             buffer.extend(tail);
+            // SPEC: SpacingPowerOf2 — `spacing` only ever doubles, so it stays a power of 2.
             spacing *= 2;
         }
     }
@@ -255,6 +263,7 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
         .collect();
     required.sort_unstable();
     required.dedup();
+    // SPEC: RequiredIncluded — every valid required position ends up in `all_positions`.
 
     assert!(
         required.len() <= num_checkpoints,
@@ -279,6 +288,7 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
     let total_len: usize = interval_lengths.iter().sum();
 
     // Distribute free slots proportionally using largest-remainder method.
+    // SPEC: AllocationExact — `slot_alloc` sums to `free`.
     let slot_alloc = largest_remainder_alloc(free, &interval_lengths, total_len);
 
     // Run Revolve on each sub-interval and merge all positions.
@@ -563,6 +573,8 @@ fn backward_from_checkpoints<F: Float + BtapeThreadLocal>(
 
     // Backward pass: VJP through each segment from checkpoints.
     // Checkpoints are sorted by step index (inserted in order).
+    // SPEC: CompletenessProperty — every forward step is covered exactly once by the
+    // reverse segment walk `(0..num_segments).rev()`.
     let num_segments = checkpoints.len();
     for seg in (0..num_segments).rev() {
         let (ckpt_step, ref ckpt_state) = checkpoints[seg];
@@ -609,6 +621,7 @@ fn revolve_schedule(num_steps: usize, num_checkpoints: usize) -> Vec<usize> {
 
     let mut positions = Vec::new();
     schedule_recursive(0, num_steps, num_checkpoints, &mut positions);
+    // SPEC: SortedCheckpoints — revolve_schedule returns positions sorted and deduplicated.
     positions.sort_unstable();
     positions.dedup();
     positions

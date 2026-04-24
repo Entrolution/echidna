@@ -91,34 +91,69 @@ benefit from `-workers auto` and `-XX:+UseParallelGC` for larger bounds.
 
 ## Invariant Cross-Reference
 
-| TLA+ Invariant | Rust Correspondence |
-|---------------|---------------------|
-| `BudgetInvariant` | `all_positions.truncate(num_checkpoints)` in `grad_checkpointed` |
-| `PositionRangeInvariant` | `next_step < num_steps` guard in forward pass |
-| `SortedCheckpoints` | `positions.sort_unstable(); positions.dedup()` in `revolve_schedule` |
-| `InitialStateStored` | `checkpoints.push((0, x0.to_vec()))` — always first |
-| `CompletenessProperty` | Backward loop `for seg in (0..num_segments).rev()` covers all segments |
-| `BufferBudget` | `buffer.len() >= num_checkpoints` thinning trigger in `grad_checkpointed_online` |
-| `PinnedOrigin` | `buffer[0]` is `(0, x0)`, preserved during thinning |
-| `SpacingPowerOf2` | `spacing *= 2` is the only mutation of `spacing` |
-| `UniformSpacing` | `step_index.is_multiple_of(spacing)` checkpoint condition |
-| `RequiredIncluded` | `all_positions` starts as `required.iter().copied().collect()` in `grad_checkpointed_with_hints` |
-| `AllocationExact` | `largest_remainder_alloc` returns values summing to `total` |
+Each invariant is tagged in the Rust source with a `// SPEC: <Name>` comment at
+the line that realises it. The cross-reference below names each invariant, the
+source file carrying its anchor, and a one-line explanation of how the code
+upholds it. `specs/verify_anchors.sh` parses these tables and greps the declared
+source file for each anchor, ensuring no anchor has been deleted or moved out
+of its declared file — run by CI on every change to the specs or the guarded
+source files.
 
-### Tape Optimizer
+### Gradient Checkpointing (anchors in `src/checkpoint.rs`)
 
-| TLA+ Invariant | Rust Correspondence |
-|---------------|---------------------|
-| `InputPrefixInvariant` | First `num_inputs` entries are `OpCode::Input` with `UNUSED` args |
-| `DAGOrderInvariant` | `arg0 < i` and `arg1 < i` — debug assertion at optimize.rs:255-269 |
-| `ValidRefsInvariant` | All `arg_indices` entries `< n` — debug assertion at optimize.rs:240-269 |
-| `OutputValidInvariant` | `output_index < n` — debug assertion at optimize.rs:275-280 |
-| `InputsPreserved` | Input count unchanged — debug assertion at optimize.rs:290-298 |
-| `CSERemapMonotone` | `remap[i] <= i` — CSE only redirects to earlier entries |
-| `CSERemapIdempotent` | `remap[remap[i]] = remap[i]` — canonical entries are fixed points |
-| `DCEInputsReachable` | `reachable[..num_inputs] = true` in `dce_compact()` |
-| `PostOptValid` | Comprehensive structural check at optimize.rs:235-299 |
-| `IdempotencyProperty` | `optimize(optimize(tape)) = optimize(tape)` for all valid tapes |
+| TLA+ Invariant | Anchor site | How the Rust code upholds it |
+|---------------|-------------|------------------------------|
+| `BudgetInvariant` | `src/checkpoint.rs` | `all_positions.truncate(num_checkpoints)` caps the stored set |
+| `PositionRangeInvariant` | `src/checkpoint.rs` | `next_step < num_steps` guard during forward pass |
+| `SortedCheckpoints` | `src/checkpoint.rs` | `revolve_schedule` sorts + dedups before returning |
+| `InitialStateStored` | `src/checkpoint.rs` | `checkpoints.push((0, x0.to_vec()))` is the first insert |
+| `CompletenessProperty` | `src/checkpoint.rs` | `backward_from_checkpoints` walks `(0..num_segments).rev()` over all segments |
+| `BufferBudget` | `src/checkpoint.rs` | thinning triggers at `buffer.len() >= num_checkpoints` |
+| `PinnedOrigin` | `src/checkpoint.rs` | `buffer.push((0, x0.to_vec()))` pins `buffer[0]` across thinning |
+| `SpacingPowerOf2` | `src/checkpoint.rs` | the only mutation of `spacing` is `spacing *= 2` |
+| `UniformSpacing` | `src/checkpoint.rs` | checkpoints added only when `step_index.is_multiple_of(spacing)` |
+| `RequiredIncluded` | `src/checkpoint.rs` | `required` is filtered/sorted/deduped and seeded into `all_positions` |
+| `AllocationExact` | `src/checkpoint.rs` | `largest_remainder_alloc` returns values summing to `total` |
+
+### Tape Optimizer (anchors in `src/bytecode_tape/optimize.rs` and `src/bytecode_tape/mod.rs`)
+
+| TLA+ Invariant | Anchor site | How the Rust code upholds it |
+|---------------|-------------|------------------------------|
+| `InputPrefixInvariant` | `src/bytecode_tape/mod.rs` | `new_input` pushes `OpCode::Input` with `[UNUSED, UNUSED]` before any non-input op |
+| `DAGOrderInvariant` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts `arg0 < i` and `arg1 < i` for non-Input/Const/Powi |
+| `ValidRefsInvariant` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts every arg index `< tape length` |
+| `OutputValidInvariant` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts `output_index < n` and each `output_indices[i] < n` |
+| `InputsPreserved` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts Input-opcode count equals `num_inputs` |
+| `CSERemapMonotone` | `src/bytecode_tape/optimize.rs` | CSE uses first-seen canonical, so `remap[i] <= i` |
+| `CSERemapIdempotent` | `src/bytecode_tape/optimize.rs` | canonical entries are not remapped, giving `remap[remap[i]] = remap[i]` |
+| `DCEInputsReachable` | `src/bytecode_tape/optimize.rs` | `dce_compact` marks the first `num_inputs` slots reachable unconditionally |
+| `PostOptValid` | `src/bytecode_tape/optimize.rs` | the `debug_assertions` block in `optimize()` is the runtime structural check |
+| `IdempotencyProperty` | `src/bytecode_tape/optimize.rs` | property exercised by `tests/spec_invariants_tape_optimize.rs` |
+
+## Keeping Specs and Code in Sync
+
+TLC model-checks the TLA+ files in isolation; it does not execute the Rust
+code. Two mechanisms bridge that gap:
+
+1. **Source anchors** — every invariant listed above carries a
+   `// SPEC: <InvariantName>` comment at the line of code that upholds it.
+   `specs/verify_anchors.sh` parses this README's tables, greps the named
+   source files for each anchor, and fails if any is missing or if the
+   declared source file no longer exists. This is cheap, Java-free, and
+   catches deletion, rename-to-something-else, and file-move regressions.
+   It does **not** catch an anchor pasted next to the wrong line within the
+   declared file — that remains a reviewer responsibility.
+2. **Semantic property tests** — `tests/spec_invariants_checkpoint.rs` and
+   `tests/spec_invariants_tape_optimize.rs` exercise the properties the specs
+   verify against the real Rust implementation (gradient correctness across
+   checkpointing strategies, `optimize ∘ optimize = optimize`, etc.), over a
+   deterministic bounded input space. The pre-existing `debug_assertions` in
+   `optimize()` cover the structural invariants once any test exercises the
+   code path.
+
+Together these give spec-to-code alignment that is mechanical rather than
+aspirational: if the README claims an invariant holds, either an anchor or a
+test (usually both) will break when the code diverges.
 
 ## Variable Mapping
 

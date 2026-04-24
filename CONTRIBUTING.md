@@ -107,17 +107,26 @@ Two subsystems have TLA+ specifications under `specs/` that are model-checked in
 - `src/checkpoint.rs` — gradient checkpointing (Revolve, online, hints)
 - `src/bytecode_tape/optimize.rs` — bytecode tape optimizer (CSE + DCE, idempotency)
 
-The [`.github/workflows/specs.yml`](.github/workflows/specs.yml) job runs automatically on any push or PR touching `specs/**` or either source file. If you change these files, expect the specs job to run — a failure means your change either broke an invariant or the spec needs updating alongside the code. Treat the two as a pair.
+The [`.github/workflows/specs.yml`](.github/workflows/specs.yml) job runs automatically on any push or PR touching `specs/**` or the guarded source files. It enforces spec-to-code alignment through three gates:
 
-To run the specs locally (requires Java 11+ and `tla2tools.jar` in `specs/`):
+1. **Source anchors** — every invariant in `specs/README.md` has a `// SPEC: <Name>` comment at the Rust line that upholds it. `specs/verify_anchors.sh` fails if any anchor is missing. Run locally with:
+   ```bash
+   ./specs/verify_anchors.sh
+   ```
+2. **Semantic property tests** — `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties (gradient equality against non-checkpointed reference, `optimize ∘ optimize = optimize`, post-optimise structural assertions). Run with:
+   ```bash
+   cargo test --features bytecode --test spec_invariants_checkpoint \
+       --test spec_invariants_tape_optimize
+   ```
+3. **TLC model checking** — the TLA+ specs themselves, run under TLC. Requires Java 11+ and `tla2tools.jar` in `specs/`:
+   ```bash
+   java -cp specs/tla2tools.jar tlc2.TLC -config specs/revolve/Revolve.cfg specs/revolve/Revolve.tla
+   java -cp specs/tla2tools.jar tlc2.TLC -config specs/tape_optimizer/Idempotency.cfg specs/tape_optimizer/Idempotency.tla
+   ```
 
-```bash
-# Fastest (seconds each) — good for iterative work
-java -cp specs/tla2tools.jar tlc2.TLC -config specs/revolve/Revolve.cfg specs/revolve/Revolve.tla
-java -cp specs/tla2tools.jar tlc2.TLC -config specs/tape_optimizer/Idempotency.cfg specs/tape_optimizer/Idempotency.tla
-```
+If you add or rename an invariant, update both the `specs/README.md` cross-reference table and the matching `// SPEC:` anchor in the source. The anchor verifier will catch missed pairs.
 
-See [`specs/README.md`](specs/README.md) for the full suite, invariant-to-code cross-reference, and recommended parameter sweeps.
+See [`specs/README.md`](specs/README.md) for the full suite and recommended parameter sweeps.
 
 ### Security Audits
 

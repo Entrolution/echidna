@@ -7,15 +7,27 @@ on:
       - 'specs/**'
       - 'src/checkpoint.rs'
       - 'src/bytecode_tape/optimize.rs'
+      - 'src/bytecode_tape/mod.rs'
   pull_request:
     paths:
       - 'specs/**'
       - 'src/checkpoint.rs'
       - 'src/bytecode_tape/optimize.rs'
+      - 'src/bytecode_tape/mod.rs'
 
 jobs:
+  verify-anchors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify SPEC anchors
+        run: ./specs/verify_anchors.sh
+
   model-check:
     runs-on: ubuntu-latest
+    needs: verify-anchors
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6

@@ -161,6 +161,8 @@ impl<F: Float> BytecodeTape<F> {
         let idx = self.num_variables;
         self.num_variables += 1;
         self.num_inputs += 1;
+        // SPEC: InputPrefixInvariant — Input opcodes are always added before any non-input
+        // opcode and carry `[UNUSED, UNUSED]` args; callers (e.g. `record`) rely on this.
         self.opcodes.push(OpCode::Input);
         self.arg_indices.push([UNUSED, UNUSED]);
         self.values.push(value);
