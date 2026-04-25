@@ -2,8 +2,8 @@
 
 #![cfg(feature = "simba")]
 
-use approx::assert_relative_eq;
-use echidna::{Dual64, Reverse64};
+use approx::{assert_abs_diff_eq, assert_relative_eq, assert_ulps_eq};
+use echidna::{Dual64, DualVec64, Reverse64};
 use nalgebra::{Matrix3, Vector3};
 use num_traits::Float;
 
@@ -72,6 +72,91 @@ fn dual_matrix_vector_product() {
     assert_relative_eq!(result[0].eps, 1.0, max_relative = 1e-12);
     assert_relative_eq!(result[1].eps, 4.0, max_relative = 1e-12);
     assert_relative_eq!(result[2].eps, 7.0, max_relative = 1e-12);
+}
+
+// ── DualVec<f64, N> in nalgebra ──
+
+#[test]
+fn dual_vec_vector3_dot_product() {
+    let a = Vector3::new(
+        DualVec64::<3>::new(1.0, [1.0, 0.0, 0.0]),
+        DualVec64::<3>::new(2.0, [0.0, 1.0, 0.0]),
+        DualVec64::<3>::new(3.0, [0.0, 0.0, 1.0]),
+    );
+    let b = Vector3::new(
+        DualVec64::<3>::constant(4.0),
+        DualVec64::<3>::constant(5.0),
+        DualVec64::<3>::constant(6.0),
+    );
+    let dot = a.dot(&b);
+    // dot = 1*4 + 2*5 + 3*6 = 32
+    assert_relative_eq!(dot.re, 32.0, max_relative = 1e-12);
+    // d(dot)/d(a[0]) = b[0] = 4
+    // d(dot)/d(a[1]) = b[1] = 5
+    // d(dot)/d(a[2]) = b[2] = 6
+    assert_relative_eq!(dot.eps[0], 4.0, max_relative = 1e-12);
+    assert_relative_eq!(dot.eps[1], 5.0, max_relative = 1e-12);
+    assert_relative_eq!(dot.eps[2], 6.0, max_relative = 1e-12);
+}
+
+#[test]
+fn dual_vec_vector3_norm() {
+    // v = [x, y, z], norm = sqrt(x² + y² + z²)
+    // d(norm)/dv_i = v_i / norm
+    let v = Vector3::new(
+        DualVec64::<3>::new(3.0, [1.0, 0.0, 0.0]),
+        DualVec64::<3>::new(2.0, [0.0, 1.0, 0.0]),
+        DualVec64::<3>::new(3.0, [0.0, 0.0, 1.0]),
+    );
+    let n = v.norm();
+    let expected_norm = (9.0 + 4.0 + 9.0_f64).sqrt();
+    assert_relative_eq!(n.re, expected_norm, max_relative = 1e-12);
+    let expected_deriv = v.map(|x| x.re / expected_norm);
+    assert_relative_eq!(n.eps[0], expected_deriv[0], max_relative = 1e-10);
+    assert_relative_eq!(n.eps[1], expected_deriv[1], max_relative = 1e-10);
+    assert_relative_eq!(n.eps[2], expected_deriv[2], max_relative = 1e-10);
+}
+
+#[test]
+fn dual_vec_matrix_vector_product() {
+    // M * v where v[0] is the variable
+    let m = Matrix3::new(
+        DualVec64::<3>::constant(1.0),
+        DualVec64::<3>::constant(2.0),
+        DualVec64::<3>::constant(3.0),
+        DualVec64::<3>::constant(4.0),
+        DualVec64::<3>::constant(5.0),
+        DualVec64::<3>::constant(6.0),
+        DualVec64::<3>::constant(7.0),
+        DualVec64::<3>::constant(8.0),
+        DualVec64::<3>::constant(9.0),
+    );
+    let v = Vector3::new(
+        DualVec64::<3>::new(1.0, [1.0, 0.0, 0.0]),
+        DualVec64::<3>::new(3.0, [0.0, 1.0, 0.0]),
+        DualVec64::<3>::new(5.0, [0.0, 0.0, 1.0]),
+    );
+    let result = m * v;
+    // result = [22, 49, 76]
+    assert_relative_eq!(result[0].re, 22.0, max_relative = 1e-12);
+    assert_relative_eq!(result[1].re, 49.0, max_relative = 1e-12);
+    assert_relative_eq!(result[2].re, 76.0, max_relative = 1e-12);
+    // dv_i/dx_j = M_ij
+    for i in 0..3 {
+        for j in 0..3 {
+            assert_relative_eq!(result[i].eps[j], m[(i, j)].re, max_relative = 1e-12);
+        }
+    }
+}
+
+#[test]
+fn dual_vec_eq() {
+    let a = DualVec64::<3>::new(1.0, [1.0, 0.0, 0.0]);
+    let b = DualVec64::<3>::new(1.0, [0.0, 1.0, 0.0]);
+    // Verify that AbsDiffEq, RelativeEq, and UlpsEq compare only the real part
+    assert_abs_diff_eq!(a, b, epsilon = DualVec64::<3>::epsilon());
+    assert_relative_eq!(a, b, epsilon = DualVec64::<3>::epsilon());
+    assert_ulps_eq!(a, b, max_ulps = 1);
 }
 
 // ── Reverse<f64> in nalgebra ──
@@ -155,6 +240,48 @@ fn dual_matrix3_try_inverse() {
             assert_relative_eq!(identity[(i, j)].re, expected, max_relative = 1e-10);
         }
     }
+}
+
+#[test]
+fn dual_vec_matrix3_try_inverse() {
+    // A 3×3 matrix of dual vectors
+    let m = Matrix3::new(
+        DualVec64::<3>::new(2.0, [1.0, 0.0, 0.0]),
+        DualVec64::<3>::new(1.0, [0.0, 0.0, 0.0]),
+        DualVec64::<3>::new(0.0, [0.0, 0.0, 0.0]),
+        DualVec64::<3>::new(1.0, [0.0, 0.0, 0.0]),
+        DualVec64::<3>::new(3.0, [0.0, 1.0, 0.0]),
+        DualVec64::<3>::new(1.0, [0.0, 0.0, 0.0]),
+        DualVec64::<3>::new(0.0, [0.0, 0.0, 0.0]),
+        DualVec64::<3>::new(1.0, [0.0, 0.0, 0.0]),
+        DualVec64::<3>::new(2.0, [0.0, 0.0, 1.0]),
+    );
+    let inv = m.try_inverse().expect("matrix should be invertible");
+    // Verify that matrix times inv(matrix) is the identity with all entries with zero differential part
+    let identity = m * inv;
+    for i in 0..3 {
+        for j in 0..3 {
+            let actual = identity[(i, j)];
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert_relative_eq!(actual.re, expected, max_relative = 1e-10);
+            for k in 0..3 {
+                assert_relative_eq!(actual.eps[k], 0.0, max_relative = 1e-10);
+            }
+        }
+    }
+    // Verify finite-diff agreement.
+    let h = 1e-7;
+    let f = |a: f64| {
+        let m = Matrix3::new(a, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 2.0);
+        let inv = m.try_inverse().unwrap();
+        inv[(0, 0)] + inv[(1, 1)] + inv[(2, 2)]
+    };
+    let fd = (f(2.0 + h) - f(2.0 - h)) / (2.0 * h);
+    assert_relative_eq!(
+        (inv[(0, 0)] + inv[(1, 1)] + inv[(2, 2)]).eps[0],
+        fd,
+        max_relative = 1e-4
+    );
 }
 
 #[test]
