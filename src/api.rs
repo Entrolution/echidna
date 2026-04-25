@@ -199,8 +199,10 @@ pub fn record<F: Float + BtapeThreadLocal>(
         })
         .collect();
 
-    let _guard = BtapeGuard::new(&mut tape);
-    let output = f(&inputs);
+    let output = {
+        let _guard = BtapeGuard::new(&mut tape);
+        f(&inputs)
+    };
 
     // Promote constant outputs (index == CONSTANT) to a tape entry so
     // set_output has a valid index. The gradient will correctly be zero.
@@ -238,8 +240,21 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
         })
         .collect();
 
-    let _guard = BtapeGuard::new(&mut tape);
-    let outputs = f(&inputs);
+    let outputs = {
+        let _guard = BtapeGuard::new(&mut tape);
+        f(&inputs)
+    };
+
+    // A zero-output tape degenerates silently: `set_outputs(&[])` leaves
+    // `output_index` at its default (0 — typically the first input), and
+    // `num_outputs()` would still report 1, so later calls like `jacobian`
+    // or `output_values` return values unrelated to anything the closure
+    // produced. Reject the degenerate case up front.
+    assert!(
+        !outputs.is_empty(),
+        "record_multi: closure returned zero outputs; record_multi is for \
+         vector-valued f : R^n -> R^m with m >= 1"
+    );
 
     let values: Vec<F> = outputs.iter().map(|o| o.value).collect();
     // Promote constant outputs to tape entries (see record() for rationale).
@@ -381,8 +396,10 @@ where
         })
         .collect();
 
-    let _guard = BtapeGuard::new(&mut tape);
-    let output = f(&inputs);
+    let output = {
+        let _guard = BtapeGuard::new(&mut tape);
+        f(&inputs)
+    };
 
     let value = output.re.value;
     let primal_index = output.re.index;

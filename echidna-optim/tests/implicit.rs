@@ -248,11 +248,11 @@ fn adjoint_matches_jacobian_transpose() {
 }
 
 // ============================================================
-// Test 5: Singular F_z returns None
+// Test 5: Singular F_z returns Err
 // ============================================================
 
 #[test]
-fn singular_fz_returns_none() {
+fn singular_fz_returns_err() {
     // F(z, x) = [z0 + z1 - x, 2*z0 + 2*z1 - 2*x]
     // F_z = [[1,1],[2,2]] which is singular (rank 1)
     let (mut tape, _) = record_multi(
@@ -270,9 +270,9 @@ fn singular_fz_returns_none() {
     let z_star = [0.5, 0.5]; // F(z*, x) = [0, 0] ✓
     let x = [1.0];
 
-    assert!(implicit_jacobian(&mut tape, &z_star, &x, 2).is_none());
-    assert!(implicit_tangent(&mut tape, &z_star, &x, &[1.0], 2).is_none());
-    assert!(implicit_adjoint(&mut tape, &z_star, &x, &[1.0, 0.0], 2).is_none());
+    assert!(implicit_jacobian(&mut tape, &z_star, &x, 2).is_err());
+    assert!(implicit_tangent(&mut tape, &z_star, &x, &[1.0], 2).is_err());
+    assert!(implicit_adjoint(&mut tape, &z_star, &x, &[1.0, 0.0], 2).is_err());
 }
 
 // ============================================================

@@ -6,6 +6,7 @@
 
 use std::fmt::{self, Display};
 
+use crate::kernels;
 use crate::Float;
 
 /// Batched forward-mode dual number: a value with N tangent lanes.
@@ -87,7 +88,19 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn recip(self) -> Self {
         let inv = F::one() / self.re;
-        self.chain(inv, -inv * inv)
+        // See `Dual::recip` — skip the chain for zero eps lanes at the
+        // singularity to avoid NaN from `0 * Inf`.
+        let factor = -inv * inv;
+        DualVec {
+            re: inv,
+            eps: std::array::from_fn(|k| {
+                if self.eps[k] == F::zero() {
+                    F::zero()
+                } else {
+                    self.eps[k] * factor
+                }
+            }),
+        }
     }
 
     /// Square root.
@@ -117,7 +130,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         }
         let val = self.re.powi(n);
         let deriv = if n == i32::MIN {
-            F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap())
+            F::from(n).unwrap() * val / self.re
         } else {
             F::from(n).unwrap() * self.re.powi(n - 1)
         };
@@ -127,6 +140,16 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Floating-point power.
     #[inline]
     pub fn powf(self, n: Self) -> Self {
+        // Constant integer exponent fast path (see `Dual::powf` for rationale):
+        // avoids `ln(x)` NaN-poisoning the tangent when the exponent is a
+        // constant and `x < 0`.
+        if n.eps.iter().all(|&e| e == F::zero()) {
+            if let Some(ni) = n.re.to_i32() {
+                if F::from(ni).unwrap() == n.re {
+                    return self.powi(ni);
+                }
+            }
+        }
         if n.re == F::zero() {
             // a^0 = 1, d/da(a^0) = 0, d/db(a^b)|_{b=0} = ln(a) (for a > 0)
             let dy = if self.re > F::zero() {
@@ -140,7 +163,9 @@ impl<F: Float, const N: usize> DualVec<F, N> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx_factor = if self.re == F::zero() {
+        let dx_factor = if self.re == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.re * self.re.powf(n.re - F::one())
         } else {
             n.re * val / self.re
@@ -250,7 +275,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     pub fn asin(self) -> Self {
         self.chain(
             self.re.asin(),
-            F::one() / (F::one() - self.re * self.re).sqrt(),
+            F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
         )
     }
 
@@ -259,30 +284,23 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     pub fn acos(self) -> Self {
         self.chain(
             self.re.acos(),
-            -F::one() / (F::one() - self.re * self.re).sqrt(),
+            -F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
         )
     }
 
     /// Arctangent.
     #[inline]
     pub fn atan(self) -> Self {
-        self.chain(self.re.atan(), F::one() / (F::one() + self.re * self.re))
+        self.chain(self.re.atan(), kernels::atan_deriv(self.re))
     }
 
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        let h = self.re.hypot(other.re);
-        let denom = h * h;
-        if denom == F::zero() {
-            return DualVec {
-                re: self.re.atan2(other.re),
-                eps: [F::zero(); N],
-            };
-        }
+        let (d_self, d_other) = kernels::atan2_partials(self.re, other.re);
         DualVec {
             re: self.re.atan2(other.re),
-            eps: std::array::from_fn(|k| (other.re * self.eps[k] - self.re * other.eps[k]) / denom),
+            eps: std::array::from_fn(|k| d_self * self.eps[k] + d_other * other.eps[k]),
         }
     }
 
@@ -310,25 +328,22 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(
-            self.re.asinh(),
-            F::one() / (self.re * self.re + F::one()).sqrt(),
-        )
+        self.chain(self.re.asinh(), kernels::asinh_deriv(self.re))
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(
-            self.re.acosh(),
-            F::one() / (self.re * self.re - F::one()).sqrt(),
-        )
+        self.chain(self.re.acosh(), kernels::acosh_deriv(self.re))
     }
 
     /// Inverse hyperbolic tangent.
     #[inline]
     pub fn atanh(self) -> Self {
-        self.chain(self.re.atanh(), F::one() / (F::one() - self.re * self.re))
+        self.chain(
+            self.re.atanh(),
+            F::one() / ((F::one() - self.re) * (F::one() + self.re)),
+        )
     }
 
     // -- Misc --
@@ -406,13 +421,18 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
         let h = self.re.hypot(other.re);
+        if h == F::zero() {
+            // See `Dual::hypot`: singular point — short-circuit to zero
+            // tangent regardless of `eps` sign/finiteness.
+            return DualVec {
+                re: h,
+                eps: [F::zero(); N],
+            };
+        }
+        let (da, db) = kernels::hypot_partials(self.re, other.re, h);
         DualVec {
             re: h,
-            eps: if h == F::zero() {
-                [F::zero(); N]
-            } else {
-                std::array::from_fn(|k| (self.re * self.eps[k] + other.re * other.eps[k]) / h)
-            },
+            eps: std::array::from_fn(|k| da * self.eps[k] + db * other.eps[k]),
         }
     }
 

@@ -62,7 +62,7 @@ fn ad_trait_forward_gradient_matches_echidna() {
     let n = 4;
     let x = make_input(n);
 
-    let echidna_grad = echidna::grad(|v| rosenbrock(v), &x);
+    let echidna_grad = echidna::grad(rosenbrock, &x);
 
     let rosen_std = RosenbrockAD { n };
     let rosen_fwd = rosen_std.clone();
@@ -87,7 +87,7 @@ fn ad_trait_reverse_gradient_matches_echidna() {
     let n = 4;
     let x = make_input(n);
 
-    let echidna_grad = echidna::grad(|v| rosenbrock(v), &x);
+    let echidna_grad = echidna::grad(rosenbrock, &x);
 
     let rosen_std = RosenbrockAD { n };
     let rosen_rev = rosen_std.clone();

@@ -85,7 +85,13 @@ impl<F: Float> super::BytecodeTape<F> {
             .filter(|k| opcode::has_nontrivial_subdifferential(k.opcode))
             .collect();
         let k = active.len();
-        let limit = max_active_kinks.unwrap_or(20);
+        // Hard ceiling: `1usize << k` at the combo-enumeration step below
+        // panics in debug and wraps to 1 in release for k >= usize::BITS,
+        // silently enumerating only a single combo. Cap the effective limit
+        // regardless of what the caller passed so the overflow is never
+        // reachable. On a 32-bit target this caps at 31; on 64-bit, 63.
+        let max_representable: usize = (usize::BITS as usize) - 1;
+        let limit = max_active_kinks.unwrap_or(20).min(max_representable);
 
         if k > limit {
             return Err(crate::nonsmooth::ClarkeError::TooManyKinks { count: k, limit });
@@ -128,7 +134,21 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Dense Jacobian via forward mode (one forward-tangent pass per input).
     ///
     /// More efficient than reverse mode when `num_inputs < num_outputs`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tape contains custom ops. `forward_tangent` linearizes
+    /// custom ops around recording-time primals, so at an evaluation `x`
+    /// different from the recording inputs the Jacobian would be silently
+    /// biased. Matches the behaviour of `hessian_vec`, `sparse_hessian_vec`,
+    /// and `sparse_jacobian_vec`.
     pub fn jacobian_forward(&self, x: &[F]) -> Vec<Vec<F>> {
+        assert!(
+            self.custom_ops.is_empty(),
+            "jacobian_forward: custom ops produce a linearization around recording-\
+             time primals; use `jacobian` (reverse mode) for exact Jacobians through \
+             custom ops"
+        );
         let n = self.num_inputs as usize;
 
         let out_indices = self.all_output_indices();

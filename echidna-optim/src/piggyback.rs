@@ -1,6 +1,158 @@
+use std::fmt;
+
 use echidna::{BytecodeTape, Dual, Float};
 
+/// Reason a piggyback solve failed to converge.
+///
+/// Marked `#[non_exhaustive]` so future variants can be added without
+/// breaking exhaustive `match`es. Numeric fields use `f64` (cast via
+/// `Float::to_f64`) for uniform diagnostic output regardless of the
+/// solver's `F` type.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum PiggybackError {
+    /// The primal `z_{k+1} = G(z_k, x)` produced a non-finite norm
+    /// (relative-norm `||z_new - z||/(1 + ||z||)` is NaN/Inf), or
+    /// the primal vector itself contained non-finite components in
+    /// the forward-adjoint loop. `last_norm` is the primal-delta
+    /// relative norm at the detecting iteration: non-finite when
+    /// detection came from the norm check (the usual case);
+    /// finite — and itself diagnostic — when detection came from
+    /// the componentwise finite check (primal vector overflowed
+    /// mid-iteration while the step-to-step delta stayed bounded).
+    PrimalDivergence { iteration: usize, last_norm: f64 },
+    /// Primal stayed finite but the tangent
+    /// `ż_{k+1} = G_z · ż_k + G_x · ẋ` produced non-finite values.
+    /// Catches the ratio-converging case where the primal norm
+    /// remains bounded while individual tangent components overflow.
+    /// `last_norm` is the primal-delta relative norm at the
+    /// detecting iteration — **finite** by construction here (the
+    /// tangent-only divergence path takes the norm-finite branch
+    /// before the componentwise check fires); surfacing it tells
+    /// the caller the primal iteration was bounded while the JVP
+    /// overflowed.
+    TangentDivergence { iteration: usize, last_norm: f64 },
+    /// Adjoint `λ_{k+1} = G_z^T · λ_k + z̄` produced non-finite
+    /// values (norm or individual components). `last_norm` is the
+    /// adjoint-delta relative norm at the detecting iteration:
+    /// non-finite when detection came from the norm check; finite
+    /// when it came from the componentwise `lambda_new` check.
+    AdjointDivergence { iteration: usize, last_norm: f64 },
+    /// `piggyback_tangent_solve` reached `max_iter` without meeting
+    /// `tol`. `z_norm` is the final iteration's relative primal-delta
+    /// norm (`||z_new - z|| / (1 + ||z||)`) — a value just over `tol`
+    /// signals proximity to convergence; many orders over signals
+    /// stagnation. `iteration` equals `max_iter`.
+    IterationsExhaustedTangent { iteration: usize, z_norm: f64 },
+    /// `piggyback_adjoint_solve` reached `max_iter` without meeting
+    /// `tol`. `lam_norm` is the final iteration's relative adjoint-
+    /// delta norm (`||λ_new - λ|| / (1 + ||λ||)`).
+    IterationsExhaustedAdjoint { iteration: usize, lam_norm: f64 },
+    /// `piggyback_forward_adjoint_solve` reached `max_iter` without
+    /// meeting `tol` on both norms simultaneously. Each field is the
+    /// final iteration's relative norm for the corresponding stream.
+    IterationsExhaustedForwardAdjoint {
+        iteration: usize,
+        z_norm: f64,
+        lam_norm: f64,
+    },
+    /// A runtime-supplied vector argument to a public `*_solve` fn
+    /// had an unexpected length. `field` names the argument (e.g.
+    /// `"z_dot"`, `"z_bar"`), `expected` is the length the API
+    /// requires (typically `num_states` or `x.len()`), `actual` is
+    /// the length the caller supplied.
+    ///
+    /// Note: tape-shape contract mismatches
+    /// (`validate_step_tape`) and step-fn argument mismatches
+    /// (`piggyback_tangent_step[_with_buf]`) continue to panic —
+    /// those are programmer-contract violations, not recoverable
+    /// runtime failures.
+    DimensionMismatch {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl fmt::Display for PiggybackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PiggybackError::PrimalDivergence {
+                iteration,
+                last_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: primal diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
+                )
+            }
+            PiggybackError::TangentDivergence {
+                iteration,
+                last_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: tangent diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
+                )
+            }
+            PiggybackError::AdjointDivergence {
+                iteration,
+                last_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: adjoint diverged at iteration {iteration} (last_norm = {last_norm:.3e})"
+                )
+            }
+            PiggybackError::IterationsExhaustedTangent { iteration, z_norm } => {
+                write!(
+                    f,
+                    "piggyback: tangent solve reached max_iter = {iteration} (z_norm = {z_norm:.3e})"
+                )
+            }
+            PiggybackError::IterationsExhaustedAdjoint {
+                iteration,
+                lam_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: adjoint solve reached max_iter = {iteration} (lam_norm = {lam_norm:.3e})"
+                )
+            }
+            PiggybackError::IterationsExhaustedForwardAdjoint {
+                iteration,
+                z_norm,
+                lam_norm,
+            } => {
+                write!(
+                    f,
+                    "piggyback: forward-adjoint solve reached max_iter = {iteration} (z_norm = {z_norm:.3e}, lam_norm = {lam_norm:.3e})"
+                )
+            }
+            PiggybackError::DimensionMismatch {
+                field,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "piggyback: dimension mismatch for `{field}` (expected {expected}, got {actual})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PiggybackError {}
+
+echidna::assert_send_sync!(PiggybackError);
+
 /// Validate that a step tape G: R^(m+n) -> R^m has the expected shape.
+///
+/// Uses `assert_eq!` (panic) rather than `Result` because shape
+/// mismatches are programmer errors — calling `piggyback_*_solve` with
+/// an inconsistent tape is a contract violation, not a runtime
+/// numerical failure that callers should recover from.
 fn validate_step_tape<F: Float>(tape: &BytecodeTape<F>, z: &[F], x: &[F], num_states: usize) {
     assert_eq!(z.len(), num_states);
     assert_eq!(tape.num_inputs(), num_states + x.len());
@@ -78,8 +230,12 @@ pub fn piggyback_tangent_step_with_buf<F: Float>(
 /// Iterates the fixed-point map `z_{k+1} = G(z_k, x)` while simultaneously
 /// propagating tangents `ż_{k+1} = G_z · ż_k + G_x · ẋ`.
 ///
-/// Returns `Some((z_star, z_dot_star, iterations))` on convergence, `None` on
-/// divergence or exceeding `max_iter`.
+/// Returns `Ok((z_star, z_dot_star, iterations))` on convergence. Returns
+/// `Err(PiggybackError::PrimalDivergence)` when the primal norm becomes
+/// non-finite, `Err(PiggybackError::TangentDivergence)` when the primal
+/// stays finite but the tangent overflows (ratio-converging case), or
+/// `Err(PiggybackError::IterationsExhaustedTangent { iteration, z_norm })` when
+/// `max_iter` is reached without satisfying `tol`.
 pub fn piggyback_tangent_solve<F: Float>(
     step_tape: &BytecodeTape<F>,
     z0: &[F],
@@ -88,11 +244,23 @@ pub fn piggyback_tangent_solve<F: Float>(
     num_states: usize,
     max_iter: usize,
     tol: F,
-) -> Option<(Vec<F>, Vec<F>, usize)> {
+) -> Result<(Vec<F>, Vec<F>, usize), PiggybackError> {
+    // Runtime vector-length check at solve-level: surfaces dimension
+    // mismatches as `Err` before the first iteration dispatches to the
+    // step fn (which still panics on bad input as a contract-level
+    // guarantee).
+    if x_dot.len() != x.len() {
+        return Err(PiggybackError::DimensionMismatch {
+            field: "x_dot",
+            expected: x.len(),
+            actual: x_dot.len(),
+        });
+    }
     let m = num_states;
     let mut z = z0.to_vec();
     let mut z_dot = vec![F::zero(); m];
     let mut buf = Vec::new();
+    let mut last_norm: f64 = f64::NAN;
 
     for k in 0..max_iter {
         let (z_new, z_dot_new) =
@@ -107,18 +275,48 @@ pub fn piggyback_tangent_solve<F: Float>(
             z_sq = z_sq + z[i] * z[i];
         }
         let norm = delta_sq.sqrt() / (F::one() + z_sq.sqrt());
+        // Variant-mapping order: norm-check first → PrimalDivergence;
+        // tangent-finite check second → TangentDivergence. A non-finite
+        // primal naturally produces a non-finite norm, so it falls into
+        // PrimalDivergence by detection priority.
         if !norm.is_finite() {
-            return None;
+            return Err(PiggybackError::PrimalDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
+        // Detect tangent divergence even when the primal `z_new` itself is
+        // finite: the JVP iteration `z_dot_{k+1} = G_z·z_dot_k + G_x·x_dot`
+        // can produce Inf/NaN tangents that a primal-only norm check misses.
+        if !z_dot_new.iter().all(|v| v.is_finite()) {
+            // `norm` is guaranteed finite here — the `!norm.is_finite()`
+            // branch above would have returned `PrimalDivergence` first.
+            // The debug_assert guards against a future refactor that
+            // reorders these checks and silently invalidates the
+            // `TangentDivergence::last_norm` docstring's "finite by
+            // construction" promise.
+            debug_assert!(
+                norm.is_finite(),
+                "TangentDivergence path must see a finite primal norm"
+            );
+            return Err(PiggybackError::TangentDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
+        }
+        last_norm = norm.to_f64().unwrap_or(f64::NAN);
         if norm < tol {
-            return Some((z_new, z_dot_new, k + 1));
+            return Ok((z_new, z_dot_new, k + 1));
         }
 
         z = z_new;
         z_dot = z_dot_new;
     }
 
-    None
+    Err(PiggybackError::IterationsExhaustedTangent {
+        iteration: max_iter,
+        z_norm: last_norm,
+    })
 }
 
 /// Adjoint piggyback solve at a converged fixed point z* = G(z*, x).
@@ -130,8 +328,11 @@ pub fn piggyback_tangent_solve<F: Float>(
 /// Requires z* to already be computed (e.g. by the primal solver).
 /// The iteration converges when G is a contraction (‖G_z‖ < 1).
 ///
-/// Returns `Some((x_bar, iterations))` on convergence, `None` on divergence
-/// or exceeding `max_iter`.
+/// Returns `Ok((x_bar, iterations))` on convergence. Returns
+/// `Err(PiggybackError::AdjointDivergence)` when the adjoint norm is
+/// non-finite or `lambda_new` overflows (ratio-converging case), or
+/// `Err(PiggybackError::IterationsExhaustedAdjoint { iteration, lam_norm })`
+/// when `max_iter` is reached without satisfying `tol`.
 pub fn piggyback_adjoint_solve<F: Float>(
     step_tape: &mut BytecodeTape<F>,
     z_star: &[F],
@@ -140,10 +341,20 @@ pub fn piggyback_adjoint_solve<F: Float>(
     num_states: usize,
     max_iter: usize,
     tol: F,
-) -> Option<(Vec<F>, usize)> {
-    validate_step_tape(step_tape, z_star, x, num_states);
+) -> Result<(Vec<F>, usize), PiggybackError> {
+    // Runtime arg-length check first so solve-fn users see
+    // `Err(DimensionMismatch)` in preference to a `validate_step_tape`
+    // panic when both would fire. Matches the check ordering in
+    // `piggyback_tangent_solve`.
     let m = num_states;
-    assert_eq!(z_bar.len(), m, "z_bar length must equal num_states");
+    if z_bar.len() != m {
+        return Err(PiggybackError::DimensionMismatch {
+            field: "z_bar",
+            expected: m,
+            actual: z_bar.len(),
+        });
+    }
+    validate_step_tape(step_tape, z_star, x, num_states);
 
     // Set primal values: forward([z*, x])
     let mut input = Vec::with_capacity(m + x.len());
@@ -152,6 +363,7 @@ pub fn piggyback_adjoint_solve<F: Float>(
     step_tape.forward(&input);
 
     let mut lambda = z_bar.to_vec();
+    let mut last_norm: f64 = f64::NAN;
 
     for k in 0..max_iter {
         // reverse_seeded(λ) returns [G_z^T · λ; G_x^T · λ] (length m+n)
@@ -171,20 +383,41 @@ pub fn piggyback_adjoint_solve<F: Float>(
 
         let norm = delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
         if !norm.is_finite() {
-            return None;
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
+        // A ratio-converging iteration with exponentially-growing `lambda`
+        // magnitudes (spectral radius of `G_z^T` ≥ 1) can produce finite
+        // `norm` while `lambda_new` is Inf/NaN. Explicit finite check
+        // catches the divergence regardless of ratio behaviour.
+        if !lambda_new.iter().all(|v| v.is_finite()) {
+            debug_assert!(
+                norm.is_finite(),
+                "AdjointDivergence componentwise path must see a finite norm"
+            );
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: norm.to_f64().unwrap_or(f64::NAN),
+            });
+        }
+        last_norm = norm.to_f64().unwrap_or(f64::NAN);
         if norm < tol {
             // One extra reverse pass with converged lambda to get consistent x_bar.
             // Without this, adj[m..] uses the pre-convergence lambda, introducing
             // O(tol * ||G_x||) error.
             let adj_final = step_tape.reverse_seeded(&lambda_new);
-            return Some((adj_final[m..].to_vec(), k + 1));
+            return Ok((adj_final[m..].to_vec(), k + 1));
         }
 
         lambda = lambda_new;
     }
 
-    None
+    Err(PiggybackError::IterationsExhaustedAdjoint {
+        iteration: max_iter,
+        lam_norm: last_norm,
+    })
 }
 
 /// Interleaved forward-adjoint piggyback solve.
@@ -193,8 +426,13 @@ pub fn piggyback_adjoint_solve<F: Float>(
 /// the adjoint equation `λ_{k+1} = G_z^T · λ_k + z̄`. This cuts the total
 /// iteration count from `K_primal + K_adjoint` to `max(K_primal, K_adjoint)`.
 ///
-/// Returns `Some((z_star, x_bar, iterations))` when both z and λ converge,
-/// `None` on divergence or exceeding `max_iter`.
+/// Returns `Ok((z_star, x_bar, iterations))` when both `z` and `λ` converge.
+/// Returns `Err(PiggybackError::PrimalDivergence)` when `z_norm` becomes
+/// non-finite or `z_new` itself contains non-finite components,
+/// `Err(PiggybackError::AdjointDivergence)` when the adjoint norm or
+/// `lambda_new` overflows, or
+/// `Err(PiggybackError::IterationsExhaustedForwardAdjoint { iteration, z_norm, lam_norm })`
+/// when `max_iter` is reached without satisfying `tol`.
 pub fn piggyback_forward_adjoint_solve<F: Float>(
     step_tape: &mut BytecodeTape<F>,
     z0: &[F],
@@ -203,10 +441,18 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
     num_states: usize,
     max_iter: usize,
     tol: F,
-) -> Option<(Vec<F>, Vec<F>, usize)> {
-    validate_step_tape(step_tape, z0, x, num_states);
+) -> Result<(Vec<F>, Vec<F>, usize), PiggybackError> {
+    // Runtime arg-length check first — see note on
+    // `piggyback_adjoint_solve`.
     let m = num_states;
-    assert_eq!(z_bar.len(), m, "z_bar length must equal num_states");
+    if z_bar.len() != m {
+        return Err(PiggybackError::DimensionMismatch {
+            field: "z_bar",
+            expected: m,
+            actual: z_bar.len(),
+        });
+    }
+    validate_step_tape(step_tape, z0, x, num_states);
 
     // Pre-allocate input buffer [z, x]
     let mut input = Vec::with_capacity(m + x.len());
@@ -214,6 +460,8 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
     input.extend_from_slice(x);
 
     let mut lambda = z_bar.to_vec();
+    let mut last_z_norm: f64 = f64::NAN;
+    let mut last_lam_norm: f64 = f64::NAN;
 
     for k in 0..max_iter {
         // Forward pass at current z
@@ -233,7 +481,10 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
         let z_norm = z_delta_sq.sqrt() / (F::one() + z_sq.sqrt());
         if !z_norm.is_finite() {
-            return None;
+            return Err(PiggybackError::PrimalDivergence {
+                iteration: k,
+                last_norm: z_norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
 
         // Adjoint update and convergence: λ_new = G_z^T · λ + z̄
@@ -249,8 +500,42 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
         let lam_norm = lam_delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
         if !lam_norm.is_finite() {
-            return None;
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: lam_norm.to_f64().unwrap_or(f64::NAN),
+            });
         }
+        // Same divergence case as the standalone solvers: a ratio-converging
+        // iteration with exponentially-growing lambda magnitudes can produce
+        // finite `lam_norm` while `lambda_new` itself is Inf/NaN.
+        if !lambda_new.iter().all(|v| v.is_finite()) {
+            debug_assert!(
+                lam_norm.is_finite(),
+                "AdjointDivergence componentwise path must see a finite lam_norm"
+            );
+            return Err(PiggybackError::AdjointDivergence {
+                iteration: k,
+                last_norm: lam_norm.to_f64().unwrap_or(f64::NAN),
+            });
+        }
+        // Defense-in-depth: a non-finite `z_new[i]` would typically have
+        // already shown up as `!z_norm.is_finite()` above (the delta/sq
+        // loops touch every index), but guard the componentwise case
+        // explicitly so a future refactor of the norm computation can't
+        // silently lose primal-divergence detection.
+        if !z_new.iter().all(|v| v.is_finite()) {
+            debug_assert!(
+                z_norm.is_finite(),
+                "PrimalDivergence componentwise path must see a finite z_norm"
+            );
+            return Err(PiggybackError::PrimalDivergence {
+                iteration: k,
+                last_norm: z_norm.to_f64().unwrap_or(f64::NAN),
+            });
+        }
+
+        last_z_norm = z_norm.to_f64().unwrap_or(f64::NAN);
+        last_lam_norm = lam_norm.to_f64().unwrap_or(f64::NAN);
 
         if z_norm < tol && lam_norm < tol {
             // One extra reverse pass with converged lambda_new to get consistent x_bar,
@@ -258,7 +543,7 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
             input[..m].copy_from_slice(&z_new[..m]);
             step_tape.forward(&input);
             let adj_final = step_tape.reverse_seeded(&lambda_new);
-            return Some((z_new, adj_final[m..].to_vec(), k + 1));
+            return Ok((z_new, adj_final[m..].to_vec(), k + 1));
         }
 
         // Update z in the input buffer
@@ -266,5 +551,9 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         lambda = lambda_new;
     }
 
-    None
+    Err(PiggybackError::IterationsExhaustedForwardAdjoint {
+        iteration: max_iter,
+        z_norm: last_z_norm,
+        lam_norm: last_lam_norm,
+    })
 }

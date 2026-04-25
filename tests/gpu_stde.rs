@@ -60,7 +60,7 @@ fn gpu_taylor_2nd_polynomial() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -88,7 +88,7 @@ fn gpu_taylor_2nd_rosenbrock_matches_cpu() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x);
+    let (tape_f64, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -132,7 +132,7 @@ fn gpu_taylor_2nd_batch_sizes() {
     };
 
     let x = [2.0_f64, 3.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -439,7 +439,7 @@ fn gpu_laplacian_matches_cpu() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x);
+    let (tape_f64, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -485,7 +485,7 @@ fn gpu_hessian_diagonal_matches_cpu() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape_f64, _) = record(|v| rosenbrock(v), &x);
+    let (tape_f64, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape_f64).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -521,7 +521,7 @@ fn gpu_polynomial_exact_laplacian() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -552,7 +552,7 @@ fn gpu_polynomial_exact_hessian_diagonal() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -578,7 +578,7 @@ fn gpu_chunked_single_chunk() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -641,7 +641,7 @@ fn gpu_chunked_multi_chunk() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -714,7 +714,7 @@ fn gpu_chunked_exact_boundary() {
     };
 
     let x = [2.0_f64, 3.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -756,7 +756,7 @@ fn gpu_chunked_zero_batch() {
     };
 
     let x = [1.0_f64, 2.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -792,7 +792,7 @@ fn gpu_taylor_kth_polynomial_all_orders() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -856,7 +856,7 @@ fn gpu_taylor_kth_k3_matches_2nd() {
     };
 
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -961,7 +961,7 @@ fn gpu_taylor_kth_multi_batch() {
     };
 
     let x = [3.0_f64, 4.0];
-    let (tape, _) = record(|v| polynomial(v), &x);
+    let (tape, _) = record(polynomial, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -987,6 +987,406 @@ fn gpu_taylor_kth_multi_batch() {
     assert!(result.coefficients[3][1].abs() < 1e-3);
 }
 
+// ══════════════════════════════════════════════
+//  Section 6: WS2 — Higher-order Taylor HYPOT GPU rescale
+// ══════════════════════════════════════════════
+//
+// Pre-WS2, GPU jet HYPOT computed `jet_mul(a,a) + jet_mul(b,b)` directly
+// — fine for `a.v[0] ~ 10` but `1e20 * 1e20` overflows in f32, leaking
+// Inf/NaN into v[1..K]. WS2 mirrors CPU `taylor_ops::taylor_hypot`'s
+// max-rescale strategy. These tests pin both the rescale's correctness
+// (baseline `hypot(3, 4)`) and the WS2 fix at extreme magnitudes
+// (`hypot(1e20, 1e19)`), plus a documented-divergence ignored test
+// for the singular-origin case where CPU does recursive shift-and-square
+// unwinding the GPU intentionally skips.
+
+#[cfg(feature = "stde")]
+fn check_hypot_jet(ctx: &impl GpuBackend, x0: f64, y0: f64, seed: [f32; 2], label: &str) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]);
+    let x = [x0, y0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32, y0 as f32], &seed, 1)
+        .unwrap();
+
+    let seed_f64 = [seed[0] as f64, seed[1] as f64];
+    let (c0, c1, c2) = echidna::stde::taylor_jet_2nd(&tape, &x, &seed_f64);
+
+    // Finiteness is the WS2 contract: pre-WS2, extreme magnitudes
+    // produced Inf/NaN in v[1..K]. Assert finiteness FIRST so a
+    // regression surfaces with a clear message before tolerance noise.
+    assert!(
+        gpu_result.values[0].is_finite(),
+        "{label} c0 not finite: {}",
+        gpu_result.values[0]
+    );
+    assert!(
+        gpu_result.c1s[0].is_finite(),
+        "{label} c1 not finite: {}",
+        gpu_result.c1s[0]
+    );
+    assert!(
+        gpu_result.c2s[0].is_finite(),
+        "{label} c2 not finite: {}",
+        gpu_result.c2s[0]
+    );
+
+    // Parity vs CPU. Use relative tolerance per existing `check_1d`
+    // pattern; ULP-absolute over-passes for low-magnitude `c2` and
+    // under-passes for high-magnitude `c0` at extreme inputs.
+    let tol: f64 = 1e-2;
+    assert!(
+        (gpu_result.values[0] as f64 - c0).abs() < tol.max(c0.abs() * 1e-4),
+        "{label} c0: gpu={} cpu={}",
+        gpu_result.values[0],
+        c0
+    );
+    assert!(
+        (gpu_result.c1s[0] as f64 - c1).abs() < tol.max(c1.abs() * 1e-4),
+        "{label} c1: gpu={} cpu={}",
+        gpu_result.c1s[0],
+        c1
+    );
+    assert!(
+        (gpu_result.c2s[0] as f64 - c2).abs() < tol.max(c2.abs() * 1e-3),
+        "{label} c2: gpu={} cpu={}",
+        gpu_result.c2s[0],
+        c2
+    );
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_baseline_normal_magnitude() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // hypot(3, 4) at direction (1, 0): c0=5, c1=0.6, c2=0.064.
+    // Confirms the rescale rewrite hasn't regressed normal-magnitude
+    // accuracy.
+    check_hypot_jet(&ctx, 3.0, 4.0, [1.0, 0.0], "wgpu_hypot(3,4) dx");
+    check_hypot_jet(&ctx, 3.0, 4.0, [0.0, 1.0], "wgpu_hypot(3,4) dy");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_extreme_magnitude_finite() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // The WS2 main case: `a.v[0] = 1e20` would overflow `a*a` in f32
+    // pre-WS2, NaN-ing v[1..K]. Post-WS2 the rescale keeps everything
+    // bounded.
+    check_hypot_jet(&ctx, 1e20, 1e19, [1.0, 0.0], "wgpu_hypot(1e20,1e19) dx");
+}
+
+#[cfg(feature = "stde")]
+fn check_hypot_jet_nonfinite_input(
+    ctx: &impl GpuBackend,
+    x0: f32,
+    y0: f32,
+    expected_primal_kind: &str, // "inf" or "nan"
+    label: &str,
+) {
+    use num_traits::Float as _;
+    // Build the tape at finite reference values; the GPU is run at
+    // (x0, y0) which may be Inf/NaN. The tape itself is just `hypot(a, b)`.
+    let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]);
+    let (tape, _) = record(f, &[1.0_f64, 1.0]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0, y0], &[1.0f32, 0.0], 1)
+        .unwrap();
+
+    match expected_primal_kind {
+        "inf" => assert!(
+            gpu_result.values[0].is_infinite() && gpu_result.values[0] > 0.0,
+            "{label} c0: expected +Inf, got {}",
+            gpu_result.values[0]
+        ),
+        "nan" => assert!(
+            gpu_result.values[0].is_nan(),
+            "{label} c0: expected NaN, got {}",
+            gpu_result.values[0]
+        ),
+        _ => panic!("unknown expected_primal_kind {expected_primal_kind}"),
+    }
+    // Higher-order coefficients are conventional zero on GPU at the
+    // function-domain boundary (CPU diverges to NaN via `Inf*0=NaN`;
+    // both are defensible at the singularity). Asserting zero pins
+    // the GPU contract — anyone changing the special-case return
+    // values (e.g. omitting the explicit zero loop, regressing back
+    // to NaN) trips here.
+    assert_eq!(
+        gpu_result.c1s[0], 0.0,
+        "{label} c1: expected 0.0 at boundary, got {}",
+        gpu_result.c1s[0]
+    );
+    assert_eq!(
+        gpu_result.c2s[0], 0.0,
+        "{label} c2: expected 0.0 at boundary, got {}",
+        gpu_result.c2s[0]
+    );
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws2_wgpu_hypot_nan_input_propagates_not_swallowed() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // Pins IEEE `hypot(NaN, x) = NaN` for the jet path. Without the
+    // explicit NaN guard added in the WS2 review-fix, `fmax(NaN, 0) = 0`
+    // would route this to the `h == 0` branch and silently return zero
+    // — corrupting any downstream computation that depended on NaN
+    // propagation.
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 0.0, "nan", "wgpu_hypot(NaN, 0) jet");
+    check_hypot_jet_nonfinite_input(&ctx, 0.0, f32::NAN, "nan", "wgpu_hypot(0, NaN) jet");
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 1.0, "nan", "wgpu_hypot(NaN, 1) jet");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_nan_input_propagates_not_swallowed() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 0.0, "nan", "cuda_hypot(NaN, 0) jet");
+    check_hypot_jet_nonfinite_input(&ctx, 0.0, f32::NAN, "nan", "cuda_hypot(0, NaN) jet");
+    check_hypot_jet_nonfinite_input(&ctx, f32::NAN, 1.0, "nan", "cuda_hypot(NaN, 1) jet");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws9_wgpu_hypot_zero_origin_with_nonzero_seed_matches_cpu() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // Post-WS9: `hypot(0, 0)` with a non-zero seed now routes
+    // through the WGSL `h == 0` shift-and-square unroll, matching
+    // CPU's `|t|·hypot(a/t, b/t)` expansion instead of returning
+    // the zero jet. The unroll is one level deep (the CPU recursion
+    // is at most one level since the entry check guarantees
+    // `scale > 0` in the recursive call).
+    check_hypot_jet(&ctx, 0.0, 0.0, [1.0, 0.0], "wgpu_hypot(0,0) dx");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_baseline_normal_magnitude() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet(&ctx, 3.0, 4.0, [1.0, 0.0], "cuda_hypot(3,4) dx");
+    check_hypot_jet(&ctx, 3.0, 4.0, [0.0, 1.0], "cuda_hypot(3,4) dy");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws2_cuda_hypot_extreme_magnitude_finite() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet(&ctx, 1e20, 1e19, [1.0, 0.0], "cuda_hypot(1e20,1e19) dx");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws9_cuda_hypot_zero_origin_with_nonzero_seed_matches_cpu() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet(&ctx, 0.0, 0.0, [1.0, 0.0], "cuda_hypot(0,0) dx");
+}
+
+// ══════════════════════════════════════════════════════════════
+//  WS9 — GPU parity at function-domain-boundary edge cases
+// ══════════════════════════════════════════════════════════════
+//
+// Three cases where pre-WS9 GPU silently diverged from CPU at the
+// boundary of `hypot`'s function domain — CPU producing the
+// mathematically-informed "singular derivative" output (Inf or NaN
+// higher-order coefficients) while GPU emitted a zero jet. The
+// pre-WS9 divergences were pinned by `#[ignore]`-d tests documented
+// as "ws2" divergences; WS9 closes the gap and the tests now pin
+// parity under their `ws9_` rename above.
+//
+// The remaining two divergences — Inf-finite inputs and
+// deeper-order-zero inputs — are pinned by the tests below, using
+// a non-finite-tolerant parity helper since `check_hypot_jet`'s
+// `(gpu - cpu).abs() < tol` fails when CPU or GPU produces Inf/NaN.
+
+#[cfg(feature = "stde")]
+#[derive(Copy, Clone)]
+enum CoeffClass {
+    Zero,
+    Inf,
+    NaN,
+}
+
+#[cfg(feature = "stde")]
+#[allow(clippy::too_many_arguments)] // test helper exercising a specific GPU kernel signature
+fn check_hypot_jet_non_finite_higher(
+    ctx: &impl GpuBackend,
+    x0: f64,
+    y0: f64,
+    seed: [f32; 2],
+    primal_class: CoeffClass,
+    c1_class: CoeffClass,
+    c2_class: CoeffClass,
+    label: &str,
+) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]);
+    let x = [x0, y0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32, y0 as f32], &seed, 1)
+        .unwrap();
+
+    let check = |v: f32, cls: CoeffClass, slot: &str| match cls {
+        CoeffClass::Zero => {
+            assert!(v == 0.0, "{label} {slot}: expected 0, got {v}")
+        }
+        CoeffClass::Inf => {
+            assert!(v.is_infinite(), "{label} {slot}: expected Inf, got {v}")
+        }
+        CoeffClass::NaN => {
+            assert!(v.is_nan(), "{label} {slot}: expected NaN, got {v}")
+        }
+    };
+    check(gpu_result.values[0], primal_class, "c0");
+    check(gpu_result.c1s[0], c1_class, "c1");
+    check(gpu_result.c2s[0], c2_class, "c2");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws9_wgpu_hypot_inf_finite_propagates_nan() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // `hypot(Inf, 1.0)` and `hypot(1.0, Inf)` with non-zero seed.
+    // Post-WS9: primal = Inf (IEEE `hypot(Inf, anything) = Inf`),
+    // higher-order = NaN (CPU rescale path `Inf * 0 = NaN`).
+    // Pre-WS9: GPU emitted zeros for higher-order. Both operand
+    // orderings are covered to exercise the symmetric
+    // `aa == inf || bb == inf` entry check — regressions that
+    // collapsed it to a single-operand check would fail one.
+    check_hypot_jet_non_finite_higher(
+        &ctx,
+        f32::INFINITY as f64,
+        1.0,
+        [1.0, 0.0],
+        CoeffClass::Inf,
+        CoeffClass::NaN,
+        CoeffClass::NaN,
+        "wgpu_hypot(Inf, 1)",
+    );
+    check_hypot_jet_non_finite_higher(
+        &ctx,
+        1.0,
+        f32::INFINITY as f64,
+        [1.0, 0.0],
+        CoeffClass::Inf,
+        CoeffClass::NaN,
+        CoeffClass::NaN,
+        "wgpu_hypot(1, Inf)",
+    );
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws9_cuda_hypot_inf_finite_propagates_nan() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet_non_finite_higher(
+        &ctx,
+        f32::INFINITY as f64,
+        1.0,
+        [1.0, 0.0],
+        CoeffClass::Inf,
+        CoeffClass::NaN,
+        CoeffClass::NaN,
+        "cuda_hypot(Inf, 1)",
+    );
+    check_hypot_jet_non_finite_higher(
+        &ctx,
+        1.0,
+        f32::INFINITY as f64,
+        [1.0, 0.0],
+        CoeffClass::Inf,
+        CoeffClass::NaN,
+        CoeffClass::NaN,
+        "cuda_hypot(1, Inf)",
+    );
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn ws9_wgpu_hypot_deeper_order_zero_returns_inf_higher() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    // `hypot(0, 0)` with seed [0, 0]: inside the tape, both
+    // primal and first-order tangents are zero for hypot's inputs,
+    // so the GPU h==0 branch fires and the shift-and-square inner
+    // check `a.v[1] != 0 || b.v[1] != 0` fails (the tangents are
+    // also zero). Falls into the else-branch → 0 primal + Inf
+    // higher, matching CPU's `taylor_sqrt` convention at a true
+    // zero leading.
+    check_hypot_jet_non_finite_higher(
+        &ctx,
+        0.0,
+        0.0,
+        [0.0, 0.0],
+        CoeffClass::Zero,
+        CoeffClass::Inf,
+        CoeffClass::Inf,
+        "wgpu_hypot_deeper_zero",
+    );
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn ws9_cuda_hypot_deeper_order_zero_returns_inf_higher() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_hypot_jet_non_finite_higher(
+        &ctx,
+        0.0,
+        0.0,
+        [0.0, 0.0],
+        CoeffClass::Zero,
+        CoeffClass::Inf,
+        CoeffClass::Inf,
+        "cuda_hypot_deeper_zero",
+    );
+}
+
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
 #[test]
 fn gpu_trig_taylor_2nd() {
@@ -996,7 +1396,7 @@ fn gpu_trig_taylor_2nd() {
     };
 
     let x = [1.0_f64, 0.5];
-    let (tape, _) = record(|v| trig_func(v), &x);
+    let (tape, _) = record(trig_func, &x);
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let tape_buf = ctx.upload_tape(&gpu_data);
 

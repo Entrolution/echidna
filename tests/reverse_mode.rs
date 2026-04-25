@@ -8,8 +8,10 @@ fn reverse_grad(f: impl FnOnce(Reverse<f64>) -> Reverse<f64>, x_val: f64) -> f64
     let mut tape = Tape::new();
     let (idx, val) = tape.new_variable(x_val);
     let x = Reverse::from_tape(val, idx);
-    let _guard = TapeGuard::new(&mut tape);
-    let y = f(x);
+    let y = {
+        let _guard = TapeGuard::new(&mut tape);
+        f(x)
+    };
     let adjoints = tape.reverse(y.index());
     adjoints[0]
 }
@@ -46,8 +48,10 @@ fn x_times_y() {
     let (yi, yv) = tape.new_variable(4.0);
     let x = Reverse::from_tape(xv, xi);
     let y = Reverse::from_tape(yv, yi);
-    let _guard = TapeGuard::new(&mut tape);
-    let z = x * y;
+    let z = {
+        let _guard = TapeGuard::new(&mut tape);
+        x * y
+    };
     let adjoints = tape.reverse(z.index());
     assert_relative_eq!(adjoints[0], 4.0, max_relative = 1e-12); // dz/dx = y
     assert_relative_eq!(adjoints[1], 3.0, max_relative = 1e-12); // dz/dy = x

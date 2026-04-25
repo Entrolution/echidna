@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use cudarc::driver::{
     CudaContext as CudarContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
 };
-use cudarc::nvrtc::compile_ptx;
+use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 
 use super::{GpuBackend, GpuError, GpuTapeData};
 
@@ -41,14 +41,14 @@ macro_rules! cuda_forward_batch_body {
         let nv = $tape.num_variables;
         let no = $tape.num_outputs;
 
-        assert_eq!($inputs.len(), ($batch_size * ni) as usize);
+        assert_eq!($inputs.len(), ($batch_size as usize) * (ni as usize));
 
         let d_inputs = s.clone_htod($inputs).map_err(cuda_err)?;
         let mut d_values = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_outputs = s
-            .alloc_zeros::<$F>(($batch_size * no) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (no as usize))
             .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
@@ -89,14 +89,14 @@ macro_rules! cuda_gradient_batch_body {
         let nv = $tape.num_variables;
         let no = $tape.num_outputs;
 
-        assert_eq!($inputs.len(), ($batch_size * ni) as usize);
+        assert_eq!($inputs.len(), ($batch_size as usize) * (ni as usize));
 
         let d_inputs = s.clone_htod($inputs).map_err(cuda_err)?;
         let mut d_values = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_outputs = s
-            .alloc_zeros::<$F>(($batch_size * no) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (no as usize))
             .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
@@ -127,10 +127,10 @@ macro_rules! cuda_gradient_batch_body {
 
         // Reverse pass
         let mut d_adjoints = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_grads = s
-            .alloc_zeros::<$F>(($batch_size * ni) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (ni as usize))
             .map_err(cuda_err)?;
 
         let mut builder = s.launch_builder(&$self.$rev_kernel);
@@ -164,9 +164,9 @@ macro_rules! cuda_hvp_batch_body {
         let nv = $tape.num_variables;
 
         assert_eq!($x.len(), ni as usize);
-        assert_eq!($tangent_dirs.len(), ($batch_size * ni) as usize);
+        assert_eq!($tangent_dirs.len(), ($batch_size as usize) * (ni as usize));
 
-        let mut primal_inputs = Vec::with_capacity(($batch_size * ni) as usize);
+        let mut primal_inputs = Vec::with_capacity(($batch_size as usize) * (ni as usize));
         for _ in 0..$batch_size {
             primal_inputs.extend_from_slice($x);
         }
@@ -174,22 +174,22 @@ macro_rules! cuda_hvp_batch_body {
         let d_primal_in = s.clone_htod(&primal_inputs).map_err(cuda_err)?;
         let d_seeds = s.clone_htod($tangent_dirs).map_err(cuda_err)?;
         let mut d_primals = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_tans = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_adj_re = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_adj_eps = s
-            .alloc_zeros::<$F>(($batch_size * nv) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_grads = s
-            .alloc_zeros::<$F>(($batch_size * ni) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (ni as usize))
             .map_err(cuda_err)?;
         let mut d_hvps = s
-            .alloc_zeros::<$F>(($batch_size * ni) as usize)
+            .alloc_zeros::<$F>(($batch_size as usize) * (ni as usize))
             .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
@@ -267,13 +267,13 @@ macro_rules! cuda_sparse_jacobian_body {
         };
         let d_seeds = s.clone_htod(&seeds).map_err(cuda_err)?;
         let mut d_primals = s
-            .alloc_zeros::<$F>((batch * nv) as usize)
+            .alloc_zeros::<$F>((batch as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_tangents = s
-            .alloc_zeros::<$F>((batch * nv) as usize)
+            .alloc_zeros::<$F>((batch as usize) * (nv as usize))
             .map_err(cuda_err)?;
         let mut d_tangent_out = s
-            .alloc_zeros::<$F>((batch * $tape.num_outputs) as usize)
+            .alloc_zeros::<$F>((batch as usize) * ($tape.num_outputs as usize))
             .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
@@ -429,9 +429,18 @@ impl CudaContext {
         let ctx = CudarContext::new(0).ok()?;
         let stream = ctx.default_stream();
 
-        // Compile f32 kernels
+        // Compile f32 kernels. `--fmad=false` disables NVRTC's automatic
+        // fuse-multiply-add contraction so mul+add pairs produce results
+        // that match the CPU's unfused arithmetic bit-for-bit. The tiny
+        // perf cost (1-2% on A100 in our kernel mix) is worth it for
+        // CPU-GPU parity guarantees; callers chasing raw throughput can
+        // rebuild with the default by reverting this option.
+        let nvrtc_opts = || CompileOptions {
+            fmad: Some(false),
+            ..Default::default()
+        };
         let src_f32 = format!("#define FLOAT_TYPE float\n{}", KERNEL_SRC);
-        let ptx_f32 = compile_ptx(&src_f32).ok()?;
+        let ptx_f32 = compile_ptx_with_opts(&src_f32, nvrtc_opts()).ok()?;
         let module_f32 = ctx.load_module(ptx_f32).ok()?;
 
         let forward_f32 = module_f32.load_function("forward_eval").ok()?;
@@ -439,9 +448,9 @@ impl CudaContext {
         let tangent_fwd_f32 = module_f32.load_function("tangent_forward").ok()?;
         let tangent_rev_f32 = module_f32.load_function("tangent_reverse").ok()?;
 
-        // Compile f64 kernels
+        // Compile f64 kernels (same `--fmad=false` policy as f32 above).
         let src_f64 = format!("#define FLOAT_TYPE double\n{}", KERNEL_SRC);
-        let ptx_f64 = compile_ptx(&src_f64).ok()?;
+        let ptx_f64 = compile_ptx_with_opts(&src_f64, nvrtc_opts()).ok()?;
         let module_f64 = ctx.load_module(ptx_f64).ok()?;
 
         let forward_f64 = module_f64.load_function("forward_eval").ok()?;
@@ -490,7 +499,16 @@ impl CudaContext {
         let arg0: Vec<u32> = args.iter().map(|a| a[0]).collect();
         let arg1: Vec<u32> = args.iter().map(|a| a[1]).collect();
         let constants: Vec<f64> = tape.values_slice().to_vec();
-        let output_indices = tape.all_output_indices().to_vec();
+        let output_indices_raw = tape.all_output_indices().to_vec();
+        // Same defensive fallback as `upload_tape` — empty output_indices
+        // crashes `clone_htod`, so synthesise a single-output vector from
+        // the tape's scalar output_index.
+        let (output_indices, num_outputs) = if output_indices_raw.is_empty() {
+            (vec![tape.output_index() as u32], 1u32)
+        } else {
+            let n = output_indices_raw.len() as u32;
+            (output_indices_raw, n)
+        };
 
         Ok(CudaTapeBuffersF64 {
             opcodes: s.clone_htod(&opcodes).map_err(cuda_err)?,
@@ -505,7 +523,7 @@ impl CudaContext {
             // which cannot practically reach u32::MAX (~4.3B opcodes = ~17 GB).
             num_inputs: tape.num_inputs() as u32,
             num_variables: tape.num_variables_count() as u32,
-            num_outputs: output_indices.len() as u32,
+            num_outputs,
         })
     }
 }
@@ -517,22 +535,39 @@ impl GpuBackend for CudaContext {
     ///
     /// Panics if CUDA device memory allocation fails (e.g., OOM). The
     /// `GpuBackend` trait returns `Self::TapeBuffers` (not `Result`),
+    fn num_outputs(&self, tape: &CudaTapeBuffers) -> u32 {
+        tape.num_outputs
+    }
+
     /// preventing graceful error handling. Use `upload_tape_f64` for
     /// the `Result`-returning f64 variant.
     fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
         let s = &self.stream;
+        // Defensive fallback matching wgpu: single-output tapes set
+        // `output_indices = []` and only populate `output_index`, but
+        // `clone_htod(&[])` panics on CUDA. Synthesise a one-element
+        // vector so the single-output path works uniformly across
+        // backends.
+        let (output_indices_src, num_outputs) = if data.output_indices.is_empty() {
+            (vec![data.output_index], 1u32)
+        } else {
+            // SAFETY(u32 cast): output_indices.len() is bounded by tape
+            // outputs count, which is at most num_variables (already u32).
+            (
+                data.output_indices.clone(),
+                data.output_indices.len() as u32,
+            )
+        };
         CudaTapeBuffers {
             opcodes: s.clone_htod(&data.opcodes).unwrap(),
             arg0: s.clone_htod(&data.arg0).unwrap(),
             arg1: s.clone_htod(&data.arg1).unwrap(),
             constants_f32: s.clone_htod(&data.constants).unwrap(),
-            output_indices: s.clone_htod(&data.output_indices).unwrap(),
+            output_indices: s.clone_htod(&output_indices_src).unwrap(),
             num_ops: data.num_ops,
             num_inputs: data.num_inputs,
             num_variables: data.num_variables,
-            // SAFETY(u32 cast): output_indices.len() is bounded by tape outputs count,
-            // which is at most num_variables (already u32).
-            num_outputs: data.output_indices.len() as u32,
+            num_outputs,
         }
     }
 
@@ -701,7 +736,15 @@ impl CudaContext {
             "#define FLOAT_TYPE {float_type}\n{}",
             super::taylor_codegen::generate_taylor_cuda(order)
         );
-        let ptx = compile_ptx(&src).map_err(cuda_err)?;
+        // Taylor codegen inherits the same `--fmad=false` policy so
+        // generated jet arithmetic matches the hand-written CPU Taylor
+        // routines bit-for-bit (FMA would otherwise fold mul+add pairs
+        // and shift results by a fraction of a ULP).
+        let opts = CompileOptions {
+            fmad: Some(false),
+            ..Default::default()
+        };
+        let ptx = compile_ptx_with_opts(&src, opts).map_err(cuda_err)?;
         let module = self.ctx.load_module(ptx).map_err(cuda_err)?;
         let func = module
             .load_function("taylor_forward_kth")
@@ -739,7 +782,7 @@ impl CudaContext {
         let ni = tape.num_inputs;
         let nv = tape.num_variables;
         let no = tape.num_outputs;
-        let total_in = (batch_size * ni) as usize;
+        let total_in = (batch_size as usize) * (ni as usize);
 
         assert_eq!(
             primal_inputs.len(),
@@ -757,10 +800,10 @@ impl CudaContext {
         let d_primals = s.clone_htod(primal_inputs).map_err(cuda_err)?;
         let d_seeds = s.clone_htod(direction_seeds).map_err(cuda_err)?;
         let mut d_jets = s
-            .alloc_zeros::<f32>((batch_size * nv * k) as usize)
+            .alloc_zeros::<f32>((batch_size as usize) * (nv as usize) * (k as usize))
             .map_err(cuda_err)?;
         let mut d_jet_out = s
-            .alloc_zeros::<f32>((batch_size * no * k) as usize)
+            .alloc_zeros::<f32>((batch_size as usize) * (no as usize) * (k as usize))
             .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
@@ -792,7 +835,7 @@ impl CudaContext {
         let raw = s.clone_dtoh(&d_jet_out).map_err(cuda_err)?;
 
         // Deinterleave: raw is [c0, c1, ..., c_{K-1}] per output per batch element
-        let total_out = (batch_size * no) as usize;
+        let total_out = (batch_size as usize) * (no as usize);
         let mut coefficients: Vec<Vec<f32>> =
             (0..order).map(|_| Vec::with_capacity(total_out)).collect();
         for i in 0..total_out {
@@ -829,7 +872,7 @@ impl CudaContext {
         let ni = tape.num_inputs;
         let nv = tape.num_variables;
         let no = tape.num_outputs;
-        let total_in = (batch_size * ni) as usize;
+        let total_in = (batch_size as usize) * (ni as usize);
 
         assert_eq!(
             primal_inputs.len(),
@@ -847,10 +890,10 @@ impl CudaContext {
         let d_primals = s.clone_htod(primal_inputs).map_err(cuda_err)?;
         let d_seeds = s.clone_htod(direction_seeds).map_err(cuda_err)?;
         let mut d_jets = s
-            .alloc_zeros::<f64>((batch_size * nv * k) as usize)
+            .alloc_zeros::<f64>((batch_size as usize) * (nv as usize) * (k as usize))
             .map_err(cuda_err)?;
         let mut d_jet_out = s
-            .alloc_zeros::<f64>((batch_size * no * k) as usize)
+            .alloc_zeros::<f64>((batch_size as usize) * (no as usize) * (k as usize))
             .map_err(cuda_err)?;
 
         let cfg = LaunchConfig {
@@ -881,7 +924,7 @@ impl CudaContext {
         s.synchronize().map_err(cuda_err)?;
         let raw = s.clone_dtoh(&d_jet_out).map_err(cuda_err)?;
 
-        let total_out = (batch_size * no) as usize;
+        let total_out = (batch_size as usize) * (no as usize);
         let mut coefficients: Vec<Vec<f64>> =
             (0..order).map(|_| Vec::with_capacity(total_out)).collect();
         for i in 0..total_out {

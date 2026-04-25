@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 //! Tests for composable mode nesting (R12).
 //!
 //! Forward-wrapping-reverse compositions: `Dual<BReverse<f64>>`, `Dual<Reverse<f64>>`,
@@ -25,8 +26,10 @@ mod dual_breverse {
         let eps = BReverse::constant(v_val);
         let x: Dual<BReverse<f64>> = Dual::new(re, eps);
 
-        let _guard = BtapeGuard::new(&mut tape);
-        let y = x * x * x; // x³
+        let y = {
+            let _guard = BtapeGuard::new(&mut tape);
+            x * x * x // x³
+        };
 
         let primal_index = y.re.index();
         let tangent_index = y.eps.index();
@@ -192,8 +195,10 @@ mod dual_reverse {
         let eps = Reverse::constant(v_val);
         let x: Dual<Reverse<f64>> = Dual::new(re, eps);
 
-        let _guard = TapeGuard::new(&mut tape);
-        let y = x * x * x;
+        let y = {
+            let _guard = TapeGuard::new(&mut tape);
+            x * x * x
+        };
 
         // f(3) = 27
         assert!((Scalar::value(&y.re) - 27.0).abs() < 1e-10);
@@ -228,13 +233,14 @@ mod dual_reverse {
             })
             .collect();
 
-        let _guard = TapeGuard::new(&mut tape);
-
-        let one: Dual<Reverse<f64>> = Dual::constant(Reverse::constant(1.0));
-        let hundred: Dual<Reverse<f64>> = Dual::constant(Reverse::constant(100.0));
-        let a = one - inputs[0];
-        let b = inputs[1] - inputs[0] * inputs[0];
-        let y = a * a + hundred * b * b;
+        let y = {
+            let _guard = TapeGuard::new(&mut tape);
+            let one: Dual<Reverse<f64>> = Dual::constant(Reverse::constant(1.0));
+            let hundred: Dual<Reverse<f64>> = Dual::constant(Reverse::constant(100.0));
+            let a = one - inputs[0];
+            let b = inputs[1] - inputs[0] * inputs[0];
+            a * a + hundred * b * b
+        };
 
         // At (1,1): f = 0, gradient = (0, 0)
         assert!(Scalar::value(&y.re).abs() < 1e-10);
@@ -290,8 +296,10 @@ mod taylor_breverse {
         ];
         let xt: Taylor<BReverse<f64>, 4> = Taylor::new(coeffs);
 
-        let _guard = BtapeGuard::new(&mut tape);
-        let y = xt * xt * xt; // x(t)³
+        let y = {
+            let _guard = BtapeGuard::new(&mut tape);
+            xt * xt * xt // x(t)³
+        };
 
         // y(t) = (x + t)³ = x³ + 3x²t + 3xt² + t³
         // Coefficients: [8, 12, 6, 1]
@@ -355,8 +363,10 @@ mod dualvec_breverse {
             eps: [BReverse::constant(0.0), BReverse::constant(1.0)],
         };
 
-        let _guard = BtapeGuard::new(&mut tape);
-        let out = x * x * y; // x²y
+        let out = {
+            let _guard = BtapeGuard::new(&mut tape);
+            x * x * y // x²y
+        };
 
         // f(2,3) = 12
         assert!((Scalar::value(&out.re) - 12.0).abs() < 1e-10);
@@ -408,8 +418,10 @@ mod triple_nesting {
         let x: Dual<Dual<BReverse<f64>>> =
             Dual::new(inner, Dual::constant(BReverse::constant(1.0)));
 
-        let _guard = BtapeGuard::new(&mut tape);
-        let y = x * x * x;
+        let y = {
+            let _guard = BtapeGuard::new(&mut tape);
+            x * x * x
+        };
 
         // y.re.re = f(x) = x³ = 8 (BReverse, tracked on tape)
         assert!((Scalar::value(&y.re.re) - 8.0).abs() < 1e-10);
@@ -725,29 +737,29 @@ mod tape_lifecycle {
         let x1: Dual<BReverse<f64>> =
             Dual::new(BReverse::from_tape(4.0, idx1), BReverse::constant(0.0));
 
-        {
+        let y = {
             let _guard = BtapeGuard::new(&mut tape);
-            let y = x0 * x0 + x1 * x1; // x² + y²
+            x0 * x0 + x1 * x1 // x² + y²
+        };
 
-            let primal_idx = y.re.index();
-            let tangent_idx = y.eps.index();
+        let primal_idx = y.re.index();
+        let tangent_idx = y.eps.index();
 
-            // f(3,4) = 25
-            assert!((Scalar::value(&y.re) - 25.0).abs() < 1e-10);
+        // f(3,4) = 25
+        assert!((Scalar::value(&y.re) - 25.0).abs() < 1e-10);
 
-            // tangent = 2*3*1 + 2*4*0 = 6
-            assert!((Scalar::value(&y.eps) - 6.0).abs() < 1e-10);
+        // tangent = 2*3*1 + 2*4*0 = 6
+        assert!((Scalar::value(&y.eps) - 6.0).abs() < 1e-10);
 
-            // Reverse from primal → gradient = (6, 8)
-            let grad = tape.reverse(primal_idx);
-            assert!((grad[0] - 6.0).abs() < 1e-10);
-            assert!((grad[1] - 8.0).abs() < 1e-10);
+        // Reverse from primal → gradient = (6, 8)
+        let grad = tape.reverse(primal_idx);
+        assert!((grad[0] - 6.0).abs() < 1e-10);
+        assert!((grad[1] - 8.0).abs() < 1e-10);
 
-            // Reverse from tangent → HVP = H·(1,0) = (2, 0) since H = 2I
-            let hvp = tape.reverse(tangent_idx);
-            assert!((hvp[0] - 2.0).abs() < 1e-10);
-            assert!(hvp[1].abs() < 1e-10);
-        }
+        // Reverse from tangent → HVP = H·(1,0) = (2, 0) since H = 2I
+        let hvp = tape.reverse(tangent_idx);
+        assert!((hvp[0] - 2.0).abs() < 1e-10);
+        assert!(hvp[1].abs() < 1e-10);
         // Guard dropped — no panic. Tape still alive but deactivated.
         assert!(tape.num_inputs() == 2);
     }

@@ -13,7 +13,7 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn roundtrip_tape_json() {
     let x = [1.5_f64, 2.5];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+    let (mut tape, _) = record(rosenbrock, &x);
 
     let json = serde_json::to_string(&tape).unwrap();
     let mut tape2: echidna::BytecodeTape<f64> = serde_json::from_str(&json).unwrap();
@@ -31,7 +31,7 @@ fn roundtrip_tape_json() {
 #[test]
 fn roundtrip_tape_at_different_point() {
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let json = serde_json::to_string(&tape).unwrap();
     let mut tape2: echidna::BytecodeTape<f64> = serde_json::from_str(&json).unwrap();
@@ -49,7 +49,7 @@ fn roundtrip_tape_at_different_point() {
 #[test]
 fn deserialized_tape_supports_hessian() {
     let x = [1.5_f64, 2.5];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let json = serde_json::to_string(&tape).unwrap();
     let tape2: echidna::BytecodeTape<f64> = serde_json::from_str(&json).unwrap();
@@ -89,8 +89,10 @@ fn custom_op_tape_serialization_fails() {
     let handle = tape.register_custom(Arc::new(Scale));
     let idx = tape.new_input(x[0]);
     let input = BReverse::from_tape(x[0], idx);
-    let _guard = BtapeGuard::new(&mut tape);
-    let output = input.custom_unary(handle, 2.0 * x[0]);
+    let output = {
+        let _guard = BtapeGuard::new(&mut tape);
+        input.custom_unary(handle, 2.0 * x[0])
+    };
     tape.set_output(output.index());
 
     let result = serde_json::to_string(&tape);
@@ -103,7 +105,7 @@ fn custom_op_tape_serialization_fails() {
 #[test]
 fn sparsity_pattern_roundtrip() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
     let pattern = tape.detect_sparsity();
 
     let json = serde_json::to_string(&pattern).unwrap();
@@ -117,7 +119,7 @@ fn sparsity_pattern_roundtrip() {
 #[test]
 fn roundtrip_tape_f32() {
     let x = [1.5_f32, 2.5];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+    let (mut tape, _) = record(rosenbrock, &x);
 
     let json = serde_json::to_string(&tape).unwrap();
     let mut tape2: echidna::BytecodeTape<f32> = serde_json::from_str(&json).unwrap();
@@ -153,7 +155,7 @@ fn roundtrip_multi_output() {
 #[test]
 fn roundtrip_tape_cbor() {
     let x = [1.5_f64, 2.5];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x);
+    let (mut tape, _) = record(rosenbrock, &x);
 
     let mut bytes = Vec::new();
     ciborium::into_writer(&tape, &mut bytes).unwrap();

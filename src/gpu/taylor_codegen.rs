@@ -169,7 +169,7 @@ fn write_wgsl_helpers(s: &mut String) {
         "fn sinh_f(x: f32) -> f32 {{ return (exp(x) - exp(-x)) * 0.5; }}
 fn cosh_f(x: f32) -> f32 {{ return (exp(x) + exp(-x)) * 0.5; }}
 fn asinh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x + 1.0)); }}
-fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x - 1.0)); }}
+fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
 fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
 "
     )
@@ -542,9 +542,18 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     writeln!(s, "    return c;\n}}\n").unwrap();
 
     // acosh: c' = a' / sqrt(a² - 1)
+    // v[0] uses the factored form (a-1)·(a+1) to avoid catastrophic
+    // cancellation near a=1 (matches kernels::acosh_deriv). v[i] for
+    // i ≥ 1 stays as asq.v[i] — the higher-order Taylor coefficients
+    // of (a-1)·(a+1) and a²-1 are mathematically identical (both
+    // equal 2·a.v[0]·a.v[i] + Σ_{j+k=i, j,k≥1} a.v[j]·a.v[k]).
     writeln!(s, "fn jet_acosh(a: JetK) -> JetK {{").unwrap();
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
-    write!(s, "    var d: JetK;\n    d.v[0] = asq.v[0] - 1.0;\n").unwrap();
+    write!(
+        s,
+        "    var d: JetK;\n    d.v[0] = (a.v[0] - 1.0) * (a.v[0] + 1.0);\n"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(s, "    d.v[{i}] = asq.v[{i}];").unwrap();
     }
@@ -667,19 +676,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         "                    let da = b.v[0] * pow(a.v[0], b.v[0] - 1.0);"
     )
     .unwrap();
-    writeln!(
-        s,
-        "                    let db = select(val * log(abs(a.v[0])), 0.0, val == 0.0);"
-    )
-    .unwrap();
+    // CPU OpCode::Powf sets db = 0 for a ≤ 0 (finite r at a < 0 means b was
+    // integer; classical db at integer b is undefined, convention is 0).
+    // Any db from log(|a|) would diverge from the CPU.
+    writeln!(s, "                    let db = 0.0;").unwrap();
     writeln!(s, "                    r.v[0] = val;").unwrap();
     if k > 1 {
         writeln!(s, "                    r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
     }
     for i in 2..k {
         // CPU powf with negative base produces NaN through exp(b*ln(negative)).
-        // Use explicit NaN to match CPU behavior regardless of whether val is finite.
-        writeln!(s, "                    r.v[{i}] = 0.0 / 0.0;").unwrap();
+        // `0.0 / 0.0` is an abstract-typed NaN that naga rejects as not-
+        // expressible in f32; use the canonical quiet-NaN bit pattern instead.
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+        )
+        .unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
@@ -714,18 +727,202 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
-    // HYPOT
+    // HYPOT. Full jet-wide max-rescale to keep every coefficient
+    // bounded even when `a.v[0] ~ 1e20`. Mirrors CPU
+    // `taylor_ops::taylor_hypot`: build `a_s = a/h`, `b_s = b/h`,
+    // compute `(a_s)² + (b_s)²`, sqrt, then scale back by `h`.
+    // Branch order: Inf first, then NaN, then `h == 0` (with the
+    // one-level shift-and-square unroll), then general — preserves
+    // IEEE `hypot(Inf, NaN) = Inf` and `hypot(NaN, 0) = NaN`.
+    //
+    // Function-domain-boundary conventions (matching CPU):
+    // - `hypot(Inf, finite)` — primal = Inf, higher-order = NaN.
+    //   CPU's rescale path produces `Inf * 0 = NaN` in every
+    //   coefficient past the primal; GPU now synthesises NaN via
+    //   `inf - inf` (runtime) to match.
+    // - `hypot(0, 0)` with `a.v[1] != 0 || b.v[1] != 0` —
+    //   one-level shift-and-square unroll: compute `hypot(a/t, b/t)`
+    //   via the rescale path on the shifted jet (at least one leading
+    //   is now non-zero by construction), then shift result right by
+    //   1 to represent the `|t|` factor in
+    //   `t ↦ |t|·hypot(a/t, b/t)`. CPU recursion is at most one
+    //   level deep since the entry check guarantees `scale > 0` in
+    //   the recursive call.
+    // - `hypot(0, 0)` with all higher-order seeds also zero —
+    //   0 primal + Inf higher. Matches CPU's `taylor_sqrt` at a
+    //   zero leading coefficient (produces Inf per
+    //   `taylor_ops.rs:146-152`), then primal override gives 0.
     writeln!(s, "            case 9u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
-    writeln!(s, "                let asq = jet_mul(a, a);").unwrap();
-    writeln!(s, "                let bsq = jet_mul(b, b);").unwrap();
-    writeln!(s, "                let sum2 = jet_add(asq, bsq);").unwrap();
-    writeln!(s, "                r = jet_sqrt(sum2);").unwrap();
+    writeln!(s, "                let aa = abs(a.v[0]);").unwrap();
+    writeln!(s, "                let bb = abs(b.v[0]);").unwrap();
+    writeln!(s, "                let inf = bitcast<f32>(0x7f800000u);").unwrap();
+    // Inf branch: `r` is initialised by the dispatcher (`var r =
+    // jet_const(0.0)` at the top of the per-opcode loop) so the
+    // explicit higher-order loop is *redundant* on WGSL — kept for
+    // parity with CUDA (where `JetK r;` is uninitialised) and to
+    // make the contract explicit. Higher-order emits NaN (runtime
+    // via `inf - inf`) to match CPU's `Inf * 0 = NaN` rescale-path
+    // output.
+    writeln!(s, "                if (aa == inf || bb == inf) {{").unwrap();
+    writeln!(s, "                    let nan = inf - inf;").unwrap();
+    writeln!(s, "                    r.v[0] = inf;").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    r.v[{i}] = nan;").unwrap();
+    }
+    // NaN detection: WGSL allows NaN comparisons to be "tame-folded"
+    // (drivers may compile `x != x` to a constant false), so the
+    // standard idiom is unreliable. Use a bit-pattern check on the
+    // pre-`abs` values — for f32, NaN has exponent `0xff` and a
+    // non-zero mantissa, so `(bits & 0x7fffffff) > 0x7f800000` is the
+    // unambiguous test (Inf is exactly `0x7f800000`).
+    writeln!(s, "                }} else if (").unwrap();
     writeln!(
         s,
-        "                r.v[0] = sqrt(a.v[0] * a.v[0] + b.v[0] * b.v[0]);"
+        "                    (bitcast<u32>(a.v[0]) & 0x7fffffffu) > 0x7f800000u ||"
     )
     .unwrap();
+    writeln!(
+        s,
+        "                    (bitcast<u32>(b.v[0]) & 0x7fffffffu) > 0x7f800000u"
+    )
+    .unwrap();
+    writeln!(s, "                ) {{").unwrap();
+    // NaN branch: without this, `max(NaN, 0) = 0` (Vulkan SPIR-V
+    // `OpFMax` returns the non-NaN argument per IEEE 754-2008 maxNum),
+    // causing a `hypot(NaN, 0)` input to fall into the `h == 0` branch
+    // and return the zero jet — silently swallowing the NaN that IEEE
+    // `hypot` requires propagating.
+    writeln!(s, "                    r.v[0] = a.v[0] + b.v[0];").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    r.v[{i}] = 0.0;").unwrap();
+    }
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    let h = max(aa, bb);").unwrap();
+    // Zero branch (shift-and-square unroll).
+    writeln!(s, "                    if (h == 0.0) {{").unwrap();
+    if k >= 2 {
+        // Build shifted jets: a_shifted.v[i] = a.v[i+1] for i < K-1,
+        // a_shifted.v[K-1] = 0. Same for b. At least one of
+        // a.v[1], b.v[1] is non-zero if we take the rescale branch;
+        // else we emit 0 primal + Inf higher (matching CPU's
+        // `taylor_sqrt` at a zero leading).
+        writeln!(s, "                        var a_shifted: JetK;").unwrap();
+        writeln!(s, "                        var b_shifted: JetK;").unwrap();
+        for i in 0..(k - 1) {
+            writeln!(
+                s,
+                "                        a_shifted.v[{i}] = a.v[{ip1}];",
+                ip1 = i + 1
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "                        b_shifted.v[{i}] = b.v[{ip1}];",
+                ip1 = i + 1
+            )
+            .unwrap();
+        }
+        writeln!(
+            s,
+            "                        a_shifted.v[{last}] = 0.0;",
+            last = k - 1
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                        b_shifted.v[{last}] = 0.0;",
+            last = k - 1
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                        let h_inner = max(abs(a_shifted.v[0]), abs(b_shifted.v[0]));"
+        )
+        .unwrap();
+        writeln!(s, "                        if (h_inner == 0.0) {{").unwrap();
+        // Deeper-order-zero: 0 primal + Inf higher.
+        writeln!(s, "                            r.v[0] = 0.0;").unwrap();
+        for i in 1..k {
+            writeln!(s, "                            r.v[{i}] = inf;").unwrap();
+        }
+        writeln!(s, "                        }} else {{").unwrap();
+        // Rescale + sum-of-squares + sqrt on the shifted jet.
+        writeln!(
+            s,
+            "                            let inv_h_inner = 1.0 / h_inner;"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                            let a_ss = jet_scale(a_shifted, inv_h_inner);"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                            let b_ss = jet_scale(b_shifted, inv_h_inner);"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                            let sum_sq_s = jet_add(jet_mul(a_ss, a_ss), jet_mul(b_ss, b_ss));"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                            let r_s_inner = jet_sqrt(sum_sq_s);"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                            let inner = jet_scale(r_s_inner, h_inner);"
+        )
+        .unwrap();
+        // Shift result right by 1: r.v[0] = 0, r.v[i] = inner.v[i-1].
+        writeln!(s, "                            r.v[0] = 0.0;").unwrap();
+        for i in 1..k {
+            writeln!(
+                s,
+                "                            r.v[{i}] = inner.v[{im1}];",
+                im1 = i - 1
+            )
+            .unwrap();
+        }
+        writeln!(s, "                        }}").unwrap();
+    } else {
+        // K == 1: no higher-order slots. Primal-only zero result.
+        writeln!(s, "                        r.v[0] = 0.0;").unwrap();
+    }
+    writeln!(s, "                    }} else {{").unwrap();
+    // General branch: rescale, sum-of-squares, sqrt, scale back.
+    writeln!(s, "                        let inv_h = 1.0 / h;").unwrap();
+    writeln!(s, "                        let a_s = jet_scale(a, inv_h);").unwrap();
+    writeln!(s, "                        let b_s = jet_scale(b, inv_h);").unwrap();
+    writeln!(
+        s,
+        "                        let sum_sq = jet_add(jet_mul(a_s, a_s), jet_mul(b_s, b_s));"
+    )
+    .unwrap();
+    writeln!(s, "                        let r_s = jet_sqrt(sum_sq);").unwrap();
+    writeln!(s, "                        r = jet_scale(r_s, h);").unwrap();
+    // Primal override: `r.v[0] = jet_scale(r_s, h).v[0]` is bit-
+    // equivalent to the explicit rescale formula below (same arithmetic,
+    // same rounding under default WGSL contraction settings), so this
+    // assignment is technically redundant. Keep it as a regression
+    // guard against future jet-helper refactors that might change
+    // rounding behaviour.
+    writeln!(
+        s,
+        "                        let a_s0 = a.v[0] * inv_h; let b_s0 = b.v[0] * inv_h;"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "                        r.v[0] = h * sqrt(a_s0 * a_s0 + b_s0 * b_s0);"
+    )
+    .unwrap();
+    writeln!(s, "                    }}").unwrap();
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
     // MAX, MIN
@@ -756,7 +953,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                if a.v[0] == 0.0 {{").unwrap();
     writeln!(s, "                    r.v[0] = 0.0;").unwrap();
     for i in 1..k {
-        writeln!(s, "                    r.v[{i}] = 1.0 / 0.0;").unwrap();
+        // `1.0 / 0.0` is a compile-time abstract `inf` that naga rejects as
+        // inexpressible in f32. Use the bit pattern for +∞ instead.
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7f800000u);"
+        )
+        .unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(
@@ -794,12 +997,47 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                    r = jet_const(1.0);").unwrap();
     writeln!(s, "                }} else if n == 1.0 {{").unwrap();
     writeln!(s, "                    r = a;").unwrap();
-    // a.v[0] == 0 with n>=2: 0^n = 0 and all Taylor coefficients are 0.
-    // For negative n (e.g. 0^-2 = Inf), fall through to exp-ln path which correctly produces Inf.
-    // CPU uses repeated squaring which can produce nonzero higher-order terms (e.g. (εt)^2=ε²t²),
-    // but the GPU jet_const(0) avoids the NaN from ln(0) and is correct for the primal.
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni >= 2 {{").unwrap();
-    writeln!(s, "                    r = jet_const(0.0);").unwrap();
+    // a.v[0] == 0 with small |n| ≥ 2: use repeated jet multiplication to preserve
+    // higher-order Taylor coefficients (e.g., x^n at x=0 has the first nonzero
+    // coefficient at index n, which squaring reproduces correctly). The generic
+    // `a.v[0] <= 0.0` path below uses `log|a| = log(0) = -inf` and cannot
+    // represent these without poisoning all coefficients with NaN.
+    // Chain form matches CPU `taylor_powi_squaring`: a² := a·a, a³ := a²·a,
+    // a⁴ := a²·a², a⁵ := a⁴·a, a⁶ := a⁴·a², a⁷ := a⁴·a²·a, a⁸ := a⁴·a⁴.
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 2 {{").unwrap();
+    writeln!(s, "                    r = jet_mul(a, a);").unwrap();
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 3 {{").unwrap();
+    writeln!(s, "                    r = jet_mul(jet_mul(a, a), a);").unwrap();
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 4 {{").unwrap();
+    writeln!(
+        s,
+        "                    let a2 = jet_mul(a, a); r = jet_mul(a2, a2);"
+    )
+    .unwrap();
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 5 {{").unwrap();
+    writeln!(
+        s,
+        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a);"
+    )
+    .unwrap();
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 6 {{").unwrap();
+    writeln!(
+        s,
+        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a2);"
+    )
+    .unwrap();
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 7 {{").unwrap();
+    writeln!(
+        s,
+        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a);"
+    )
+    .unwrap();
+    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 8 {{").unwrap();
+    writeln!(
+        s,
+        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a4);"
+    )
+    .unwrap();
     writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(
         s,
@@ -906,13 +1144,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "            case 34u: {{ r = jet_acosh(a); }}").unwrap();
     writeln!(s, "            case 35u: {{ r = jet_atanh(a); }}").unwrap();
 
-    // Nonsmooth — ABS: use signum (±1 including at 0) to match Rust's f64::signum
+    // Nonsmooth — ABS: scan for the first non-zero Taylor coefficient to
+    // decide the sign. Matches CPU `Taylor::abs` semantics: at a = [0, -v, …]
+    // the function |f(t)| ≈ v·|t| in a neighborhood of t=0, so the effective
+    // sign comes from the first-non-zero coefficient (here -v → sg = -1).
+    // Defaulting sg = +1 at a.v[0]=0 (as `sign(0) = 0` would prompt) gives
+    // the wrong branch when a.v[1] < 0 or later coefficients dominate.
     writeln!(s, "            case 36u: {{").unwrap();
-    writeln!(
-        s,
-        "                let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);"
-    )
-    .unwrap();
+    writeln!(s, "                var sg: f32 = 1.0;").unwrap();
+    for i in 0..k {
+        writeln!(
+            s,
+            "                if a.v[{i}] != 0.0 {{ sg = select(1.0, -1.0, a.v[{i}] < 0.0); }} else",
+        )
+        .unwrap();
+    }
+    // Close the else-if chain with an empty else block; sg stays at 1.0 for
+    // the identically-zero series (Rust convention).
+    writeln!(s, "                {{ }}").unwrap();
     writeln!(s, "                r.v[0] = abs(a.v[0]);").unwrap();
     for i in 1..k {
         writeln!(s, "                r.v[{i}] = sg * a.v[{i}];").unwrap();
@@ -1349,8 +1598,11 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
                 writeln!(s, "    d.v[{i}] = -asq.v[{i}];").unwrap();
             }
         } else {
-            // asq - 1.0
-            writeln!(s, "    d.v[0] = asq.v[0] - (F)1;").unwrap();
+            // asq - 1.0 — emit factored form for v[0] to retain precision
+            // near a=1; matches kernels::acosh_deriv. Higher-order
+            // coefficients are unchanged (mathematically identical between
+            // the two forms — see jet_acosh emitter for the full argument).
+            writeln!(s, "    d.v[0] = (a.v[0] - (F)1) * (a.v[0] + (F)1);").unwrap();
             for i in 1..k {
                 writeln!(s, "    d.v[{i}] = asq.v[{i}];").unwrap();
             }
@@ -1414,7 +1666,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // Initialize
     writeln!(s, "    for (unsigned int i = 0; i < num_variables; i++) {{").unwrap();
-    writeln!(s, "        unsigned int off = j_base + i * K;").unwrap();
+    writeln!(s, "        unsigned long long off = j_base + i * K;").unwrap();
     writeln!(s, "        jets[off] = constants[i];").unwrap();
     for c in 1..k {
         writeln!(s, "        jets[off + {c}] = (F)0;").unwrap();
@@ -1428,7 +1680,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     )
     .unwrap();
     writeln!(s, "    for (unsigned int i = 0; i < num_inputs; i++) {{").unwrap();
-    writeln!(s, "        unsigned int off = j_base + i * K;").unwrap();
+    writeln!(s, "        unsigned long long off = j_base + i * K;").unwrap();
     writeln!(s, "        jets[off] = primal_inputs[in_base + i];").unwrap();
     if k > 1 {
         writeln!(s, "        jets[off + 1] = direction_seeds[in_base + i];").unwrap();
@@ -1448,7 +1700,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // Load a
     writeln!(s, "        JetK a;").unwrap();
-    writeln!(s, "        unsigned int a_off = j_base + a_idx * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long a_off = j_base + (unsigned long long)a_idx * K;"
+    )
+    .unwrap();
     for c in 0..k {
         writeln!(s, "        a.v[{c}] = jets[a_off + {c}];").unwrap();
     }
@@ -1467,7 +1723,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "        case {case}: {{").unwrap();
         writeln!(
             s,
-            "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+            "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
         )
         .unwrap();
         for c in 0..k {
@@ -1481,7 +1737,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 6: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1499,7 +1755,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 7: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1512,11 +1768,9 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         "                F da = b.v[0] * pow(a.v[0], b.v[0] - F(1));"
     )
     .unwrap();
-    writeln!(
-        s,
-        "                F db = (val == F(0)) ? F(0) : val * log(fabs(a.v[0]));"
-    )
-    .unwrap();
+    // CPU OpCode::Powf sets db = 0 for a ≤ 0 (finite val at a < 0 means b was
+    // integer; classical db at integer b is undefined, convention is 0).
+    writeln!(s, "                F db = F(0);").unwrap();
     writeln!(s, "                r.v[0] = val;").unwrap();
     if k > 1 {
         writeln!(s, "                r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
@@ -1539,7 +1793,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 8: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
@@ -1567,26 +1821,168 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // HYPOT
+    // HYPOT. Full jet-wide max-rescale to keep every coefficient
+    // bounded even when `a.v[0] ~ 1e20`. Mirrors CPU
+    // `taylor_ops::taylor_hypot` and the WGSL emitter above. Branch
+    // order: Inf first, then NaN, then `h == 0` (with the one-level
+    // shift-and-square unroll), then general — preserves IEEE
+    // `hypot(Inf, NaN) = Inf` and `hypot(NaN, 0) = NaN`.
+    //
+    // Function-domain-boundary conventions (matching CPU):
+    // - `hypot(Inf, finite)` — primal = Inf, higher-order = NaN
+    //   (CPU's rescale path produces `Inf * 0 = NaN`).
+    // - `hypot(0, 0)` with `a.v[1] != 0 || b.v[1] != 0` — one-level
+    //   shift-and-square unroll: rescale+sqrt on the shifted jet,
+    //   then shift result right by 1.
+    // - `hypot(0, 0)` with all higher-order seeds also zero —
+    //   0 primal + Inf higher (matches CPU's `taylor_sqrt` at a
+    //   zero leading coefficient).
     writeln!(s, "        case 9: {{").unwrap();
     writeln!(
         s,
-        "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+        "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
     )
     .unwrap();
     for c in 0..k {
         writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
     }
+    writeln!(s, "            F aa = fabs(a.v[0]);").unwrap();
+    writeln!(s, "            F bb = fabs(b.v[0]);").unwrap();
+    // CUDA: `isinf` is the correct way to detect ±Inf for both f32 and f64.
+    writeln!(s, "            if (isinf(aa) || isinf(bb)) {{").unwrap();
+    // Inf branch: NVRTC's default program doesn't expose the
+    // `INFINITY` macro, so synthesise +Inf via `fmax` (at least one
+    // of {aa, bb} is +Inf and both are non-negative). Higher-order
+    // emits NaN via `inf - inf` (runtime) to match CPU's
+    // `Inf * 0 = NaN` rescale-path output.
+    writeln!(s, "                F inf_sentinel = fmax(aa, bb);").unwrap();
     writeln!(
         s,
-        "            r = jet_sqrt(jet_add(jet_mul(a,a), jet_mul(b,b)));"
+        "                F nan_sentinel = inf_sentinel - inf_sentinel;"
     )
     .unwrap();
+    writeln!(s, "                r.v[0] = inf_sentinel;").unwrap();
+    for i in 1..k {
+        writeln!(s, "                r.v[{i}] = nan_sentinel;").unwrap();
+    }
+    writeln!(s, "            }} else if (isnan(aa) || isnan(bb)) {{").unwrap();
+    // NaN branch: without this, `fmax(NaN, 0) = 0` (IEEE 754-2008
+    // maxNum returns the non-NaN argument), causing `hypot(NaN, 0)`
+    // to enter the `h == 0` branch and silently return the zero jet
+    // — swallowing the NaN that IEEE `hypot` requires propagating.
+    // `a.v[0] + b.v[0]` is the simplest NaN-propagator (NaN + anything
+    // = NaN; both NaN: still NaN).
+    writeln!(s, "                r.v[0] = a.v[0] + b.v[0];").unwrap();
+    for i in 1..k {
+        writeln!(s, "                r.v[{i}] = (F)0;").unwrap();
+    }
+    writeln!(s, "            }} else {{").unwrap();
+    writeln!(s, "                F h = fmax(aa, bb);").unwrap();
+    // Zero branch (shift-and-square unroll).
+    writeln!(s, "                if (h == (F)0) {{").unwrap();
+    if k >= 2 {
+        writeln!(s, "                    JetK a_shifted;").unwrap();
+        writeln!(s, "                    JetK b_shifted;").unwrap();
+        for i in 0..(k - 1) {
+            writeln!(
+                s,
+                "                    a_shifted.v[{i}] = a.v[{ip1}];",
+                ip1 = i + 1
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "                    b_shifted.v[{i}] = b.v[{ip1}];",
+                ip1 = i + 1
+            )
+            .unwrap();
+        }
+        writeln!(
+            s,
+            "                    a_shifted.v[{last}] = (F)0;",
+            last = k - 1
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                    b_shifted.v[{last}] = (F)0;",
+            last = k - 1
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                    F h_inner = fmax(fabs(a_shifted.v[0]), fabs(b_shifted.v[0]));"
+        )
+        .unwrap();
+        writeln!(s, "                    if (h_inner == (F)0) {{").unwrap();
+        // Deeper-order-zero: 0 primal + Inf higher. +Inf via (F)1/(F)0
+        // — NVRTC default rounding produces +Inf, not NaN. Using a
+        // runtime divide rather than a bitcast keeps us portable
+        // across NVRTC flag configurations.
+        writeln!(s, "                        F pos_inf = (F)1 / (F)0;").unwrap();
+        writeln!(s, "                        r.v[0] = (F)0;").unwrap();
+        for i in 1..k {
+            writeln!(s, "                        r.v[{i}] = pos_inf;").unwrap();
+        }
+        writeln!(s, "                    }} else {{").unwrap();
+        writeln!(s, "                        F inv_h_inner = (F)1 / h_inner;").unwrap();
+        writeln!(
+            s,
+            "                        JetK a_ss = jet_scale(a_shifted, inv_h_inner);"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                        JetK b_ss = jet_scale(b_shifted, inv_h_inner);"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                        JetK sum_sq_s = jet_add(jet_mul(a_ss, a_ss), jet_mul(b_ss, b_ss));"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                        JetK r_s_inner = jet_sqrt(sum_sq_s);"
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "                        JetK inner = jet_scale(r_s_inner, h_inner);"
+        )
+        .unwrap();
+        writeln!(s, "                        r.v[0] = (F)0;").unwrap();
+        for i in 1..k {
+            writeln!(
+                s,
+                "                        r.v[{i}] = inner.v[{im1}];",
+                im1 = i - 1
+            )
+            .unwrap();
+        }
+        writeln!(s, "                    }}").unwrap();
+    } else {
+        // K == 1: no higher-order slots. Primal-only zero result.
+        writeln!(s, "                    r.v[0] = (F)0;").unwrap();
+    }
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    F inv_h = (F)1 / h;").unwrap();
+    writeln!(s, "                    JetK a_s = jet_scale(a, inv_h);").unwrap();
+    writeln!(s, "                    JetK b_s = jet_scale(b, inv_h);").unwrap();
     writeln!(
         s,
-        "            r.v[0] = sqrt(a.v[0]*a.v[0] + b.v[0]*b.v[0]); break;"
+        "                    JetK sum_sq = jet_add(jet_mul(a_s, a_s), jet_mul(b_s, b_s));"
     )
     .unwrap();
+    writeln!(s, "                    JetK r_s = jet_sqrt(sum_sq);").unwrap();
+    writeln!(s, "                    r = jet_scale(r_s, h);").unwrap();
+    // CUDA: `hypot()` is a load-bearing primal override — NVRTC's
+    // intrinsic rounds per-device and may differ by a ULP from the
+    // explicit rescale formula even at moderate magnitudes.
+    writeln!(s, "                    r.v[0] = hypot(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                }}").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
     // MAX, MIN
@@ -1594,7 +1990,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "        case {case}: {{").unwrap();
         writeln!(
             s,
-            "            JetK b; unsigned int b_off = j_base + b_idx * K;"
+            "            JetK b; unsigned long long b_off = j_base + (unsigned long long)b_idx * K;"
         )
         .unwrap();
         for c in 0..k {
@@ -1640,10 +2036,43 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            F n = (F)ni;").unwrap();
     writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
     writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
-    // a.v[0] == 0 with n>=2: 0^n = 0. For negative n, fall through to exp-ln (produces Inf).
+    // a.v[0] == 0 with small |n| ≥ 2: use repeated jet_mul to preserve
+    // higher-order Taylor coefficients. The `log|a| = log(0) = -inf` path
+    // below poisons all coefficients with NaN at a = 0, so explicit squaring
+    // for |n| ∈ {2,…,8} is required to match CPU `taylor_powi_squaring`.
     writeln!(
         s,
-        "            else if (a.v[0] == F(0) && ni >= 2) {{ r = jet_const(F(0)); }}"
+        "            else if (a.v[0] == F(0) && ni == 2) {{ r = jet_mul(a, a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 3) {{ r = jet_mul(jet_mul(a, a), a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 4) {{ JetK a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 5) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 6) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 7) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 8) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}"
     )
     .unwrap();
     writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
@@ -1747,8 +2176,23 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 35: r = jet_atanh(a); break;").unwrap();
 
     // ABS
+    // Nonsmooth — ABS: scan for the first non-zero Taylor coefficient to
+    // decide the sign. Matches CPU `Taylor::abs`: at a = [0, -v, …] the
+    // sign is -1 (driven by the first-non-zero coefficient), not +1.
     writeln!(s, "        case 36: {{").unwrap();
-    writeln!(s, "            F sg = _sign(a.v[0]);").unwrap();
+    writeln!(s, "            F sg = F(1);").unwrap();
+    for i in 0..k {
+        writeln!(
+            s,
+            "            if (a.v[{i}] != F(0)) {{ sg = (a.v[{i}] < F(0)) ? F(-1) : F(1); }} else",
+        )
+        .unwrap();
+    }
+    writeln!(
+        s,
+        "            {{ /* identically zero series → sg = 1 */ }}"
+    )
+    .unwrap();
     writeln!(s, "            r.v[0] = fabs(a.v[0]);").unwrap();
     for i in 1..k {
         writeln!(s, "            r.v[{i}] = sg * a.v[{i}];").unwrap();
@@ -1776,7 +2220,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        }}").unwrap();
 
     // Store result
-    writeln!(s, "        unsigned int r_off = j_base + i * K;").unwrap();
+    writeln!(s, "        unsigned long long r_off = j_base + i * K;").unwrap();
     for c in 0..k {
         writeln!(s, "        jets[r_off + {c}] = r.v[{c}];").unwrap();
     }
@@ -1790,8 +2234,12 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     .unwrap();
     writeln!(s, "    for (unsigned int j = 0; j < num_outputs; j++) {{").unwrap();
     writeln!(s, "        unsigned int oi = output_indices[j];").unwrap();
-    writeln!(s, "        unsigned int src = j_base + oi * K;").unwrap();
-    writeln!(s, "        unsigned int dst = out_base + j * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long src = j_base + (unsigned long long)oi * K;"
+    )
+    .unwrap();
+    writeln!(s, "        unsigned long long dst = out_base + j * K;").unwrap();
     for c in 0..k {
         writeln!(s, "        jet_outputs[dst + {c}] = jets[src + {c}];").unwrap();
     }

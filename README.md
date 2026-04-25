@@ -1,6 +1,7 @@
 # echidna
 
 [![CI](https://github.com/Entrolution/echidna/actions/workflows/ci.yml/badge.svg)](https://github.com/Entrolution/echidna/actions/workflows/ci.yml)
+[![TLA+ Specs](https://github.com/Entrolution/echidna/actions/workflows/specs.yml/badge.svg)](https://github.com/Entrolution/echidna/actions/workflows/specs.yml)
 [![Crates.io](https://img.shields.io/crates/v/echidna.svg)](https://crates.io/crates/echidna)
 [![Docs.rs](https://docs.rs/echidna/badge.svg)](https://docs.rs/echidna)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
@@ -46,7 +47,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-echidna = "0.8"
+echidna = "0.10"
 ```
 
 ### Gradient via reverse mode
@@ -157,7 +158,7 @@ assert!((d2_dxdy - 2.0).abs() < 1e-6);
 Enable features in `Cargo.toml`:
 
 ```toml
-echidna = { version = "0.4", features = ["bytecode", "taylor"] }
+echidna = { version = "0.10", features = ["bytecode", "taylor"] }
 ```
 
 ## API
@@ -258,6 +259,20 @@ echidna uses a two-tier AD architecture:
 
 Types compose via nesting: `Dual<BReverse<f64>>` gives forward-over-reverse for Hessian-vector products, `Taylor<BReverse<f64>, K>` gives Taylor-over-reverse, and `Dual<Dual<f64>>` gives forward-over-forward.
 
+## Formal Specifications
+
+Core algorithms are modelled in TLA+ and verified with the TLC model checker:
+
+- **Gradient checkpointing** (`src/checkpoint.rs`) — base Revolve, online thinning, and hint-based allocation, with budget, coverage, and spacing invariants.
+- **Bytecode tape optimizer** (`src/bytecode_tape/optimize.rs`) — CSE + DCE structural invariants and idempotency of `optimize(optimize(t)) = optimize(t)`.
+
+Spec-to-code alignment is enforced by two mechanisms, both gated by the [TLA+ Specs workflow](.github/workflows/specs.yml):
+
+1. **Source anchors.** Every invariant carries a `// SPEC: <InvariantName>` comment next to the code line that upholds it. `specs/verify_anchors.sh` parses `specs/README.md` and greps each declared source file for the corresponding anchor, failing if any is missing. (The check catches deletion, renames, and file moves; it does not catch an anchor pasted next to the wrong line within the same file — that remains a reviewer responsibility.)
+2. **Semantic property tests.** `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties against the real Rust implementation (gradient correctness across checkpoint strategies, `optimize ∘ optimize = optimize`, post-optimise structural assertions).
+
+See [`specs/README.md`](specs/README.md) for the full invariant cross-reference and local model-checking instructions.
+
 ## Comparison
 
 | Library | Forward | Reverse | Graph tape | Sparse | Taylor | GPU | Nonsmooth |
@@ -308,7 +323,7 @@ The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and im
 
 ```toml
 [dependencies]
-echidna-optim = "0.8"
+echidna-optim = "0.13"
 ```
 
 Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).

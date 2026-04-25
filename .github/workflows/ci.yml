@@ -53,10 +53,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (all non-CUDA features)
-        run: cargo clippy --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu" -- -D warnings
+        run: cargo clippy --all-targets --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu" -- -D warnings
 
       - name: Clippy (echidna-optim)
-        run: cargo clippy -p echidna-optim --all-features -- -D warnings
+        run: cargo clippy --all-targets -p echidna-optim --all-features -- -D warnings
 
 
   docs:
@@ -161,7 +161,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           files: cobertura.xml
           token: ${{ secrets.CODECOV_TOKEN }}

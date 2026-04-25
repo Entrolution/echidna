@@ -5,6 +5,7 @@
 //! skipping — no opcode dispatch overhead. Used internally by [`crate::Reverse`].
 
 use std::cell::Cell;
+use std::marker::PhantomData;
 
 use crate::Float;
 
@@ -149,6 +150,40 @@ impl<F: Float> Tape<F> {
 
     /// Run the reverse sweep, seeding the adjoint of `seed_index` with 1.
     /// Returns the full adjoint vector.
+    ///
+    /// # Performance note on subnormal (denormal) floats
+    ///
+    /// This function does **not** set the x86/x64 MXCSR flush-to-zero bit.
+    /// If a reverse sweep produces subnormal adjoints — common on long
+    /// chains where `a != zero` lets tiny contributions accumulate — x86
+    /// hardware falls into microcode-emulated arithmetic that can be
+    /// 10-100× slower than the normal path. Adjoints that stay normal
+    /// (≥ `f32::MIN_POSITIVE` ≈ 1.17e-38 or `f64::MIN_POSITIVE` ≈ 2.2e-308)
+    /// are unaffected.
+    ///
+    /// Callers on x86 where subnormal adjoints are expected can opt into
+    /// FTZ by setting the MXCSR bit themselves. The correct read-modify-
+    /// write idiom (so the caller's existing rounding mode and exception
+    /// masks survive) is:
+    ///
+    /// ```ignore
+    /// use core::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+    /// // MXCSR bit 15 = FTZ. Bit 6 = DAZ (input denormals flushed to
+    /// // zero) is *independent*; enable it too only if you also want
+    /// // subnormal inputs treated as zero.
+    /// let saved = unsafe { _mm_getcsr() };
+    /// unsafe { _mm_setcsr(saved | (1 << 15)) };
+    /// // ... tape.reverse(...) ...
+    /// unsafe { _mm_setcsr(saved) }; // restore
+    /// ```
+    ///
+    /// Doing this globally in the library would change numerical
+    /// semantics for callers who depend on subnormal precision or have
+    /// set a non-default rounding mode (e.g. interval arithmetic with
+    /// `FE_DOWNWARD`), so the choice is deferred.
+    ///
+    /// ARM64 flushes subnormals by default (FPCR.FZ=1 on AArch32 and
+    /// FPCR.FZ et al. on AArch64), so this warning is x86-specific.
     #[must_use]
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let mut adjoints = vec![F::zero(); self.num_variables as usize];
@@ -158,9 +193,8 @@ impl<F: Float> Tape<F> {
             let stmt = self.statements[i];
             let a = adjoints[stmt.lhs_index as usize];
             // Performance: skip zero-adjoint branches. Trade-off: `0 * NaN`
-            // returns 0 instead of propagating NaN. Use forward mode if
-            // NaN propagation through reverse mode is needed.
-            // Verified correct 2026-04-11: deliberate design choice, matching JAX convention.
+            // returns 0 instead of propagating NaN. This is a deliberate design choice
+            // matching JAX convention. Use forward mode if NaN propagation is needed.
             if a != F::zero() {
                 adjoints[stmt.lhs_index as usize] = F::zero();
                 let start = self.statements[i - 1].end_plus_one as usize;
@@ -216,6 +250,8 @@ pub trait TapeThreadLocal: Float {
     fn cell() -> &'static std::thread::LocalKey<Cell<*mut Tape<Self>>>;
     /// Returns the thread-local cell holding the tape pool.
     fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>>;
+    /// Returns the per-type borrow flag cell.
+    fn borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>>;
 }
 
 impl TapeThreadLocal for f32 {
@@ -225,6 +261,9 @@ impl TapeThreadLocal for f32 {
     fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>> {
         &POOL_F32
     }
+    fn borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &TAPE_BORROWED_F32
+    }
 }
 
 impl TapeThreadLocal for f64 {
@@ -233,6 +272,9 @@ impl TapeThreadLocal for f64 {
     }
     fn pool_cell() -> &'static std::thread::LocalKey<Cell<Option<Tape<Self>>>> {
         &POOL_F64
+    }
+    fn borrow_cell() -> &'static std::thread::LocalKey<Cell<bool>> {
+        &TAPE_BORROWED_F64
     }
 }
 
@@ -256,45 +298,51 @@ impl<F: TapeThreadLocal> Tape<F> {
 }
 
 thread_local! {
-    static TAPE_BORROWED: Cell<bool> = const { Cell::new(false) };
+    // Per-type borrow guards (prevents false reentrance detection across different float types)
+    static TAPE_BORROWED_F32: Cell<bool> = const { Cell::new(false) };
+    static TAPE_BORROWED_F64: Cell<bool> = const { Cell::new(false) };
 }
 
-struct TapeBorrowGuard;
+struct TapeBorrowGuard {
+    cell: &'static std::thread::LocalKey<Cell<bool>>,
+}
 
 impl TapeBorrowGuard {
-    fn new() -> Self {
-        TAPE_BORROWED.with(|b| {
+    fn new<F: TapeThreadLocal>() -> Self {
+        let cell = F::borrow_cell();
+        cell.with(|b| {
             assert!(
                 !b.get(),
                 "reentrant with_active_tape call detected — this would create aliased &mut references"
             );
             b.set(true);
         });
-        TapeBorrowGuard
+        TapeBorrowGuard { cell }
     }
 }
 
 impl Drop for TapeBorrowGuard {
     fn drop(&mut self) {
-        TAPE_BORROWED.with(|b| b.set(false));
+        self.cell.with(|b| b.set(false));
     }
 }
 
 /// Access the active tape for the current thread. Panics if no tape is active.
 #[inline]
 pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R) -> R {
-    let _guard = TapeBorrowGuard::new();
+    let _guard = TapeBorrowGuard::new::<F>();
     F::cell().with(|cell| {
         let ptr = cell.get();
         assert!(
             !ptr.is_null(),
             "No active tape. Use echidna::grad() or similar API."
         );
-        // SAFETY: The TapeGuard guarantees the pointer is valid for the
-        // duration of the closure-based API scope, and only one mutable
-        // reference exists at a time (single-threaded access via thread-local).
-        // The TapeBorrowGuard above ensures no reentrant calls create aliased
-        // &mut references.
+        // SAFETY: TapeGuard's `'a` lifetime statically ties the raw pointer's
+        // validity to the live `&'a mut Tape<F>` borrow on the stack frame
+        // that constructed the guard — the borrow checker rejects any program
+        // in which the guard outlives its tape. Access is single-threaded via
+        // thread-local, and the TapeBorrowGuard above ensures no reentrant
+        // call creates aliased &mut references.
         let tape = unsafe { &mut *ptr };
         f(tape)
     })
@@ -302,24 +350,43 @@ pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R
 
 /// RAII guard that sets a tape as the thread-local active tape and restores
 /// the previous one on drop.
-pub struct TapeGuard<F: TapeThreadLocal> {
+///
+/// The `'a` lifetime ties the guard to the borrow of the tape it was
+/// constructed from, so the borrow checker rejects any pattern where the
+/// guard could outlive its tape.
+///
+/// ```compile_fail
+/// use echidna::tape::{Tape, TapeGuard};
+/// let guard: TapeGuard<f64>;
+/// {
+///     let mut tape: Tape<f64> = Tape::new();
+///     guard = TapeGuard::new(&mut tape);
+/// } // tape dropped, but guard would survive — rejected by the borrow checker.
+/// drop(guard);
+/// ```
+pub struct TapeGuard<'a, F: TapeThreadLocal> {
     prev: *mut Tape<F>,
+    _borrow: PhantomData<&'a mut Tape<F>>,
 }
 
-impl<F: TapeThreadLocal> TapeGuard<F> {
+impl<'a, F: TapeThreadLocal> TapeGuard<'a, F> {
     /// Activate `tape` as the thread-local tape. Returns a guard that restores
     /// the previous tape on drop.
-    pub fn new(tape: &mut Tape<F>) -> Self {
+    #[must_use = "dropping the guard immediately deactivates the tape; bind it to extend the recording scope"]
+    pub fn new(tape: &'a mut Tape<F>) -> Self {
         let prev = F::cell().with(|cell| {
             let prev = cell.get();
             cell.set(tape as *mut Tape<F>);
             prev
         });
-        TapeGuard { prev }
+        TapeGuard {
+            prev,
+            _borrow: PhantomData,
+        }
     }
 }
 
-impl<F: TapeThreadLocal> Drop for TapeGuard<F> {
+impl<'a, F: TapeThreadLocal> Drop for TapeGuard<'a, F> {
     fn drop(&mut self) {
         F::cell().with(|cell| {
             cell.set(self.prev);

@@ -296,7 +296,7 @@ fn float_trait_methods() {
 #[test]
 fn from_primitive_zero_derivative() {
     use num_traits::FromPrimitive;
-    let x = Dual64::from_f64(3.14).unwrap();
-    assert_relative_eq!(x.re, 3.14);
+    let x = Dual64::from_f64(2.5).unwrap();
+    assert_relative_eq!(x.re, 2.5);
     assert_relative_eq!(x.eps, 0.0);
 }

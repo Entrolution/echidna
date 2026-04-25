@@ -17,7 +17,7 @@ fn nonlinear_map<T: Scalar>(x: &[T]) -> Vec<T> {
 #[test]
 fn jacobian_sparsity_linear() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (tape, _) = record_multi(|v| linear_map(v), &x);
+    let (tape, _) = record_multi(linear_map, &x);
     let pattern = tape.detect_jacobian_sparsity();
 
     // f0 depends on x0, x1
@@ -34,7 +34,7 @@ fn jacobian_sparsity_linear() {
 #[test]
 fn jacobian_sparsity_nonlinear() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (tape, _) = record_multi(nonlinear_map, &x);
     let pattern = tape.detect_jacobian_sparsity();
 
     // f0 = x0*x1 -> depends on x0, x1
@@ -67,7 +67,7 @@ fn column_coloring_diagonal() {
 #[test]
 fn sparse_jacobian_vs_dense() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (mut tape, _) = record_multi(nonlinear_map, &x);
 
     let dense_jac = tape.jacobian(&x);
     let (_, pattern, sparse_vals) = tape.sparse_jacobian(&x);
@@ -89,7 +89,7 @@ fn sparse_jacobian_vs_dense() {
 #[test]
 fn sparse_jacobian_forward_vs_reverse() {
     let x = [1.5_f64, 2.5, 0.5];
-    let (mut tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (mut tape, _) = record_multi(nonlinear_map, &x);
 
     let (vals_fwd, pat_fwd, jac_fwd) = tape.sparse_jacobian_forward(&x);
     let (vals_rev, pat_rev, jac_rev) = tape.sparse_jacobian_reverse(&x);
@@ -114,7 +114,7 @@ fn sparse_jacobian_forward_vs_reverse() {
 #[test]
 fn sparse_jacobian_vec_matches() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (mut tape, _) = record_multi(nonlinear_map, &x);
 
     let (_, _, jac_scalar) = tape.sparse_jacobian_forward(&x);
     let (_, _, jac_vec) = tape.sparse_jacobian_vec::<4>(&x);
@@ -131,7 +131,7 @@ fn sparse_jacobian_vec_matches() {
 #[test]
 fn sparse_jacobian_with_pattern_precomputed() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (mut tape, _) = record_multi(nonlinear_map, &x);
 
     // First call: detect pattern and colors
     let pattern = tape.detect_jacobian_sparsity();
@@ -158,7 +158,7 @@ fn sparse_jacobian_with_pattern_precomputed() {
 #[test]
 fn jacobian_forward_vs_reverse() {
     let x = [1.0_f64, 2.0, 3.0];
-    let (mut tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (mut tape, _) = record_multi(nonlinear_map, &x);
 
     let jac_rev = tape.jacobian(&x);
     let jac_fwd = tape.jacobian_forward(&x);
@@ -209,7 +209,7 @@ fn sparse_jacobian_auto_selects_reverse() {
     }
 
     let x = [1.0_f64, 2.0, 0.5, 1.5, 3.0];
-    let (mut tape, _) = record_multi(|v| wide_input_map(v), &x);
+    let (mut tape, _) = record_multi(wide_input_map, &x);
 
     // Verify the coloring structure actually favors reverse mode.
     tape.forward(&x);
@@ -259,14 +259,14 @@ fn sparse_jacobian_auto_selects_reverse() {
 #[test]
 fn api_sparse_jacobian() {
     let x = vec![1.0_f64, 2.0, 3.0];
-    let (vals, pattern, jac_vals) = echidna::sparse_jacobian(|v| nonlinear_map(v), &x);
+    let (vals, pattern, jac_vals) = echidna::sparse_jacobian(nonlinear_map, &x);
 
     assert_eq!(vals.len(), 3);
     assert!(!pattern.is_empty());
     assert!(!jac_vals.is_empty());
 
     // Verify against dense
-    let (mut tape, _) = record_multi(|v| nonlinear_map(v), &x);
+    let (mut tape, _) = record_multi(nonlinear_map, &x);
     let dense_jac = tape.jacobian(&x);
 
     for (k, (&row, &col)) in pattern.rows.iter().zip(pattern.cols.iter()).enumerate() {

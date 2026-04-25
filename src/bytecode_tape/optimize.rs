@@ -18,6 +18,7 @@ impl<F: Float> super::BytecodeTape<F> {
         let mut reachable = vec![false; n];
 
         // Mark all inputs as reachable.
+        // SPEC: DCEInputsReachable — the leading `num_inputs` entries are always retained.
         for flag in reachable.iter_mut().take(self.num_inputs as usize) {
             *flag = true;
         }
@@ -184,6 +185,10 @@ impl<F: Float> super::BytecodeTape<F> {
                 (op, a, b)
             };
 
+            // SPEC: CSERemapMonotone — `canonical` is an earlier index (first-seen wins),
+            // so `remap[i] <= i` is preserved.
+            // SPEC: CSERemapIdempotent — canonical entries point to themselves (`remap[canonical] = canonical`),
+            // which makes them fixed points of `remap`.
             if let Some(&canonical) = seen.get(&key) {
                 remap[i] = canonical;
             } else {
@@ -228,14 +233,19 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Run all tape optimizations: CSE followed by DCE.
     ///
     /// In debug builds, validates internal consistency after optimization.
+    // SPEC: IdempotencyProperty — `optimize(optimize(t))` yields the same tape as `optimize(t)`;
+    // exercised by tests/spec_invariants_tape_optimize.rs.
     pub fn optimize(&mut self) {
         self.cse(); // CSE already calls dead_code_elimination() internally.
 
         // Validate internal consistency in debug builds.
+        // SPEC: PostOptValid — comprehensive post-optimize structural check.
         #[cfg(debug_assertions)]
         {
             let n = self.opcodes.len();
             // All arg_indices must point to valid entries.
+            // SPEC: ValidRefsInvariant — every arg index is < tape length.
+            // SPEC: DAGOrderInvariant — non-Input/Const/Powi args point strictly earlier.
             for i in 0..n {
                 let [a, b] = self.arg_indices[i];
                 match self.opcodes[i] {
@@ -272,6 +282,7 @@ impl<F: Float> super::BytecodeTape<F> {
                 }
             }
             // output_index must be valid.
+            // SPEC: OutputValidInvariant — output_index (and every output_indices entry) < tape length.
             assert!(
                 (self.output_index as usize) < n,
                 "output_index {} out of bounds (tape len {})",
@@ -287,6 +298,7 @@ impl<F: Float> super::BytecodeTape<F> {
                 );
             }
             // num_inputs must be preserved.
+            // SPEC: InputsPreserved — the number of Input opcodes equals num_inputs after optimize.
             let input_count = self
                 .opcodes
                 .iter()

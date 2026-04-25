@@ -15,7 +15,13 @@ pub struct LuFactors<F> {
 
 /// Factorize an `n x n` matrix via LU decomposition with partial pivoting.
 ///
-/// Returns `None` if the matrix is singular (zero or near-zero pivot).
+/// Returns `None` if the matrix is singular or numerically unusable: an
+/// exact-zero pivot, a pivot below the `ε·n·‖A‖∞` relative threshold, or
+/// any non-finite pivot produced by a NaN / ±Inf input entry. The
+/// non-finite rejection matters because IEEE comparisons against NaN
+/// return `false`, so without it a NaN pivot would silently pass both
+/// the zero and tolerance checks and propagate through the stored LU
+/// factors.
 // Explicit indexing is clearer for pivoted LU: row/col indices drive pivot search and elimination
 #[allow(clippy::needless_range_loop)]
 pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
@@ -25,7 +31,23 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
     let mut lu: Vec<Vec<F>> = a.to_vec();
     let mut perm: Vec<usize> = (0..n).collect();
 
-    let eps = F::epsilon().sqrt();
+    // Use a relative singularity threshold scaled by the matrix infinity norm
+    // `‖A‖_∞ = max_i Σ_j |A[i][j]|`. Anchoring on the original-matrix scale
+    // is more robust than a running max-pivot-seen: an early small pivot (in
+    // a column that happens to be heavily cancelled) would otherwise lower
+    // the tolerance for every subsequent column, letting genuinely near-
+    // singular later pivots pass. ‖A‖_∞ is fixed at the start and reflects
+    // the true matrix magnitude.
+    let eps_mach = F::epsilon();
+    let n_f = F::from(n).unwrap();
+    let mut matrix_inf_norm = F::zero();
+    for row in a.iter() {
+        let row_sum = row.iter().fold(F::zero(), |acc, &x| acc + x.abs());
+        if row_sum > matrix_inf_norm {
+            matrix_inf_norm = row_sum;
+        }
+    }
+    let tol = eps_mach * n_f * matrix_inf_norm;
 
     for col in 0..n {
         // Find pivot
@@ -39,8 +61,13 @@ pub fn lu_factor<F: Float>(a: &[Vec<F>]) -> Option<LuFactors<F>> {
             }
         }
 
-        if max_val < eps {
-            return None; // Singular
+        // Reject non-finite pivots up front: NaN/Inf break both the zero
+        // check (NaN == 0 is false) and the tolerance comparison (NaN < tol
+        // is false), so without this they'd be accepted and produce
+        // NaN-tainted LU factors that downstream callers interpret as a
+        // successful solve.
+        if !max_val.is_finite() || max_val == F::zero() || max_val < tol {
+            return None; // Singular or non-finite
         }
 
         // Swap rows
@@ -106,7 +133,9 @@ pub fn lu_back_solve<F: Float>(factors: &LuFactors<F>, b: &[F]) -> Vec<F> {
 /// Solve `A * x = b` via LU factorization with partial pivoting.
 ///
 /// `a` is an `n x n` matrix stored as `a[row][col]`.
-/// Returns `None` if the matrix is singular (zero or near-zero pivot).
+/// Returns `None` if [`lu_factor`] rejects `a` (singular, near-singular, or
+/// non-finite pivot). A non-finite entry in `b` will still propagate through
+/// the substitution and is not filtered here.
 pub fn lu_solve<F: Float>(a: &[Vec<F>], b: &[F]) -> Option<Vec<F>> {
     let factors = lu_factor(a)?;
     Some(lu_back_solve(&factors, b))
@@ -205,6 +234,28 @@ mod tests {
     #[test]
     fn lu_factor_singular_returns_none() {
         let a = vec![vec![1.0, 2.0], vec![2.0, 4.0]];
+        assert!(lu_factor(&a).is_none());
+    }
+
+    #[test]
+    fn lu_factor_nan_entry_returns_none() {
+        // A NaN anywhere in the matrix produces a NaN row sum → NaN
+        // `matrix_inf_norm` → NaN pivot candidates. Prior to the finite-pivot
+        // check, `NaN == 0` and `NaN < tol` both evaluate to `false`, so the
+        // NaN pivot was silently accepted and propagated through the stored
+        // LU factors, yielding a NaN-tainted "successful" solve. The check
+        // now rejects this up front.
+        let a = vec![vec![f64::NAN, 0.0], vec![0.0, 1.0]];
+        assert!(lu_factor(&a).is_none());
+    }
+
+    #[test]
+    fn lu_factor_inf_entry_returns_none() {
+        // `tol = ε·n·Inf = Inf`, so the genuine pivot comparison (`Inf < Inf`)
+        // is false and the `Inf == 0` check fails too. Without the finite-
+        // pivot guard the factorisation proceeds and produces `Inf/Inf = NaN`
+        // entries.
+        let a = vec![vec![f64::INFINITY, 0.0], vec![0.0, 1.0]];
         assert!(lu_factor(&a).is_none());
     }
 }

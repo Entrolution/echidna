@@ -2,6 +2,10 @@
 //!
 //! Each test targets a specific finding and prevents regressions.
 
+#[cfg(feature = "taylor")]
+use echidna::taylor::Taylor;
+#[cfg(feature = "taylor")]
+use echidna::taylor_dyn::{TaylorDyn, TaylorDynGuard};
 use echidna::Dual;
 
 type Dual64 = Dual<f64>;
@@ -463,13 +467,13 @@ mod phase1c_sparsity {
 
     #[test]
     fn sparsity_custom_binary_op() {
-        let (mut tape, _) = record(|x| x[0] * x[1] + x[0].sin(), &[1.0, 2.0]);
+        let (tape, _) = record(|x| x[0] * x[1] + x[0].sin(), &[1.0, 2.0]);
         let dense = tape.hessian(&[1.0, 2.0]);
         let (_, _, pattern, _sparse_vals) = tape.sparse_hessian(&[1.0, 2.0]);
 
         for i in 0..2 {
             for j in 0..=i {
-                if (dense.2[i][j] as f64).abs() > 1e-12 {
+                if dense.2[i][j].abs() > 1e-12 {
                     assert!(
                         pattern.contains(i, j),
                         "dense H[{i},{j}]={} missing from sparse pattern",
@@ -921,11 +925,332 @@ mod regression_28 {
         let handle = tape.register_custom(Arc::new(Scale));
         let idx = tape.new_input(x[0]);
         let input = BReverse::from_tape(x[0], idx);
-        let _guard = BtapeGuard::new(&mut tape);
-        let output = input.custom_unary(handle, 2.0 * x[0]);
+        let output = {
+            let _guard = BtapeGuard::new(&mut tape);
+            input.custom_unary(handle, 2.0 * x[0])
+        };
         tape.set_output(output.index());
 
-        // hessian_vec should debug_assert because custom ops are present
+        // hessian_vec should assert because custom ops are present
         let _ = tape.hessian_vec::<1>(&x);
     }
+}
+
+// ═════════════════════════════════���════════════════════════
+//  Boundary-value derivative regression tests (PR #49 fixes)
+// ══════════════════════════════════════════════════════════
+
+// d/dx asin(x) = 1/sqrt(1-x²). At x = 1 - 1e-15, the naive formula 1 - x*x
+// loses ~15 digits. The (1-x)(1+x) formulation preserves precision.
+mod boundary_asin {
+    use echidna::Dual;
+
+    #[test]
+    fn asin_near_boundary_dual() {
+        let x_val = 1.0_f64 - 1e-15;
+        let d = Dual::new(x_val, 1.0);
+        let r = d.asin();
+        // Analytical: 1/sqrt((1-x)(1+x)) = 1/sqrt(1e-15 * (2 - 1e-15))
+        let expected = 1.0 / ((1.0 - x_val) * (1.0 + x_val)).sqrt();
+        let rel_err = ((r.eps - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "asin derivative near boundary: got {}, expected {}, rel_err={}",
+            r.eps,
+            expected,
+            rel_err
+        );
+    }
+
+    #[test]
+    fn acos_near_boundary_dual() {
+        let x_val = 1.0_f64 - 1e-15;
+        let d = Dual::new(x_val, 1.0);
+        let r = d.acos();
+        let expected = -1.0 / ((1.0 - x_val) * (1.0 + x_val)).sqrt();
+        let rel_err = ((r.eps - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "acos derivative near boundary: got {}, expected {}, rel_err={}",
+            r.eps,
+            expected,
+            rel_err
+        );
+    }
+
+    #[test]
+    fn atanh_near_boundary_dual() {
+        let x_val = 1.0_f64 - 1e-15;
+        let d = Dual::new(x_val, 1.0);
+        let r = d.atanh();
+        let expected = 1.0 / ((1.0 - x_val) * (1.0 + x_val));
+        let rel_err = ((r.eps - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "atanh derivative near boundary: got {}, expected {}, rel_err={}",
+            r.eps,
+            expected,
+            rel_err
+        );
+    }
+}
+
+#[cfg(feature = "bytecode")]
+mod boundary_bytecode {
+    use num_traits::Float;
+
+    fn breverse_grad(
+        f: impl FnOnce(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+        x: &[f64],
+    ) -> Vec<f64> {
+        let (mut tape, _) = echidna::record(f, x);
+        tape.gradient(x)
+    }
+
+    #[test]
+    fn asin_near_boundary_breverse() {
+        let x_val = 1.0_f64 - 1e-15;
+        let g = breverse_grad(|x| x[0].asin(), &[x_val]);
+        let expected = 1.0 / ((1.0 - x_val) * (1.0 + x_val)).sqrt();
+        let rel_err = ((g[0] - expected) / expected).abs();
+        assert!(
+            rel_err < 1e-6,
+            "BReverse asin near boundary: rel_err={}",
+            rel_err
+        );
+    }
+
+    #[test]
+    fn atan2_large_inputs_breverse() {
+        let g = breverse_grad(|x| x[0].atan2(x[1]), &[1e200, 1e200]);
+        // At (a,a), d/da atan2(a,b) = b/(a²+b²) = 1/(2a) ≈ 5e-201
+        // This is subnormal for f64, so it may flush to zero on some platforms.
+        // The key property: it must be finite (not NaN or Inf).
+        assert!(
+            g[0].is_finite(),
+            "atan2 da gradient should be finite for large inputs, got {}",
+            g[0]
+        );
+        assert!(
+            g[1].is_finite(),
+            "atan2 db gradient should be finite for large inputs, got {}",
+            g[1]
+        );
+    }
+
+    #[test]
+    fn div_small_denominator_breverse() {
+        let x_val = 1e-200_f64;
+        let g = breverse_grad(|x| x[0].recip(), &[x_val]);
+        // d/dx(1/x) = -1/x² = -1e400 → Inf for f64. That's the correct IEEE result.
+        // The key is it should NOT be NaN.
+        assert!(
+            !g[0].is_nan(),
+            "recip derivative should not be NaN for small x"
+        );
+    }
+}
+
+#[cfg(feature = "taylor")]
+mod boundary_taylor {
+    use echidna::Taylor;
+
+    #[test]
+    fn taylor_hypot_large_inputs() {
+        // hypot(a, b) at a₀=1e200, b₀=1e200 with direction (1, 0)
+        let a = Taylor::<f64, 3>::new([1e200, 1.0, 0.0]);
+        let b = Taylor::<f64, 3>::constant(1e200);
+        let r = a.hypot(b);
+        assert!(r.coeffs[0].is_finite(), "hypot primal should be finite");
+        assert!(
+            r.coeffs[1] != 0.0 && r.coeffs[1].is_finite(),
+            "hypot first derivative should be non-zero and finite, got {}",
+            r.coeffs[1]
+        );
+    }
+
+    #[test]
+    fn taylor_hypot_small_inputs() {
+        let a = Taylor::<f64, 3>::new([1e-200, 1.0, 0.0]);
+        let b = Taylor::<f64, 3>::constant(1e-200);
+        let r = a.hypot(b);
+        assert!(r.coeffs[0].is_finite(), "hypot primal should be finite");
+        assert!(
+            r.coeffs[1].is_finite(),
+            "hypot first derivative should be finite, got {}",
+            r.coeffs[1]
+        );
+    }
+
+    #[test]
+    fn taylor_asin_near_boundary() {
+        // asin at x₀ = 1 - 1e-10 — derivative should be large but finite
+        let x = Taylor::<f64, 3>::new([1.0 - 1e-10, 1.0, 0.0]);
+        let r = x.asin();
+        assert!(r.coeffs[0].is_finite(), "asin primal should be finite");
+        assert!(
+            r.coeffs[1].is_finite() && r.coeffs[1] > 0.0,
+            "asin first Taylor coefficient should be positive and finite, got {}",
+            r.coeffs[1]
+        );
+    }
+}
+
+// ══════════════════════════════════════════════════════
+//  Cycle 5 Phase 1: Correctness fixes
+// ══════════════════════════════════════════════════════
+
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_max_nan_guard() {
+    let valid = Taylor::<f64, 3>::new([5.0, 1.0, 0.0]);
+    let nan = Taylor::<f64, 3>::new([f64::NAN, 1.0, 0.0]);
+
+    // max(valid, NaN) should return valid
+    let r = valid.max(nan);
+    assert_eq!(r.coeffs[0], 5.0, "max(valid, NaN) should return valid");
+
+    // max(NaN, valid) should return valid
+    let r = nan.max(valid);
+    assert_eq!(r.coeffs[0], 5.0, "max(NaN, valid) should return valid");
+
+    // min(valid, NaN) should return valid
+    let r = valid.min(nan);
+    assert_eq!(r.coeffs[0], 5.0, "min(valid, NaN) should return valid");
+
+    // min(NaN, valid) should return valid
+    let r = nan.min(valid);
+    assert_eq!(r.coeffs[0], 5.0, "min(NaN, valid) should return valid");
+}
+
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_dyn_max_nan_guard() {
+    let _guard = TaylorDynGuard::<f64>::new(3);
+
+    let valid = TaylorDyn::variable(5.0);
+    let nan = TaylorDyn::constant(f64::NAN);
+
+    let r = valid.max(nan);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn max(valid, NaN) should return valid"
+    );
+
+    let r = nan.max(valid);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn max(NaN, valid) should return valid"
+    );
+
+    let r = valid.min(nan);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn min(valid, NaN) should return valid"
+    );
+
+    let r = nan.min(valid);
+    assert_eq!(
+        r.value(),
+        5.0,
+        "TaylorDyn min(NaN, valid) should return valid"
+    );
+}
+
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_acosh_near_domain_boundary() {
+    // acosh at x₀ = 1 + 1e-10 — cancellation-safe form should preserve precision
+    let x = Taylor::<f64, 3>::new([1.0 + 1e-10, 1.0, 0.0]);
+    let r = x.acosh();
+    assert!(
+        r.coeffs[0].is_finite(),
+        "acosh primal should be finite near x=1"
+    );
+    assert!(
+        r.coeffs[1].is_finite() && r.coeffs[1] > 0.0,
+        "acosh first Taylor coeff should be positive and finite near x=1, got {}",
+        r.coeffs[1]
+    );
+    // Compare with asin at the equivalent point for similar precision
+    let y = Taylor::<f64, 3>::new([1.0 - 1e-10, 1.0, 0.0]);
+    let asin_r = y.asin();
+    // Both should have similar magnitudes of first coefficient
+    assert!(
+        (r.coeffs[1].ln() - asin_r.coeffs[1].ln()).abs() < 2.0,
+        "acosh and asin should have similar-magnitude derivatives near their boundaries"
+    );
+}
+
+#[test]
+fn div_forward_partial_small_denominator() {
+    // d/db(a/b) at b = 1e-155 should not overflow to inf
+    let a = Dual64::new(1e-308, 0.0);
+    let b = Dual64::new(1e-155, 1.0);
+    let r = a / b;
+    // d/db(a/b) = -a/b² = -1e-308 / 1e-310 = -1e2 (approximately)
+    // With the old formula -a * (1/b)² the intermediate (1/b)² overflows
+    assert!(
+        r.eps.is_finite(),
+        "d/db(a/b) should be finite for small b when a is also small, got {}",
+        r.eps
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn div_reverse_partial_via_tape() {
+    // Same test through bytecode tape reverse mode
+    use echidna::{record, BReverse};
+    let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0] / x[1], &[1e-308, 1e-155]);
+    let grad = tape.gradient(&[1e-308, 1e-155]);
+    assert!(
+        grad[1].is_finite(),
+        "tape gradient d/db(a/b) should be finite, got {}",
+        grad[1]
+    );
+    // Should be approximately -a/b² = -1e-308/1e-310 ≈ -100
+    assert!(
+        (grad[1] + 100.0).abs() < 10.0,
+        "tape gradient d/db should be ≈ -100, got {}",
+        grad[1]
+    );
+}
+
+#[test]
+fn powf_forward_partial_underflow() {
+    // d/da(a^2) at a = 1e-200: r = a² underflows to 0, but derivative 2a = 2e-200 is nonzero
+    let a = Dual64::new(1e-200, 1.0);
+    let r = a.powf(Dual64::new(2.0, 0.0));
+    assert!(
+        r.eps != 0.0,
+        "d/da(a^2) at a=1e-200 should be nonzero, got {}",
+        r.eps
+    );
+    assert!(
+        (r.eps - 2e-200).abs() < 1e-210,
+        "d/da(a^2) at a=1e-200 should be ≈ 2e-200, got {}",
+        r.eps
+    );
+}
+
+#[cfg(feature = "bytecode")]
+#[test]
+fn powf_reverse_partial_underflow_tape() {
+    use echidna::{record, BReverse};
+    use num_traits::Float; // powf is on the Float trait
+    let two_const = 2.0f64;
+    let (mut tape, _) = record(
+        |x: &[BReverse<f64>]| x[0].powf(BReverse::constant(two_const)),
+        &[1e-200],
+    );
+    let grad = tape.gradient(&[1e-200]);
+    assert!(
+        grad[0] != 0.0,
+        "tape gradient d/da(a^2) at a=1e-200 should be nonzero, got {}",
+        grad[0]
+    );
 }

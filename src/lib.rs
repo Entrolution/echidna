@@ -94,10 +94,35 @@
 //! - **Tape reuse (performance)**: use [`record()`] to build a [`BytecodeTape`], then
 //!   call methods on it for repeated evaluation (requires `bytecode`).
 
+/// Compile-time assertion that a type is `Send + Sync + 'static`.
+///
+/// Use on error types so that a future variant carrying a non-`Send` /
+/// non-`Sync` / non-`'static` payload produces a build-time failure at
+/// the type definition rather than at the (often distant) call site
+/// where the error type meets an `async` boundary or a threadpool.
+///
+/// # Example
+///
+/// ```
+/// # use echidna::assert_send_sync;
+/// pub enum MyError { Bad, Other }
+/// assert_send_sync!(MyError);
+/// ```
+#[macro_export]
+macro_rules! assert_send_sync {
+    ($t:ty) => {
+        const _: fn() = || {
+            fn assert_send_sync<T: Send + Sync + 'static>() {}
+            assert_send_sync::<$t>();
+        };
+    };
+}
+
 pub mod api;
 pub mod dual;
 pub mod dual_vec;
 pub mod float;
+pub mod kernels;
 pub mod reverse;
 pub mod scalar;
 pub mod tape;

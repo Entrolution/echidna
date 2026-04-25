@@ -151,6 +151,18 @@ pub fn taylor_sqrt<F: Float>(a: &[F], c: &mut [F]) {
         }
         return;
     }
+    if a[0] < F::zero() {
+        // sqrt is undefined on the negative reals. Relying on `.sqrt()`'s
+        // silent NaN propagates the NaN into c[0] but leaves higher-order
+        // coefficients computed from division by `2 * NaN` in a state that
+        // looks like a normal recurrence. Make the degeneracy explicit so
+        // downstream callers don't accidentally consume a mix of finite
+        // and non-finite coefficients.
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     c[0] = a[0].sqrt();
     let two_c0 = F::from(2.0).unwrap() * c[0];
     for k in 1..n {
@@ -252,8 +264,8 @@ pub fn taylor_asin<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     c[0] = a[0].asin();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = 1 - a²
-    scratch2[0] = F::one() - scratch1[0];
+    // scratch2 = 1 - a²  (use (1-a₀)(1+a₀) to avoid cancellation near |a₀|→1)
+    scratch2[0] = (F::one() - a[0]) * (F::one() + a[0]);
     for k in 1..n {
         scratch2[k] = -scratch1[k];
     }
@@ -378,9 +390,9 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     c[0] = a[0].acosh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = a² - 1
+    // scratch2 = a² - 1  (factored form avoids cancellation near a[0]=1)
     scratch2[..n].copy_from_slice(&scratch1[..n]);
-    scratch2[0] = scratch1[0] - F::one();
+    scratch2[0] = (a[0] - F::one()) * (a[0] + F::one());
     // scratch1 = sqrt(a² - 1)
     taylor_sqrt(scratch2, scratch1);
     // scratch2 = 1/sqrt(a² - 1)
@@ -402,8 +414,8 @@ pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     c[0] = a[0].atanh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
-    // scratch2 = 1 - a²
-    scratch2[0] = F::one() - scratch1[0];
+    // scratch2 = 1 - a²  (use (1-a₀)(1+a₀) to avoid cancellation near |a₀|→1)
+    scratch2[0] = (F::one() - a[0]) * (F::one() + a[0]);
     for k in 1..n {
         scratch2[k] = -scratch1[k];
     }
@@ -434,6 +446,20 @@ pub fn taylor_powf<F: Float>(
     scratch1: &mut [F],
     scratch2: &mut [F],
 ) {
+    // Constant integer exponent fast path: if `b` is a plain scalar (higher
+    // coefficients are zero) and that scalar is an integer, route to
+    // `taylor_powi`. Otherwise `taylor_ln(a)` returns NaN for `a[0] <= 0`,
+    // poisoning the entire result — even for negative-base integer powers
+    // that have well-defined Taylor coefficients.
+    if b[1..].iter().all(|&bk| bk == F::zero()) {
+        let b0 = b[0];
+        if let Some(ni) = b0.to_i32() {
+            if F::from(ni).unwrap() == b0 {
+                taylor_powi(a, ni, c, scratch1, scratch2);
+                return;
+            }
+        }
+    }
     // scratch1 = ln(a)
     taylor_ln(a, scratch1);
     // scratch2 = b * ln(a)
@@ -445,11 +471,10 @@ pub fn taylor_powf<F: Float>(
     // Fix c[0] for better primal accuracy (use direct powf instead of exp(b*ln(a))).
     // Higher coefficients c[1..] were computed using the exp-ln path's c[0], which
     // may differ from the patched value by sub-ULP rounding. This is a deliberate
-    // tradeoff: exact primal vs perfectly consistent jet coefficients.
-    // Verified correct 2026-04-11: the discrepancy is O(ULP) for well-conditioned inputs.
-    // BUG-HUNT-NOTE: Patching c[0] = a[0].powf(b[0]) after exp-ln recurrence introduces
-    // O(ULP) inconsistency with c[1..K] which used exp(b[0]*ln(a[0])) as c[0]. This is
-    // an intentional precision tradeoff: direct powf is more accurate for c[0].
+    // Intentional precision tradeoff: patching c[0] with direct powf is more accurate
+    // than the exp-ln roundtrip, but c[1..K] were computed using the exp-ln c[0] value.
+    // The inconsistency is O(ULP) for well-conditioned inputs and does not affect
+    // derivative correctness beyond rounding.
     c[0] = a[0].powf(b[0]);
 }
 
@@ -572,8 +597,8 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
         taylor_ln(c, scratch1);
         taylor_scale(scratch1, third, scratch2);
         taylor_exp(scratch2, c);
-        // BUG-HUNT-NOTE: Same O(ULP) primal-patch tradeoff as taylor_powf. The
-        // negate-all-coefficients approach (-cbrt(-a) = cbrt(a)) is mathematically exact.
+        // Same O(ULP) primal-patch tradeoff as taylor_powf (see comment there).
+        // The negate-all-coefficients approach uses cbrt(a) = -cbrt(-a), which is exact.
         c[0] = a[0].cbrt();
         for ci in c.iter_mut().skip(1) {
             *ci = -*ci;
@@ -584,6 +609,7 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
         taylor_ln(a, scratch1);
         taylor_scale(scratch1, third, scratch2);
         taylor_exp(scratch2, c);
+        // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
         c[0] = a[0].cbrt();
     }
 }
@@ -594,6 +620,7 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     let ln2 = F::from(2.0).unwrap().ln();
     taylor_scale(a, ln2, scratch);
     taylor_exp(scratch, c);
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].exp2();
 }
 
@@ -602,9 +629,10 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 /// NOTE (verified correct): The recurrence uses `exp(a\[0\])` for `c\[1..\]` (via `taylor_exp`),
 /// then patches `c\[0\]` to `exp_m1(a\[0\])`. This is correct because derivatives of `exp(x)-1`
 /// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
-// BUG-HUNT-NOTE: Higher-order coefficients correctly use exp(a[0]) as c[0] in the
-// recurrence, not exp_m1(a[0]). Since d/dx[exp(x)-1] = d/dx[exp(x)] = exp(x),
-// all Taylor coefficients for k>=1 are identical between exp and exp_m1.
+///
+/// The recurrence correctly uses `c[0] = exp(a[0])` (not `exp_m1(a[0])`) to compute
+/// `c[1..K]`, because `d/dx[exp(x)-1] = exp(x)` — the higher-order Taylor coefficients
+/// of `exp(x)-1` are identical to those of `exp(x)`. Only `c[0]` is patched afterward.
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
     taylor_exp(a, c);
@@ -616,6 +644,7 @@ pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
 pub fn taylor_log2<F: Float>(a: &[F], c: &mut [F]) {
     taylor_ln(a, c);
     let inv_ln2 = F::one() / F::from(2.0).unwrap().ln();
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].log2();
     for ck in c[1..].iter_mut() {
         *ck = *ck * inv_ln2;
@@ -627,6 +656,7 @@ pub fn taylor_log2<F: Float>(a: &[F], c: &mut [F]) {
 pub fn taylor_log10<F: Float>(a: &[F], c: &mut [F]) {
     taylor_ln(a, c);
     let inv_ln10 = F::one() / F::from(10.0).unwrap().ln();
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].log10();
     for ck in c[1..].iter_mut() {
         *ck = *ck * inv_ln10;
@@ -639,15 +669,35 @@ pub fn taylor_log10<F: Float>(a: &[F], c: &mut [F]) {
 #[inline]
 pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     let n = c.len();
+    // All call sites are already guarded by the compile-time `K >= 1` const
+    // assert in bytecode_tape/taylor.rs, but `taylor_ln_1p` is also callable
+    // directly. `c[0] = a[0].ln_1p()` below unconditionally indexes [0],
+    // so n=0 would panic; surface it as a debug assert with an actionable
+    // message rather than a raw slice panic.
+    debug_assert!(n >= 1, "taylor_ln_1p requires c.len() >= 1");
     scratch[1..n].copy_from_slice(&a[1..n]);
     scratch[0] = F::one() + a[0];
     taylor_ln(scratch, c);
+    // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].ln_1p();
 }
 
 /// `c = hypot(a, b) = sqrt(a² + b²)`.
 ///
-/// Uses `scratch1` for a², `scratch2` for b², and the result scratch for a²+b².
+/// Shared CPU HYPOT kernel for jet-coefficient arrays. Used by
+/// [`crate::Taylor::hypot`], [`crate::TaylorDyn::hypot`], and
+/// [`crate::Laurent::hypot`]. The Laurent caller first rebases
+/// operands to a common pole order so the coefficient arrays
+/// become directly comparable, then calls through here.
+///
+/// Uses `scratch1` for a², `scratch2` for b², and the result scratch
+/// for a²+b². Rescales inputs by `max(|a[0]|, |b[0]|)` (leading
+/// coefficients only) to avoid overflow/underflow in the intermediate
+/// a²+b². At `scale == 0` with non-zero higher-order seeds, performs
+/// a recursive shift-and-square: hypot(a, b) near t = 0 with both
+/// leading-zero operands equals `|t|·hypot(a(t)/t, b(t)/t)`, so the
+/// body unwinds to the correct Taylor expansion of that composed
+/// function. Mirrors `Taylor::abs` at the function-domain boundary.
 #[inline]
 pub fn taylor_hypot<F: Float>(
     a: &[F],
@@ -657,16 +707,70 @@ pub fn taylor_hypot<F: Float>(
     scratch2: &mut [F],
 ) {
     let n = c.len();
-    // scratch1 = a²
-    taylor_mul(a, a, scratch1);
-    // scratch2 = b²
-    taylor_mul(b, b, scratch2);
-    // scratch1 = a² + b² (reuse scratch1)
-    for k in 0..n {
-        scratch1[k] = scratch1[k] + scratch2[k];
+    let scale = a[0].abs().max(b[0].abs());
+    if scale == F::zero() {
+        // Both leading primals are zero. If the *next* order has any signal,
+        // the composite function t ↦ hypot(a(t), b(t)) is smoothly
+        // `|t|·hypot(a(t)/t, b(t)/t)` near t=0. Recursively compute on the
+        // shifted series, then shift the result back by one to represent the
+        // `|t|·…` factor. This mirrors CPU `Taylor::abs` and gives the true
+        // Taylor expansion rather than the `log(0)·exp` path's NaN/Inf.
+        if n > 1 && (a[1] != F::zero() || b[1] != F::zero()) {
+            let mut a_shifted = vec![F::zero(); n];
+            let mut b_shifted = vec![F::zero(); n];
+            a_shifted[..(n - 1)].copy_from_slice(&a[1..n]);
+            b_shifted[..(n - 1)].copy_from_slice(&b[1..n]);
+            let mut inner_c = vec![F::zero(); n];
+            let mut inner_s1 = vec![F::zero(); n];
+            let mut inner_s2 = vec![F::zero(); n];
+            taylor_hypot(
+                &a_shifted,
+                &b_shifted,
+                &mut inner_c,
+                &mut inner_s1,
+                &mut inner_s2,
+            );
+            c[0] = F::zero();
+            c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
+            return;
+        }
+        // Deeper-order zero (a and b both vanish past the first-non-zero
+        // we can detect in the shifted series) or identically-zero — fall
+        // through to the direct square-then-sqrt path, which gives 0 for
+        // the primal and Inf for higher derivatives (the latter matches
+        // the singular-derivative convention at a true zero).
+        taylor_mul(a, a, scratch1);
+        taylor_mul(b, b, scratch2);
+        for k in 0..n {
+            scratch1[k] = scratch1[k] + scratch2[k];
+        }
+        taylor_sqrt(scratch1, c);
+        c[0] = a[0].hypot(b[0]);
+        return;
     }
-    // c = sqrt(a² + b²)
-    taylor_sqrt(scratch1, c);
+    let inv_scale = F::one() / scale;
+    // scratch1 = (a/scale)  -- temporarily store rescaled a
+    for k in 0..n {
+        scratch1[k] = a[k] * inv_scale;
+    }
+    // scratch2 = (b/scale)  -- temporarily store rescaled b
+    for k in 0..n {
+        scratch2[k] = b[k] * inv_scale;
+    }
+    // c = (a/scale)²  -- reuse c as temp
+    taylor_mul(scratch1, scratch1, c);
+    // scratch1 = (b/scale)²  -- reuse scratch1
+    taylor_mul(scratch2, scratch2, scratch1);
+    // c = (a/scale)² + (b/scale)²
+    for k in 0..n {
+        c[k] = c[k] + scratch1[k];
+    }
+    // scratch1 = sqrt((a/scale)² + (b/scale)²)
+    taylor_sqrt(c, scratch1);
+    // c = scale * sqrt(...)  — undo rescaling
+    for k in 0..n {
+        c[k] = scratch1[k] * scale;
+    }
     c[0] = a[0].hypot(b[0]);
 }
 

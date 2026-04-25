@@ -404,3 +404,46 @@ fn refactored_stats_identical() {
     );
     assert_eq!(stats.num_samples, generic.num_samples);
 }
+
+// ══════════════════════════════════════════════
+//  Welford accumulator edge cases (PR #49 regression tests)
+// ══════════════════════════════════════════════
+
+#[test]
+fn welford_nearly_identical_samples() {
+    let x = [1.0, 2.0];
+    let tape = record_fn(sum_of_squares, &x);
+    // Directions that produce nearly identical c2 values — exercises the
+    // .max(0.0) clamp on Welford variance that prevents NaN from sqrt(negative)
+    let eps = f64::EPSILON;
+    let v1 = vec![1.0, 0.0];
+    let v2 = vec![1.0 + eps, 0.0];
+    let v3 = vec![1.0 - eps, 0.0];
+    let dirs: Vec<&[f64]> = vec![&v1, &v2, &v3];
+    let result = echidna::stde::laplacian_with_stats(&tape, &x, &dirs);
+    assert!(
+        !result.standard_error.is_nan(),
+        "SE should not be NaN for nearly identical samples"
+    );
+    assert!(result.standard_error >= 0.0, "SE should be non-negative");
+}
+
+#[test]
+fn estimate_weighted_all_zero_weights() {
+    let x = [1.0, 2.0];
+    let tape = record_fn(sum_of_squares, &x);
+    let v1 = vec![1.0, 0.0];
+    let v2 = vec![0.0, 1.0];
+    let dirs: Vec<&[f64]> = vec![&v1, &v2];
+    let weights = vec![0.0, 0.0];
+    let result =
+        echidna::stde::estimate_weighted(&echidna::stde::Laplacian, &tape, &x, &dirs, &weights);
+    assert!(
+        !result.estimate.is_nan(),
+        "estimate should not be NaN with zero weights"
+    );
+    assert!(
+        !result.standard_error.is_nan(),
+        "SE should not be NaN with zero weights"
+    );
+}

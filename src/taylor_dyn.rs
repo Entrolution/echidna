@@ -259,11 +259,13 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
         } else {
             with_active_arena(|arena: &mut TaylorArena<F>| arena.coeffs(self.index)[k])
         };
-        let mut factorial = F::one();
+        // Interleave k! multiplication with coefficient to avoid standalone
+        // factorial overflow (f64 overflows at k=171, f32 at k=35)
+        let mut result = ck;
         for i in 2..=k {
-            factorial = factorial * F::from(i).unwrap();
+            result = result * F::from(i).unwrap();
         }
-        ck * factorial
+        result
     }
 
     // ── Operation helpers ──
@@ -685,7 +687,8 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Maximum of two values.
     #[inline]
     pub fn max(self, other: Self) -> Self {
-        if self.value >= other.value {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmax semantics)
+        if self.value >= other.value || other.value.is_nan() {
             self
         } else {
             other
@@ -695,7 +698,8 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Minimum of two values.
     #[inline]
     pub fn min(self, other: Self) -> Self {
-        if self.value <= other.value {
+        // NaN guard: return the non-NaN argument (IEEE 754 fmin semantics)
+        if self.value <= other.value || other.value.is_nan() {
             self
         } else {
             other

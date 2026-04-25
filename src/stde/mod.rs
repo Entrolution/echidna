@@ -1,5 +1,22 @@
 //! Stochastic Taylor Derivative Estimators (STDE).
 //!
+//! # Custom-ops caveat
+//!
+//! Every estimator in this module takes `&BytecodeTape<F>` (immutable),
+//! so none of them call `tape.forward(x)` before the Taylor pass.
+//! `forward_tangent` linearizes custom ops around the **recording-time**
+//! primals stored in `tape.values`, not the call-time `x`. For tapes
+//! containing custom ops evaluated at `x ≠ x_record`, estimator output
+//! for second- and higher-order coefficients (Laplacian, Hessian
+//! diagonal, Taylor-jet composition) is biased by an amount that does
+//! not vanish as `S → ∞`. First-order estimators like `divergence` get
+//! an `O(‖x − x_record‖)` linear bias through custom ops.
+//!
+//! If your tape contains custom ops and you need estimators at points
+//! other than the recording `x`, either (a) re-record with a fresh
+//! tape at the new `x`, or (b) refactor the custom op into primitive
+//! operations so `forward_tangent`'s Taylor propagation remains exact.
+//!
 //! Estimate differential operators (Laplacian, Hessian diagonal, directional
 //! derivatives) by pushing random direction vectors through Taylor-mode AD.
 //!

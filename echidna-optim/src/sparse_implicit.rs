@@ -19,12 +19,137 @@
 //! The [`SparseImplicitContext`] precomputes sparsity pattern, graph coloring, and
 //! COO index partitions so they can be reused across multiple evaluation points.
 
+use std::fmt;
+
 use echidna::sparse::{column_coloring, row_coloring, JacobianSparsityPattern};
 use echidna::BytecodeTape;
 
 use faer::linalg::solvers::Solve;
 use faer::sparse::SparseColMat;
 use faer::Col;
+
+/// Reason a sparse implicit-differentiation solve failed.
+///
+/// Marked `#[non_exhaustive]` so future variants can be added without
+/// breaking exhaustive `match`es. Numeric fields use `f64` to match the
+/// monomorphic `f64` API of this module.
+#[non_exhaustive]
+#[derive(Debug)]
+pub enum SparseImplicitError {
+    /// Constructing the sparse F_z matrix from triplets failed (e.g.
+    /// duplicate entries or pattern mismatch). Almost always indicates
+    /// a bug in the sparsity-pattern computation rather than user input.
+    /// The underlying `faer::sparse::CreationError` is available via
+    /// [`std::error::Error::source`].
+    StructuralSingular {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// faer's sparse LU factorization itself returned an error
+    /// (typically signals an exact zero pivot detected during
+    /// elimination — i.e. F_z is exactly singular). The underlying
+    /// `faer::sparse::linalg::LuError` is available via
+    /// [`std::error::Error::source`] and typically surfaces as
+    /// `SymbolicSingular { index }`, pinpointing the failing column.
+    FactorSingular {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// LU factorization succeeded but the solve produced a non-finite
+    /// solution to the mixed-sign probe — F_z is numerically singular
+    /// to working precision in the probed direction.
+    NumericSingular,
+    /// LU solve produced a finite solution, but
+    /// `||F_z·x − rhs|| / ||rhs|| = relative_residual` exceeds
+    /// `tolerance` (which is `sqrt(eps) · sqrt(dimension)`) — F_z is
+    /// finite but effectively rank-deficient or extremely
+    /// ill-conditioned.
+    ResidualExceeded {
+        relative_residual: f64,
+        tolerance: f64,
+        dimension: usize,
+    },
+    /// A runtime-supplied vector argument to a public `implicit_*_sparse`
+    /// fn had an unexpected length. `field` names the argument (e.g.
+    /// `"z_star"`, `"x"`, `"x_dot"`, `"z_bar"`), `expected` is the
+    /// length the API requires (typically `ctx.num_states()` or
+    /// `ctx.num_params()`), `actual` is the length supplied.
+    ///
+    /// Construction-time mismatches (`SparseImplicitContext::new`)
+    /// continue to panic — those are programmer-contract violations
+    /// at context build time, not recoverable runtime failures.
+    DimensionMismatch {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl fmt::Display for SparseImplicitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SparseImplicitError::StructuralSingular { .. } => {
+                write!(f, "sparse_implicit: failed to build sparse F_z matrix")
+            }
+            SparseImplicitError::FactorSingular { .. } => {
+                write!(
+                    f,
+                    "sparse_implicit: sparse LU factorization failed (F_z singular)"
+                )
+            }
+            SparseImplicitError::NumericSingular => {
+                write!(
+                    f,
+                    "sparse_implicit: probe solve produced non-finite solution (F_z numerically singular)"
+                )
+            }
+            SparseImplicitError::ResidualExceeded {
+                relative_residual,
+                tolerance,
+                dimension,
+            } => {
+                write!(
+                    f,
+                    "sparse_implicit: probe solve residual {relative_residual:.3e} exceeds tolerance {tolerance:.3e} (F_z ill-conditioned, dim = {dimension})"
+                )
+            }
+            SparseImplicitError::DimensionMismatch {
+                field,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "sparse_implicit: dimension mismatch for `{field}` (expected {expected}, got {actual})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SparseImplicitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // `&**source` double-derefs `&Box<dyn Trait>` to `&(dyn Trait)`,
+        // coercing through the `Send + Sync` bounds to the plain
+        // `dyn Error + 'static` that `source()` expects. Equivalent to
+        // relying on trait-upcasting (stable since Rust 1.86) but robust
+        // across toolchain quirks.
+        //
+        // Non-sourced variants are spelled out explicitly (rather than a
+        // wildcard `_`) so that a future `#[non_exhaustive]` variant
+        // carrying a `source` field produces a compiler error here — the
+        // wildcard would silently swallow its chain and defeat the
+        // whole point of `source()`.
+        match self {
+            Self::StructuralSingular { source } | Self::FactorSingular { source } => {
+                Some(&**source)
+            }
+            Self::NumericSingular
+            | Self::ResidualExceeded { .. }
+            | Self::DimensionMismatch { .. } => None,
+        }
+    }
+}
+
+echidna::assert_send_sync!(SparseImplicitError);
 
 /// Precomputed context for sparse implicit differentiation.
 ///
@@ -168,26 +293,80 @@ fn extract_fz_triplets(
 
 /// Build sparse F_z and compute LU factorization.
 ///
-/// Returns `None` if the matrix is singular or construction fails.
-/// Detects numeric singularity (not just symbolic) by solving a test vector
-/// and checking for non-finite results.
+/// Returns `Err` if matrix construction or LU factorization fails, if
+/// the probe solve produces non-finite output, or if the relative
+/// residual exceeds the tolerance. Numeric singularity is detected by
+/// solving a test system with a mixed-sign RHS — this avoids the null-
+/// space direction an all-ones vector would hit for matrices like
+/// `diag(1,-1)` rotated into the state basis.
 fn build_fz_and_factor(
     ctx: &SparseImplicitContext,
     jac_values: &[f64],
-) -> Option<faer::sparse::linalg::solvers::Lu<usize, f64>> {
+) -> Result<faer::sparse::linalg::solvers::Lu<usize, f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let triplets = extract_fz_triplets(ctx, jac_values);
-    let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets).ok()?;
-    let lu = mat.sp_lu().ok()?;
+    let mat = SparseColMat::<usize, f64>::try_new_from_triplets(m, m, &triplets).map_err(|e| {
+        SparseImplicitError::StructuralSingular {
+            source: Box::new(e),
+        }
+    })?;
+    let lu = mat
+        .sp_lu()
+        .map_err(|e| SparseImplicitError::FactorSingular {
+            source: Box::new(e),
+        })?;
 
-    // Detect numeric singularity: solve with a test RHS and check for NaN/Inf.
-    let test_rhs = Col::<f64>::from_fn(m, |_| 1.0);
+    // Mixed-sign probe RHS — avoids the null-space direction an all-ones
+    // vector would hit for matrices like `diag(1,-1)` rotated into the
+    // state basis.
+    let test_rhs_vec: Vec<f64> = (0..m)
+        .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+        .collect();
+    let test_rhs = Col::<f64>::from_fn(m, |i| test_rhs_vec[i]);
     let test_sol = lu.solve(&test_rhs);
     if (0..m).any(|i| !test_sol[i].is_finite()) {
-        return None;
+        return Err(SparseImplicitError::NumericSingular);
     }
 
-    Some(lu)
+    // Residual check: compute `F_z · test_sol` via the COO F_z entries and
+    // compare against `test_rhs`. This is a defensive check that catches
+    // LU-solver failures which produce a finite-but-wrong solution
+    // (e.g., internal numerical issues that bypass faer's own singularity
+    // detection). For faer's well-tested sparse LU the residual is
+    // generally near machine-eps even on ill-conditioned matrices — the
+    // primary signal against singularity is the `sp_lu()` error above.
+    let test_sol_slice: Vec<f64> = (0..m).map(|i| test_sol[i]).collect();
+    let mut applied = vec![0.0_f64; m];
+    for &k in &ctx.fz_indices {
+        let row = ctx.pattern.rows[k] as usize;
+        let col = ctx.pattern.cols[k] as usize;
+        applied[row] += jac_values[k] * test_sol_slice[col];
+    }
+    let mut resid_sq = 0.0_f64;
+    let mut rhs_sq = 0.0_f64;
+    for i in 0..m {
+        let r = applied[i] - test_rhs_vec[i];
+        resid_sq += r * r;
+        rhs_sq += test_rhs_vec[i] * test_rhs_vec[i];
+    }
+    // Tolerance: sqrt of machine epsilon scaled by dimension. Permissive
+    // enough that a correctly factored faer LU passes, strict enough that
+    // a solve producing residuals many orders of magnitude above machine
+    // precision is caught.
+    let tol = (f64::EPSILON.sqrt()) * (m as f64).sqrt();
+    if !resid_sq.is_finite() {
+        return Err(SparseImplicitError::NumericSingular);
+    }
+    if resid_sq > tol * tol * rhs_sq {
+        let relative_residual = (resid_sq / rhs_sq).sqrt();
+        return Err(SparseImplicitError::ResidualExceeded {
+            relative_residual,
+            tolerance: tol,
+            dimension: m,
+        });
+    }
+
+    Ok(lu)
 }
 
 /// Compute F_x · v by iterating COO entries.
@@ -271,41 +450,45 @@ fn col_to_vec(col: &Col<f64>, len: usize) -> Vec<f64> {
 /// where F_z and F_x are computed via graph-coloring-compressed forward/reverse passes,
 /// and F_z is factorized using faer's sparse LU.
 ///
-/// Returns `None` if F_z is singular.
+/// Returns `Err(SparseImplicitError)` if F_z is singular or
+/// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// # Panics
-///
-/// Panics if input dimensions don't match the context.
+/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
+/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
+/// tape-shape contract is still checked at `SparseImplicitContext::new`
+/// construction time, where mismatches panic — those are programmer
+/// errors, not recoverable runtime failures.
 pub fn implicit_tangent_sparse(
     tape: &mut BytecodeTape<f64>,
     z_star: &[f64],
     x: &[f64],
     x_dot: &[f64],
     ctx: &SparseImplicitContext,
-) -> Option<Vec<f64>> {
+) -> Result<Vec<f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    assert_eq!(
-        z_star.len(),
-        m,
-        "z_star length ({}) must equal num_states ({})",
-        z_star.len(),
-        m
-    );
-    assert_eq!(
-        x.len(),
-        n,
-        "x length ({}) must equal num_params ({})",
-        x.len(),
-        n
-    );
-    assert_eq!(
-        x_dot.len(),
-        n,
-        "x_dot length ({}) must equal num_params ({})",
-        x_dot.len(),
-        n
-    );
+    if z_star.len() != m {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "z_star",
+            expected: m,
+            actual: z_star.len(),
+        });
+    }
+    if x.len() != n {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "x",
+            expected: n,
+            actual: x.len(),
+        });
+    }
+    if x_dot.len() != n {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "x_dot",
+            expected: n,
+            actual: x_dot.len(),
+        });
+    }
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -319,7 +502,7 @@ pub fn implicit_tangent_sparse(
     let rhs = Col::<f64>::from_fn(m, |i| -fx_xdot[i]);
     let sol = lu.solve(&rhs);
 
-    Some(col_to_vec(&sol, m))
+    Ok(col_to_vec(&sol, m))
 }
 
 /// Compute the implicit adjoint `(dz*/dx)^T · z̄` using sparse Jacobian evaluation and sparse LU.
@@ -330,41 +513,45 @@ pub fn implicit_tangent_sparse(
 ///
 /// then computes `x̄ = -F_x^T · λ`.
 ///
-/// Returns `None` if F_z is singular.
+/// Returns `Err(SparseImplicitError)` if F_z is singular or
+/// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// # Panics
-///
-/// Panics if input dimensions don't match the context.
+/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
+/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
+/// tape-shape contract is still checked at `SparseImplicitContext::new`
+/// construction time, where mismatches panic — those are programmer
+/// errors, not recoverable runtime failures.
 pub fn implicit_adjoint_sparse(
     tape: &mut BytecodeTape<f64>,
     z_star: &[f64],
     x: &[f64],
     z_bar: &[f64],
     ctx: &SparseImplicitContext,
-) -> Option<Vec<f64>> {
+) -> Result<Vec<f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    assert_eq!(
-        z_star.len(),
-        m,
-        "z_star length ({}) must equal num_states ({})",
-        z_star.len(),
-        m
-    );
-    assert_eq!(
-        x.len(),
-        n,
-        "x length ({}) must equal num_params ({})",
-        x.len(),
-        n
-    );
-    assert_eq!(
-        z_bar.len(),
-        m,
-        "z_bar length ({}) must equal num_states ({})",
-        z_bar.len(),
-        m
-    );
+    if z_star.len() != m {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "z_star",
+            expected: m,
+            actual: z_star.len(),
+        });
+    }
+    if x.len() != n {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "x",
+            expected: n,
+            actual: x.len(),
+        });
+    }
+    if z_bar.len() != m {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "z_bar",
+            expected: m,
+            actual: z_bar.len(),
+        });
+    }
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -380,7 +567,7 @@ pub fn implicit_adjoint_sparse(
     let fx_t_lambda = fx_transpose_matvec(ctx, &jac_values, &lambda_vec);
     let x_bar: Vec<f64> = fx_t_lambda.iter().map(|&v| -v).collect();
 
-    Some(x_bar)
+    Ok(x_bar)
 }
 
 /// Compute the full implicit Jacobian `dz*/dx` (m × n) using sparse LU.
@@ -393,33 +580,37 @@ pub fn implicit_adjoint_sparse(
 /// the pre-grouped `fx_by_col` index.
 ///
 /// Returns a dense m×n matrix since `dz*/dx` has no sparsity guarantee.
-/// Returns `None` if F_z is singular.
+/// Returns `Err(SparseImplicitError)` if F_z is singular or
+/// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// # Panics
-///
-/// Panics if input dimensions don't match the context.
+/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
+/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
+/// tape-shape contract is still checked at `SparseImplicitContext::new`
+/// construction time, where mismatches panic — those are programmer
+/// errors, not recoverable runtime failures.
 pub fn implicit_jacobian_sparse(
     tape: &mut BytecodeTape<f64>,
     z_star: &[f64],
     x: &[f64],
     ctx: &SparseImplicitContext,
-) -> Option<Vec<Vec<f64>>> {
+) -> Result<Vec<Vec<f64>>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    assert_eq!(
-        z_star.len(),
-        m,
-        "z_star length ({}) must equal num_states ({})",
-        z_star.len(),
-        m
-    );
-    assert_eq!(
-        x.len(),
-        n,
-        "x length ({}) must equal num_params ({})",
-        x.len(),
-        n
-    );
+    if z_star.len() != m {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "z_star",
+            expected: m,
+            actual: z_star.len(),
+        });
+    }
+    if x.len() != n {
+        return Err(SparseImplicitError::DimensionMismatch {
+            field: "x",
+            expected: n,
+            actual: x.len(),
+        });
+    }
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -444,5 +635,5 @@ pub fn implicit_jacobian_sparse(
         }
     }
 
-    Some(result)
+    Ok(result)
 }

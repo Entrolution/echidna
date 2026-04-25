@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use echidna::record;
+use std::hint::black_box;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -12,7 +13,7 @@ fn bench_taylor_grad(c: &mut Criterion) {
         let v = make_direction(n);
 
         // Rosenbrock
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("rosenbrock_taylor2", n), &x, |b, x| {
             b.iter(|| black_box(tape.taylor_grad::<2>(black_box(x), black_box(&v))))
@@ -23,7 +24,7 @@ fn bench_taylor_grad(c: &mut Criterion) {
         });
 
         // Rastrigin
-        let (tape_r, _) = record(|v| rastrigin(v), &x);
+        let (tape_r, _) = record(rastrigin, &x);
 
         group.bench_with_input(BenchmarkId::new("rastrigin_taylor2", n), &x, |b, x| {
             b.iter(|| black_box(tape_r.taylor_grad::<2>(black_box(x), black_box(&v))))
@@ -41,7 +42,7 @@ fn bench_taylor_grad_buf(c: &mut Criterion) {
     for n in [2, 10, 100] {
         let x = make_input(n);
         let v = make_direction(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("taylor_grad", n), &x, |b, x| {
             b.iter(|| black_box(tape.taylor_grad::<2>(black_box(x), black_box(&v))))
@@ -68,7 +69,7 @@ fn bench_taylor_grad_higher(c: &mut Criterion) {
     for n in [2, 10, 100] {
         let x = make_input(n);
         let v = make_direction(n);
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         group.bench_with_input(BenchmarkId::new("order_2", n), &x, |b, x| {
             b.iter(|| black_box(tape.taylor_grad::<2>(black_box(x), black_box(&v))))

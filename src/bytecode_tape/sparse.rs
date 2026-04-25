@@ -69,7 +69,7 @@ impl<F: Float> super::BytecodeTape<F> {
         &self,
         x: &[F],
     ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
-        debug_assert!(
+        assert!(
             self.custom_ops.is_empty(),
             "sparse_hessian_vec: custom ops produce approximate (first-order) second derivatives; \
              use eval_forward with Dual<Dual<F>> for exact Hessians through custom ops"
@@ -80,9 +80,24 @@ impl<F: Float> super::BytecodeTape<F> {
         let pattern = self.detect_sparsity();
         let (colors, num_colors) = crate::sparse::greedy_coloring(&pattern);
 
-        let mut hessian_values = vec![F::zero(); pattern.nnz()];
-        let mut gradient = vec![F::zero(); n];
+        let hessian_values = vec![F::zero(); pattern.nnz()];
+        let gradient = vec![F::zero(); n];
         let mut value = F::zero();
+
+        // Constant-output tape (n == 0): the batch loop never runs, so `value`
+        // would stay at zero. Recover the true constant via a primal pass —
+        // mirrors the fix in `hessian` and `hessian_vec`.
+        if n == 0 {
+            let mut values_buf = Vec::new();
+            self.forward_into(&[], &mut values_buf);
+            if let Some(&v) = values_buf.get(self.output_index as usize) {
+                value = v;
+            }
+            return (value, gradient, pattern, hessian_values);
+        }
+
+        let mut hessian_values = hessian_values;
+        let mut gradient = gradient;
 
         let mut dual_input_buf: Vec<DualVec<F, N>> = Vec::with_capacity(n);
         let mut dual_vals_buf: Vec<DualVec<F, N>> = Vec::new();
@@ -306,7 +321,7 @@ impl<F: Float> super::BytecodeTape<F> {
         &mut self,
         x: &[F],
     ) -> (Vec<F>, crate::sparse::JacobianSparsityPattern, Vec<F>) {
-        debug_assert!(
+        assert!(
             self.custom_ops.is_empty(),
             "sparse_jacobian_vec: custom ops produce approximate (first-order) derivatives; \
              use eval_forward with Dual<F> for exact Jacobians through custom ops"
@@ -368,9 +383,24 @@ impl<F: Float> super::BytecodeTape<F> {
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
-        let mut hessian_values = vec![F::zero(); pattern.nnz()];
-        let mut gradient = vec![F::zero(); n];
+        let hessian_values = vec![F::zero(); pattern.nnz()];
+        let gradient = vec![F::zero(); n];
         let mut value = F::zero();
+
+        // Constant-output tape (n == 0): the color loop never runs, so `value`
+        // would stay at zero. Recover the true constant via a primal pass —
+        // mirrors the fix in `hessian` and `hessian_vec`.
+        if n == 0 {
+            let mut values_buf = Vec::new();
+            self.forward_into(&[], &mut values_buf);
+            if let Some(&v) = values_buf.get(self.output_index as usize) {
+                value = v;
+            }
+            return (value, gradient, hessian_values);
+        }
+
+        let mut hessian_values = hessian_values;
+        let mut gradient = gradient;
 
         let mut dual_input_buf: Vec<Dual<F>> = Vec::with_capacity(n);
         let mut dual_vals_buf = Vec::new();

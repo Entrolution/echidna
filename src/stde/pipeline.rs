@@ -80,6 +80,7 @@ pub fn estimate_weighted<F: Float>(
         let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
         let s = estimator.sample(c0, c1, c2);
+        assert!(s.is_finite(), "weighted estimator sample must be finite");
         let w = weights[k];
         if w == F::zero() {
             continue;
@@ -94,9 +95,13 @@ pub fn estimate_weighted<F: Float>(
     }
 
     let n = directions.len();
-    let denom = w_sum - w_sum2 / w_sum;
+    let denom = if w_sum > F::zero() {
+        w_sum - w_sum2 / w_sum
+    } else {
+        F::zero()
+    };
     let (sample_variance, standard_error) = if n > 1 && denom > F::zero() {
-        let var = m2 / denom;
+        let var = (m2 / denom).max(F::zero());
         // Effective sample size for weighted estimates: n_eff = w_sum^2 / w_sum2
         let n_eff = w_sum * w_sum / w_sum2;
         (var, (var / n_eff).sqrt())

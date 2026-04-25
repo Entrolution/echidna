@@ -13,7 +13,7 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn gradient_batch_matches_individual() {
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<[f64; 2]> = vec![[1.0, 2.0], [0.5, 0.5], [2.0, 4.0], [-1.0, 1.0]];
     let refs: Vec<&[f64]> = points.iter().map(|p| p.as_slice()).collect();
@@ -42,7 +42,7 @@ mod parallel_batch {
     #[test]
     fn gradient_batch_par_matches_serial() {
         let x0 = [1.0_f64, 2.0];
-        let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+        let (mut tape, _) = record(rosenbrock, &x0);
 
         let points: Vec<[f64; 2]> = vec![
             [1.0, 2.0],
@@ -75,7 +75,7 @@ mod parallel_batch {
     #[test]
     fn hessian_batch_par_matches_serial() {
         let x0 = [1.0_f64, 2.0];
-        let (tape, _) = record(|v| rosenbrock(v), &x0);
+        let (tape, _) = record(rosenbrock, &x0);
 
         let points: Vec<[f64; 2]> = vec![[1.0, 2.0], [0.5, 0.5], [2.0, 4.0]];
         let refs: Vec<&[f64]> = points.iter().map(|p| p.as_slice()).collect();

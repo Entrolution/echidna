@@ -89,6 +89,34 @@ struct TapeMeta {
 fn sinh_f(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
 fn cosh_f(x: f32) -> f32 { return (exp(x) + exp(-x)) * 0.5; }
 
+// Precision-preserving EXPM1 / LN1P primals for small |x|, matching
+// forward.wgsl helpers. `exp(x) - 1` and `log(1 + x)` cancel
+// catastrophically as x → 0; the Taylor-series shortcut avoids that.
+fn expm1_f32(x: f32) -> f32 {
+    if abs(x) < 1e-4 { return x + 0.5 * x * x; }
+    return exp(x) - 1.0;
+}
+fn ln1p_f32(x: f32) -> f32 {
+    if abs(x) < 1e-4 { return x - 0.5 * x * x; }
+    return log(1.0 + x);
+}
+
+// Overflow-safe hypot with IEEE Inf handling, mirroring forward.wgsl.
+// The naive `sqrt(a² + b²)` in a tangent primal arm overflowed for
+// large |a| or |b|; using this helper keeps the primal matched
+// bit-for-bit to the forward kernel.
+fn hypot_f32(a: f32, b: f32) -> f32 {
+    let ax = abs(a);
+    let ay = abs(b);
+    let inf = bitcast<f32>(0x7f800000u);
+    if ax == inf || ay == inf { return inf; }
+    let mx = max(ax, ay);
+    let mn = min(ax, ay);
+    if mx == 0.0 { return 0.0; }
+    let r = mn / mx;
+    return mx * sqrt(1.0 + r * r);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -157,7 +185,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let bt = tangents[t_base + b_idx];
                 r = a / b;
                 let inv = 1.0 / b;
-                rt = inv * at - a * inv * inv * bt;
+                // `rt = at/b - a*bt/b² = at*inv - r*bt*inv`; avoids
+                // forming `inv*inv` which overflows at small |b|.
+                rt = inv * at - r * inv * bt;
             }
             case 6u /* REM */: {
                 let b = primals[p_base + b_idx];
@@ -178,24 +208,43 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
                 r = atan2(a, b);
-                let d = a * a + b * b;
-                rt = (b * at - a * bt) / d;
+                // See `reverse.wgsl` ATAN2 — normalize by max(|a|,|b|) so
+                // au² + bu² is bounded and a² + b² doesn't overflow.
+                let mx = max(abs(a), abs(b));
+                if mx == 0.0 {
+                    rt = 0.0;
+                } else {
+                    let au = a / mx;
+                    let bu = b / mx;
+                    let denom = mx * (au * au + bu * bu);
+                    rt = (bu * at - au * bt) / denom;
+                }
             }
             case 9u /* HYPOT */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
-                r = sqrt(a * a + b * b);
+                // Call the scalar helper so the primal matches
+                // `forward.wgsl` bit-for-bit (rescale + IEEE Inf guard)
+                // and `a*a + b*b` can't overflow for large operands.
+                r = hypot_f32(a, b);
                 if r == 0.0 { rt = 0.0; } else { rt = (a * at + b * bt) / r; }
             }
             case 10u /* MAX */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
-                if a >= b { r = a; rt = at; } else { r = b; rt = bt; }
+                // Pick the non-NaN operand when one is NaN (matches IEEE `max`).
+                // `b != b` is NaN-detection but can be folded away by
+                // optimizers; use an explicit bit-pattern test instead.
+                let b_bits = bitcast<u32>(b);
+                let b_is_nan = ((b_bits >> 23u) & 0xffu) == 0xffu && (b_bits & 0x7fffffu) != 0u;
+                if a >= b || b_is_nan { r = a; rt = at; } else { r = b; rt = bt; }
             }
             case 11u /* MIN */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
-                if a <= b { r = a; rt = at; } else { r = b; rt = bt; }
+                let b_bits = bitcast<u32>(b);
+                let b_is_nan = ((b_bits >> 23u) & 0xffu) == 0xffu && (b_bits & 0x7fffffu) != 0u;
+                if a <= b || b_is_nan { r = a; rt = at; } else { r = b; rt = bt; }
             }
 
             // Unary
@@ -215,24 +264,61 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 17u /* EXP */: { r = exp(a); rt = r * at; }
             case 18u /* EXP2 */: { r = exp2(a); rt = r * log(2.0) * at; }
-            case 19u /* EXPM1 */: { r = exp(a) - 1.0; rt = (r + 1.0) * at; }
+            case 19u /* EXPM1 */: { r = expm1_f32(a); rt = (r + 1.0) * at; }
             case 20u /* LN */: { r = log(a); rt = at / a; }
             case 21u /* LOG2 */: { r = log2(a); rt = at / (a * log(2.0)); }
             case 22u /* LOG10 */: { r = log(a) / log(10.0); rt = at / (a * log(10.0)); }
-            case 23u /* LN1P */: { r = log(1.0 + a); rt = at / (1.0 + a); }
+            case 23u /* LN1P */: { r = ln1p_f32(a); rt = at / (1.0 + a); }
             case 24u /* SIN */: { r = sin(a); rt = cos(a) * at; }
             case 25u /* COS */: { r = cos(a); rt = -sin(a) * at; }
             case 26u /* TAN */: { r = tan(a); let c = cos(a); rt = at / (c * c); }
-            case 27u /* ASIN */: { r = asin(a); rt = at / sqrt(1.0 - a * a); }
-            case 28u /* ACOS */: { r = acos(a); rt = -at / sqrt(1.0 - a * a); }
-            case 29u /* ATAN */: { r = atan(a); rt = at / (1.0 + a * a); }
+            case 27u /* ASIN */: { r = asin(a); rt = at / sqrt((1.0 - a) * (1.0 + a)); }
+            case 28u /* ACOS */: { r = acos(a); rt = -at / sqrt((1.0 - a) * (1.0 + a)); }
+            case 29u /* ATAN */: {
+                let aa = abs(a);
+                r = atan(a);
+                if aa > 1e8 { let inv = 1.0 / a; rt = at * inv * inv / (1.0 + inv * inv); }
+                else        { rt = at / (1.0 + a * a); }
+            }
             case 30u /* SINH */: { r = sinh_f(a); rt = cosh_f(a) * at; }
             case 31u /* COSH */: { r = cosh_f(a); rt = sinh_f(a) * at; }
             case 32u /* TANH */: { r = tanh(a); let c = cosh_f(a); rt = at / (c * c); }
-            case 33u /* ASINH */: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt = at / sqrt(a * a + 1.0); }
-            case 34u /* ACOSH */: { r = log(a + sqrt(a * a - 1.0)); rt = at / sqrt(a * a - 1.0); }
-            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / (1.0 - a * a); }
-            case 36u /* ABS */: { r = abs(a); let s = select(-1.0, 1.0, a >= 0.0); rt = select(s * at, 0.0, a != a); }
+            case 33u /* ASINH */: {
+                let ax = abs(a);
+                r = select(-log(ax + sqrt(ax * ax + 1.0)), log(ax + sqrt(ax * ax + 1.0)), a >= 0.0);
+                // Overflow-safe derivative for |a| > 1e8.
+                if abs(a) > 1e8 {
+                    let inv = 1.0 / a;
+                    rt = at * abs(inv) / sqrt(1.0 + inv * inv);
+                } else {
+                    rt = at / sqrt(a * a + 1.0);
+                }
+            }
+            case 34u /* ACOSH */: {
+                // Factored form under sqrt for both primal and derivative
+                // — retains the ε² term near a=1; matches forward.wgsl
+                // acosh_f32 helper and kernels::acosh_deriv.
+                r = log(a + sqrt((a - 1.0) * (a + 1.0)));
+                if abs(a) > 1e8 {
+                    let inv = 1.0 / a;
+                    rt = at * abs(inv) / sqrt(1.0 - inv * inv);
+                } else {
+                    rt = at / sqrt((a - 1.0) * (a + 1.0));
+                }
+            }
+            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / ((1.0 - a) * (1.0 + a)); }
+            case 36u /* ABS */: {
+                r = abs(a);
+                // Match Rust's `signum` via sign-bit inspection so that
+                // -0.0 produces -1 (not +1 as `a >= 0.0` would yield).
+                if a != a {
+                    rt = 0.0;
+                } else {
+                    let bits = bitcast<u32>(a);
+                    let s = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
+                    rt = s * at;
+                }
+            }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: {
                 // Zero derivative ops
                 switch op {
@@ -245,7 +331,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
                 rt = 0.0;
             }
-            case 42u /* FRACT */: { r = fract(a); rt = at; }
+            // WGSL's built-in `fract(x) = x - floor(x)` differs from Rust's
+            // `f32::fract() = x - trunc(x)` for negative x. Use `a - trunc(a)`
+            // to match the CPU/stdlib truncation convention.
+            case 42u /* FRACT */: { r = a - trunc(a); rt = at; }
             default: {}
         }
 

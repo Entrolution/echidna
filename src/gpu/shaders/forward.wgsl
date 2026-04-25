@@ -115,8 +115,10 @@ fn asinh_f32(x: f32) -> f32 {
 }
 
 fn acosh_f32(x: f32) -> f32 {
-    // acosh(x) = ln(x + sqrt(x^2 - 1))
-    return log(x + sqrt(x * x - 1.0));
+    // acosh(x) = ln(x + sqrt(x² - 1)). Use factored (x-1)(x+1) under the
+    // sqrt to retain precision near x=1 (`x*x - 1` rounds away the ε²
+    // term in f32 for x = 1+ε). Matches kernels::acosh_deriv convention.
+    return log(x + sqrt((x - 1.0) * (x + 1.0)));
 }
 
 fn atanh_f32(x: f32) -> f32 {
@@ -125,9 +127,15 @@ fn atanh_f32(x: f32) -> f32 {
 }
 
 fn hypot_f32(a: f32, b: f32) -> f32 {
-    // Factor out max magnitude to avoid overflow for large inputs
+    // Factor out max magnitude to avoid overflow for large inputs.
     let ax = abs(a);
     let ay = abs(b);
+    let inf = bitcast<f32>(0x7f800000u);
+    // IEEE: hypot(±Inf, x) = +Inf for any x (including NaN). The
+    // rescaled formula would otherwise compute `Inf/Inf = NaN` when
+    // both operands are Inf, diverging from CPU f64::hypot and the
+    // CUDA `hypot` builtin.
+    if ax == inf || ay == inf { return inf; }
     let mx = max(ax, ay);
     let mn = min(ax, ay);
     if mx == 0.0 { return 0.0; }
@@ -150,10 +158,10 @@ fn log10_f32(x: f32) -> f32 {
 
 fn signum_f32(x: f32) -> f32 {
     // Match Rust's f32::signum: returns ±1 for all finite values (including ±0),
-    // NaN for NaN. WGSL can't distinguish ±0, so we return 1.0 for x >= 0.
+    // NaN for NaN. Use bitcast to check sign bit for -0.0 handling.
     if x != x { return x; }  // NaN passthrough
-    if x >= 0.0 { return 1.0; }
-    return -1.0;
+    if (bitcast<u32>(x) & 0x80000000u) != 0u { return -1.0; }
+    return 1.0;
 }
 
 fn powi_f32(base: f32, exp_bits: u32) -> f32 {
@@ -251,7 +259,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 39u /* CEIL */: { r = ceil(a); }
             case 40u /* ROUND */: { r = round(a); }
             case 41u /* TRUNC */: { r = trunc(a); }
-            case 42u /* FRACT */: { r = fract(a); }
+            // WGSL `fract` is floor-based; CPU `f32::fract()` is truncation-based.
+            case 42u /* FRACT */: { r = a - trunc(a); }
             default: { r = 0.0; }
         }
 

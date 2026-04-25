@@ -144,8 +144,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 5u /* DIV */: {
                 let b = values[v_base + b_idx];
                 let inv = 1.0 / b;
+                // `db = -a/b² = -r/b = -r * inv` — factoring through the
+                // primal `r = a/b` avoids forming `inv*inv`, which
+                // overflows when |b| is small.
                 da = inv;
-                db = -a * inv * inv;
+                db = -r * inv;
             }
             case 6u /* REM */: {
                 let b = values[v_base + b_idx];
@@ -155,13 +158,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 7u /* POWF */: {
                 let b = values[v_base + b_idx];
                 da = b * pow(a, b - 1.0);
-                db = select(r * log(a), 0.0, r == 0.0);
+                // For a <= 0, `log(a)` is NaN. A finite `r` at a < 0 means b
+                // was integer; the classical derivative w.r.t. b at integer b
+                // is undefined, and the convention here is 0 — matches the
+                // CPU `OpCode::Powf` safety net.
+                db = select(r * log(a), 0.0, r == 0.0 || a <= 0.0);
             }
             case 8u /* ATAN2 */: {
                 let b = values[v_base + b_idx];
-                let denom = a * a + b * b;
-                da = b / denom;
-                db = -a / denom;
+                // WGSL lacks `hypot`, so we can't form `h = sqrt(a² + b²)`
+                // directly — `a*a` overflows in f32 for |a| > ~1.8e19 even
+                // when the partial `b/(a²+b²)` is representable. Normalize by
+                // max(|a|, |b|) so the sum-of-squares is bounded by 2:
+                //   a² + b² = mx² · (au² + bu²)   with  au = a/mx, bu = b/mx
+                //   b/(a²+b²) = bu / (mx · (au² + bu²))
+                let mx = max(abs(a), abs(b));
+                if mx == 0.0 {
+                    da = 0.0; db = 0.0;
+                } else {
+                    let au = a / mx;
+                    let bu = b / mx;
+                    let denom = mx * (au * au + bu * bu);
+                    da = bu / denom;
+                    db = -au / denom;
+                }
             }
             case 9u /* HYPOT */: {
                 let b = values[v_base + b_idx];
@@ -171,11 +191,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 10u /* MAX */: {
                 let b = values[v_base + b_idx];
-                if a >= b { da = 1.0; db = 0.0; } else { da = 0.0; db = 1.0; }
+                // Route adjoint to the operand whose value equals the forward
+                // output `r = max(a,b)`. Direct bit-equality handles NaN
+                // correctly and survives optimizers that fold `b != b` away.
+                if bitcast<u32>(r) == bitcast<u32>(a) {
+                    da = 1.0; db = 0.0;
+                } else {
+                    da = 0.0; db = 1.0;
+                }
             }
             case 11u /* MIN */: {
                 let b = values[v_base + b_idx];
-                if a <= b { da = 1.0; db = 0.0; } else { da = 0.0; db = 1.0; }
+                if bitcast<u32>(r) == bitcast<u32>(a) {
+                    da = 1.0; db = 0.0;
+                } else {
+                    da = 0.0; db = 1.0;
+                }
             }
 
             // Unary
@@ -203,20 +234,54 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 24u /* SIN */: { da = cos(a); }
             case 25u /* COS */: { da = -sin(a); }
             case 26u /* TAN */: { let c = cos(a); da = 1.0 / (c * c); }
-            case 27u /* ASIN */: { da = 1.0 / sqrt(1.0 - a * a); }
-            case 28u /* ACOS */: { da = -1.0 / sqrt(1.0 - a * a); }
-            case 29u /* ATAN */: { da = 1.0 / (1.0 + a * a); }
+            case 27u /* ASIN */: { da = 1.0 / sqrt((1.0 - a) * (1.0 + a)); }
+            case 28u /* ACOS */: { da = -1.0 / sqrt((1.0 - a) * (1.0 + a)); }
+            case 29u /* ATAN */: {
+                // For |a|>1e8, 1+a² overflows in f32; use inv-based form
+                // `inv²/(1+inv²)` that stays in-range.
+                let aa = abs(a);
+                if aa > 1e8 { let inv = 1.0 / a; da = inv * inv / (1.0 + inv * inv); }
+                else        { da = 1.0 / (1.0 + a * a); }
+            }
 
             // Hyperbolic
             case 30u /* SINH */: { da = cosh(a); }
             case 31u /* COSH */: { da = sinh(a); }
             case 32u /* TANH */: { let c = cosh(a); da = 1.0 / (c * c); }
-            case 33u /* ASINH */: { da = 1.0 / sqrt(a * a + 1.0); }
-            case 34u /* ACOSH */: { da = 1.0 / sqrt(a * a - 1.0); }
-            case 35u /* ATANH */: { da = 1.0 / (1.0 - a * a); }
+            // For |a| > 1e8, a*a + 1 overflows; use |1/a|/sqrt(1 + 1/a²) which
+            // stays representable. Mirrors the CPU `OpCode::Asinh`/`OpCode::Acosh`
+            // overflow guard and the existing `OpCode::Atan` pattern.
+            case 33u /* ASINH */: {
+                if abs(a) > 1e8 {
+                    let inv = 1.0 / a;
+                    da = abs(inv) / sqrt(1.0 + inv * inv);
+                } else {
+                    da = 1.0 / sqrt(a * a + 1.0);
+                }
+            }
+            case 34u /* ACOSH */: {
+                if abs(a) > 1e8 {
+                    let inv = 1.0 / a;
+                    da = abs(inv) / sqrt(1.0 - inv * inv);
+                } else {
+                    // Factored form (a-1)(a+1) avoids catastrophic
+                    // cancellation near a=1; matches kernels::acosh_deriv.
+                    da = 1.0 / sqrt((a - 1.0) * (a + 1.0));
+                }
+            }
+            case 35u /* ATANH */: { da = 1.0 / ((1.0 - a) * (1.0 + a)); }
 
             // Misc
-            case 36u /* ABS */: { da = select(select(-1.0, 1.0, a >= 0.0), 0.0, a != a); }
+            case 36u /* ABS */: {
+                // `a >= 0.0` maps -0.0 to +1; to mirror Rust's `f32::signum`
+                // (which uses the sign bit), inspect bit 31 of the bitcast.
+                if a != a {
+                    da = a; // NaN
+                } else {
+                    let bits = bitcast<u32>(a);
+                    da = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
+                }
+            }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: { da = 0.0; }
             case 42u /* FRACT */: { da = 1.0; }
 

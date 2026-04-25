@@ -6,6 +6,7 @@
 
 use std::fmt::{self, Display};
 
+use crate::kernels;
 use crate::Float;
 
 /// Forward-mode dual number: a value paired with its tangent (derivative).
@@ -66,7 +67,16 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn recip(self) -> Self {
         let inv = F::one() / self.re;
-        self.chain(inv, -inv * inv)
+        // At self.re = 0, inv = ±Inf. Skip the chain for eps = 0 so the
+        // tangent is 0 (the "constant zero" convention) rather than the
+        // IEEE `0 * Inf = NaN` we'd otherwise propagate. Non-zero eps at
+        // the singularity keeps the Inf (the true derivative is unbounded).
+        let eps = if self.eps == F::zero() {
+            F::zero()
+        } else {
+            self.eps * (-inv * inv)
+        };
+        Dual { re: inv, eps }
     }
 
     /// Square root.
@@ -96,8 +106,9 @@ impl<F: Float> Dual<F> {
         }
         let val = self.re.powi(n);
         let deriv = if n == i32::MIN {
-            // n - 1 would overflow i32; fall back to powf
-            F::from(n).unwrap() * self.re.powf(F::from(n as i64 - 1).unwrap())
+            // n - 1 would overflow i32; use x^n / x to avoid precision loss
+            // from converting n-1 to float (which rounds for f32)
+            F::from(n).unwrap() * val / self.re
         } else {
             F::from(n).unwrap() * self.re.powi(n - 1)
         };
@@ -108,6 +119,19 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn powf(self, n: Self) -> Self {
         // d/dx (x^y) = y * x^(y-1) * dx + x^y * ln(x) * dy
+        //
+        // Constant integer exponent fast path: if `n` has no tangent and its
+        // value is a losslessly representable integer, dispatch to `powi`.
+        // This avoids computing `ln(x)` for `x < 0` where stdlib returns NaN —
+        // that NaN would poison `eps` via `NaN * 0 = NaN` in IEEE 754, even
+        // though `dy` is algebraically zero for a constant exponent.
+        if n.eps == F::zero() {
+            if let Some(ni) = n.re.to_i32() {
+                if F::from(ni).unwrap() == n.re {
+                    return self.powi(ni);
+                }
+            }
+        }
         if n.re == F::zero() {
             // a^0 = 1, d/da(a^0) = 0, d/db(a^b)|_{b=0} = ln(a) (for a > 0)
             let dy = if self.re > F::zero() {
@@ -121,8 +145,9 @@ impl<F: Float> Dual<F> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx = if self.re == F::zero() {
-            // Avoid 0/0: use n*x^(n-1) form which IEEE handles correctly
+        let dx = if self.re == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.re * self.re.powf(n.re - F::one()) * self.eps
         } else {
             n.re * val / self.re * self.eps
@@ -233,7 +258,7 @@ impl<F: Float> Dual<F> {
     pub fn asin(self) -> Self {
         self.chain(
             self.re.asin(),
-            F::one() / (F::one() - self.re * self.re).sqrt(),
+            F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
         )
     }
 
@@ -242,31 +267,23 @@ impl<F: Float> Dual<F> {
     pub fn acos(self) -> Self {
         self.chain(
             self.re.acos(),
-            -F::one() / (F::one() - self.re * self.re).sqrt(),
+            -F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
         )
     }
 
     /// Arctangent.
     #[inline]
     pub fn atan(self) -> Self {
-        self.chain(self.re.atan(), F::one() / (F::one() + self.re * self.re))
+        self.chain(self.re.atan(), kernels::atan_deriv(self.re))
     }
 
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        // d/dx atan2(y,x) = x/(x²+y²) dy - y/(x²+y²) dx
-        let h = self.re.hypot(other.re);
-        let denom = h * h;
-        if denom == F::zero() {
-            return Dual {
-                re: self.re.atan2(other.re),
-                eps: F::zero(),
-            };
-        }
+        let (d_self, d_other) = kernels::atan2_partials(self.re, other.re);
         Dual {
             re: self.re.atan2(other.re),
-            eps: (other.re * self.eps - self.re * other.eps) / denom,
+            eps: d_self * self.eps + d_other * other.eps,
         }
     }
 
@@ -294,25 +311,22 @@ impl<F: Float> Dual<F> {
     /// Inverse hyperbolic sine.
     #[inline]
     pub fn asinh(self) -> Self {
-        self.chain(
-            self.re.asinh(),
-            F::one() / (self.re * self.re + F::one()).sqrt(),
-        )
+        self.chain(self.re.asinh(), kernels::asinh_deriv(self.re))
     }
 
     /// Inverse hyperbolic cosine.
     #[inline]
     pub fn acosh(self) -> Self {
-        self.chain(
-            self.re.acosh(),
-            F::one() / (self.re * self.re - F::one()).sqrt(),
-        )
+        self.chain(self.re.acosh(), kernels::acosh_deriv(self.re))
     }
 
     /// Inverse hyperbolic tangent.
     #[inline]
     pub fn atanh(self) -> Self {
-        self.chain(self.re.atanh(), F::one() / (F::one() - self.re * self.re))
+        self.chain(
+            self.re.atanh(),
+            F::one() / ((F::one() - self.re) * (F::one() + self.re)),
+        )
     }
 
     // ── Misc ──
@@ -395,13 +409,20 @@ impl<F: Float> Dual<F> {
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
         let h = self.re.hypot(other.re);
+        if h == F::zero() {
+            // Singularity: kernel returns (0, 0) partials, but `0 * eps` is
+            // NaN if `self.eps` or `other.eps` is non-finite. Mirror
+            // `Dual::recip`'s explicit short-circuit to preserve the
+            // bit-for-bit zero-eps convention.
+            return Dual {
+                re: h,
+                eps: F::zero(),
+            };
+        }
+        let (da, db) = kernels::hypot_partials(self.re, other.re, h);
         Dual {
             re: h,
-            eps: if h == F::zero() {
-                F::zero()
-            } else {
-                (self.re * self.eps + other.re * other.eps) / h
-            },
+            eps: da * self.eps + db * other.eps,
         }
     }
 

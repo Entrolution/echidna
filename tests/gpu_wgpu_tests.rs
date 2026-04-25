@@ -58,7 +58,7 @@ fn forward_batch_rosenbrock() {
 
     // Record tape at f64
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     // Generate 100 test points
     let points: Vec<Vec<f64>> = (0..100)
@@ -102,7 +102,7 @@ fn forward_batch_trig() {
     };
 
     let x0 = [0.5_f64, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -142,7 +142,7 @@ fn forward_batch_single_point() {
     };
 
     let x0 = [2.0_f64, 3.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     tape.forward(&[2.0, 3.0]);
     let cpu_val = tape.output_value();
@@ -170,7 +170,7 @@ fn forward_batch_large() {
     };
 
     let x0 = [1.0_f64, 1.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let batch_size = 10_000u32;
     let points: Vec<Vec<f64>> = (0..batch_size)
@@ -227,7 +227,7 @@ fn forward_batch_f32_native() {
 
     // Record tape directly at f32
     let x0 = [1.0_f32, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -259,7 +259,7 @@ fn gradient_batch_rosenbrock() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -307,7 +307,7 @@ fn gradient_batch_trig() {
     };
 
     let x0 = [0.5_f64, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let points: Vec<Vec<f64>> = (0..20)
         .map(|i| {
@@ -351,7 +351,7 @@ fn gradient_batch_single_point() {
     };
 
     let x0 = [2.0_f64, 3.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let cpu_grad = tape.gradient(&[2.0, 3.0]);
 
@@ -387,7 +387,7 @@ fn sparse_jacobian_multi_output() {
     };
 
     let x0 = [1.0_f32, 2.0];
-    let (mut tape, _) = echidna::record_multi(|v| multi_output_func(v), &x0);
+    let (mut tape, _) = echidna::record_multi(multi_output_func, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -430,7 +430,7 @@ fn hvp_batch_rosenbrock() {
     };
 
     let x0 = [1.0_f32, 2.0];
-    let (tape, _) = record(|v| rosenbrock(v), &x0);
+    let (tape, _) = record(rosenbrock, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -473,7 +473,7 @@ fn hvp_batch_trig() {
     };
 
     let x0 = [0.5_f32, 0.7];
-    let (tape, _) = record(|v| trig_func(v), &x0);
+    let (tape, _) = record(trig_func, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -516,7 +516,7 @@ fn sparse_hessian_rosenbrock() {
     };
 
     let x0 = [1.0_f32, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -570,7 +570,7 @@ fn sparse_hessian_trig() {
     };
 
     let x0 = [0.5_f32, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
@@ -645,4 +645,193 @@ fn custom_ops_rejected() {
 fn wgpu_implements_gpu_backend() {
     fn assert_backend<B: GpuBackend>() {}
     assert_backend::<WgpuContext>();
+}
+
+// ══════════════════════════════════════════════
+//  Per-opcode GPU HVP parity tests
+// ══════════════════════════════════════════════
+//
+// Tests CPU vs GPU Hessian-vector products for every opcode with a
+// nontrivial second derivative. Catches CPU-GPU formula mismatches
+// like the cbrt HVP bug (finding #1).
+
+mod hvp_opcode_parity {
+    use super::*;
+    use echidna::gpu::GpuTapeData;
+    use num_traits::Float;
+
+    /// Test HVP parity for a single-input scalar function.
+    fn check_hvp_parity(
+        ctx: &WgpuContext,
+        f: impl FnOnce(&[echidna::BReverse<f32>]) -> echidna::BReverse<f32>,
+        x_record: f32,
+        x_eval: f32,
+        label: &str,
+    ) {
+        let (tape, _) = record(f, &[x_record]);
+        let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+
+        let x = [x_eval];
+        let v = [1.0_f32]; // direction = 1 → HVP = f''(x)
+
+        let (gpu_grad, gpu_hvp) = ctx.hvp_batch(&gpu_tape, &x, &v, 1).unwrap();
+        let (cpu_grad, cpu_hvp) = tape.hvp(&x, &[1.0]);
+
+        assert!(
+            approx_eq(gpu_grad[0], cpu_grad[0] as f64, 1e-3, 1e-3),
+            "{label} grad: gpu={}, cpu={}",
+            gpu_grad[0],
+            cpu_grad[0]
+        );
+        assert!(
+            approx_eq(gpu_hvp[0], cpu_hvp[0] as f64, 1e-3, 1e-3),
+            "{label} hvp: gpu={}, cpu={}",
+            gpu_hvp[0],
+            cpu_hvp[0]
+        );
+    }
+
+    #[test]
+    fn hvp_parity_exp() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].exp(), 0.5, 1.0, "exp");
+    }
+
+    #[test]
+    fn hvp_parity_log() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].ln(), 1.0, 2.0, "log");
+    }
+
+    #[test]
+    fn hvp_parity_sqrt() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].sqrt(), 1.0, 4.0, "sqrt");
+    }
+
+    #[test]
+    fn hvp_parity_cbrt() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].cbrt(), 1.0, 8.0, "cbrt");
+    }
+
+    #[test]
+    fn hvp_parity_recip() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].recip(), 1.0, 2.0, "recip");
+    }
+
+    #[test]
+    fn hvp_parity_sin() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].sin(), 0.5, 1.0, "sin");
+    }
+
+    #[test]
+    fn hvp_parity_cos() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].cos(), 0.5, 1.0, "cos");
+    }
+
+    #[test]
+    fn hvp_parity_tan() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].tan(), 0.5, 0.5, "tan");
+    }
+
+    #[test]
+    fn hvp_parity_asin() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].asin(), 0.3, 0.5, "asin");
+    }
+
+    #[test]
+    fn hvp_parity_acos() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].acos(), 0.3, 0.5, "acos");
+    }
+
+    #[test]
+    fn hvp_parity_atan() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].atan(), 0.5, 1.0, "atan");
+    }
+
+    #[test]
+    fn hvp_parity_sinh() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].sinh(), 0.5, 1.0, "sinh");
+    }
+
+    #[test]
+    fn hvp_parity_cosh() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].cosh(), 0.5, 1.0, "cosh");
+    }
+
+    #[test]
+    fn hvp_parity_tanh() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        check_hvp_parity(&ctx, |x| x[0].tanh(), 0.5, 1.0, "tanh");
+    }
+
+    #[test]
+    fn hvp_parity_powf() {
+        let ctx = match gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        // x^2.5 — nontrivial second derivative
+        let two_five = 2.5_f32;
+        check_hvp_parity(
+            &ctx,
+            move |x| x[0].powf(echidna::BReverse::constant(two_five)),
+            1.0,
+            2.0,
+            "powf",
+        );
+    }
 }

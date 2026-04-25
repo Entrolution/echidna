@@ -1,6 +1,12 @@
 //! ndarray adapters for echidna's bytecode tape AD.
 //!
 //! Thin wrappers accepting `Array1<F>` and returning `Array1<F>` / `Array2<F>`.
+//!
+//! All functions here accept non-contiguous arrays (slices, transposed
+//! views, stepped views). Input data is copied element-wise via
+//! `iter().copied()` before being passed to the tape; the previous
+//! `.as_slice().unwrap()` path panicked on any non-C-contiguous layout,
+//! which was inconsistent with the faer/nalgebra adapters.
 
 use ndarray::{Array1, Array2};
 
@@ -8,13 +14,20 @@ use crate::bytecode_tape::{BtapeThreadLocal, BytecodeTape};
 use crate::float::Float;
 use crate::BReverse;
 
+/// Copy an `Array1<F>` into a plain `Vec<F>` regardless of memory layout.
+#[inline]
+fn to_vec<F: Copy>(x: &Array1<F>) -> Vec<F> {
+    x.iter().copied().collect()
+}
+
 /// Record a function and compute its gradient, returning an `Array1`.
 pub fn grad_ndarray<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &Array1<F>,
 ) -> Array1<F> {
-    let (mut tape, _) = crate::api::record(f, x.as_slice().unwrap());
-    let g = tape.gradient(x.as_slice().unwrap());
+    let xs = to_vec(x);
+    let (mut tape, _) = crate::api::record(f, &xs);
+    let g = tape.gradient(&xs);
     Array1::from_vec(g)
 }
 
@@ -23,8 +36,9 @@ pub fn grad_ndarray_val<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &Array1<F>,
 ) -> (F, Array1<F>) {
-    let (mut tape, val) = crate::api::record(f, x.as_slice().unwrap());
-    let g = tape.gradient(x.as_slice().unwrap());
+    let xs = to_vec(x);
+    let (mut tape, val) = crate::api::record(f, &xs);
+    let g = tape.gradient(&xs);
     (val, Array1::from_vec(g))
 }
 
@@ -33,9 +47,9 @@ pub fn hessian_ndarray<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &Array1<F>,
 ) -> (F, Array1<F>, Array2<F>) {
-    let xs = x.as_slice().unwrap();
-    let (tape, _) = crate::api::record(f, xs);
-    let (val, grad, hess) = tape.hessian(xs);
+    let xs = to_vec(x);
+    let (tape, _) = crate::api::record(f, &xs);
+    let (val, grad, hess) = tape.hessian(&xs);
     let n = xs.len();
     let hess_flat: Vec<F> = hess.into_iter().flat_map(|row| row.into_iter()).collect();
     (
@@ -52,9 +66,9 @@ pub fn jacobian_ndarray<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
     x: &Array1<F>,
 ) -> Array2<F> {
-    let xs = x.as_slice().unwrap();
-    let (mut tape, _) = crate::api::record_multi(f, xs);
-    let jac = tape.jacobian(xs);
+    let xs = to_vec(x);
+    let (mut tape, _) = crate::api::record_multi(f, &xs);
+    let jac = tape.jacobian(&xs);
     let m = jac.len();
     let n = if m > 0 { jac[0].len() } else { xs.len() };
     let flat: Vec<F> = jac.into_iter().flat_map(|row| row.into_iter()).collect();
@@ -63,7 +77,8 @@ pub fn jacobian_ndarray<F: Float + BtapeThreadLocal>(
 
 /// Evaluate gradient on a pre-recorded tape, accepting and returning ndarray types.
 pub fn tape_gradient_ndarray<F: Float>(tape: &mut BytecodeTape<F>, x: &Array1<F>) -> Array1<F> {
-    let g = tape.gradient(x.as_slice().unwrap());
+    let xs = to_vec(x);
+    let g = tape.gradient(&xs);
     Array1::from_vec(g)
 }
 
@@ -73,8 +88,8 @@ pub fn tape_hessian_ndarray<F: Float>(
     tape: &BytecodeTape<F>,
     x: &Array1<F>,
 ) -> (F, Array1<F>, Array2<F>) {
-    let xs = x.as_slice().unwrap();
-    let (val, grad, hess) = tape.hessian(xs);
+    let xs = to_vec(x);
+    let (val, grad, hess) = tape.hessian(&xs);
     let n = xs.len();
     let hess_flat: Vec<F> = hess.into_iter().flat_map(|row| row.into_iter()).collect();
     (
@@ -90,9 +105,9 @@ pub fn hvp_ndarray<F: Float + BtapeThreadLocal>(
     x: &Array1<F>,
     v: &Array1<F>,
 ) -> (Array1<F>, Array1<F>) {
-    let xs = x.as_slice().unwrap();
-    let vs = v.as_slice().unwrap();
-    let (grad, hvp) = crate::api::hvp(f, xs, vs);
+    let xs = to_vec(x);
+    let vs = to_vec(v);
+    let (grad, hvp) = crate::api::hvp(f, &xs, &vs);
     (Array1::from_vec(grad), Array1::from_vec(hvp))
 }
 
@@ -103,9 +118,9 @@ pub fn tape_hvp_ndarray<F: Float>(
     x: &Array1<F>,
     v: &Array1<F>,
 ) -> (Array1<F>, Array1<F>) {
-    let xs = x.as_slice().unwrap();
-    let vs = v.as_slice().unwrap();
-    let (grad, hvp) = tape.hvp(xs, vs);
+    let xs = to_vec(x);
+    let vs = to_vec(v);
+    let (grad, hvp) = tape.hvp(&xs, &vs);
     (Array1::from_vec(grad), Array1::from_vec(hvp))
 }
 
@@ -116,8 +131,8 @@ pub fn sparse_hessian_ndarray<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &Array1<F>,
 ) -> (F, Array1<F>, crate::sparse::SparsityPattern, Array1<F>) {
-    let xs = x.as_slice().unwrap();
-    let (val, grad, pattern, values) = crate::api::sparse_hessian(f, xs);
+    let xs = to_vec(x);
+    let (val, grad, pattern, values) = crate::api::sparse_hessian(f, &xs);
     (
         val,
         Array1::from_vec(grad),
@@ -132,8 +147,8 @@ pub fn tape_sparse_hessian_ndarray<F: Float>(
     tape: &BytecodeTape<F>,
     x: &Array1<F>,
 ) -> (F, Array1<F>, crate::sparse::SparsityPattern, Array1<F>) {
-    let xs = x.as_slice().unwrap();
-    let (val, grad, pattern, values) = tape.sparse_hessian(xs);
+    let xs = to_vec(x);
+    let (val, grad, pattern, values) = tape.sparse_hessian(&xs);
     (
         val,
         Array1::from_vec(grad),
@@ -142,14 +157,17 @@ pub fn tape_sparse_hessian_ndarray<F: Float>(
     )
 }
 
-/// Compute the sparse Jacobian, returning `(pattern, column_vectors)`.
+/// Compute the sparse Jacobian, returning `(outputs, pattern, values)`.
 ///
-/// Each `Array1` in the returned `Vec` contains one column of sparse Jacobian values.
+/// `outputs` is `f(x)` as an `Array1<F>`. `values` contains the non-zero
+/// Jacobian entries in the order defined by `pattern` (a flat vector, not
+/// per-column arrays — the old "column_vectors" description was wrong
+/// and the old signature discarded `outputs` entirely).
 pub fn sparse_jacobian_ndarray<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
     x: &Array1<F>,
-) -> (crate::sparse::JacobianSparsityPattern, Vec<F>) {
-    let xs = x.as_slice().unwrap();
-    let (_outputs, pattern, values) = crate::api::sparse_jacobian(f, xs);
-    (pattern, values)
+) -> (Array1<F>, crate::sparse::JacobianSparsityPattern, Vec<F>) {
+    let xs = to_vec(x);
+    let (outputs, pattern, values) = crate::api::sparse_jacobian(f, &xs);
+    (Array1::from_vec(outputs), pattern, values)
 }

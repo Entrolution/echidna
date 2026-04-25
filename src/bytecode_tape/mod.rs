@@ -161,6 +161,8 @@ impl<F: Float> BytecodeTape<F> {
         let idx = self.num_variables;
         self.num_variables += 1;
         self.num_inputs += 1;
+        // SPEC: InputPrefixInvariant — Input opcodes are always added before any non-input
+        // opcode and carry `[UNUSED, UNUSED]` args; callers (e.g. `record`) rely on this.
         self.opcodes.push(OpCode::Input);
         self.arg_indices.push([UNUSED, UNUSED]);
         self.values.push(value);
@@ -256,10 +258,8 @@ impl<F: Float> BytecodeTape<F> {
                     return Some(arg1);
                 }
             }
-            OpCode::Sub => {
-                if arg1_const && self.values[arg1 as usize] == zero {
-                    return Some(arg0);
-                }
+            OpCode::Sub if arg1_const && self.values[arg1 as usize] == zero => {
+                return Some(arg0);
             }
             OpCode::Mul => {
                 // Identity: x * 1 → x, 1 * x → x
@@ -277,10 +277,8 @@ impl<F: Float> BytecodeTape<F> {
                     return Some(self.push_const(value));
                 }
             }
-            OpCode::Div => {
-                if arg1_const && self.values[arg1 as usize] == one {
-                    return Some(arg0);
-                }
+            OpCode::Div if arg1_const && self.values[arg1 as usize] == one => {
+                return Some(arg0);
             }
             _ => {}
         }
@@ -418,6 +416,24 @@ impl<F: Float> BytecodeTape<F> {
     /// Single-output methods (`output_index`, `gradient`, etc.) continue to work using
     /// the first output.
     pub fn set_outputs(&mut self, indices: &[u32]) {
+        // Bounds-check every index up-front so an out-of-range output
+        // fails fast here with an actionable message instead of
+        // silently propagating into `output_values`, `jacobian`, or
+        // `vjp_multi` and panicking on a raw slice access further down
+        // the call chain. Duplicate indices are permitted — a tape may
+        // legitimately expose the same variable under two output slots.
+        let n = self.values.len();
+        for (i, &idx) in indices.iter().enumerate() {
+            assert!(
+                (idx as usize) < n,
+                "set_outputs: indices[{}] = {} is out of range (tape has \
+                 {} values). Indices must point to tape variables created \
+                 via new_input/push_op/push_const.",
+                i,
+                idx,
+                n
+            );
+        }
         self.output_indices = indices.to_vec();
         if let Some(&first) = indices.first() {
             self.output_index = first;

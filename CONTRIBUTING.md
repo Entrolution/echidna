@@ -100,6 +100,34 @@ cargo bench --features gpu-wgpu --bench gpu
 cargo bench --features bytecode --bench comparison
 ```
 
+### Formal Specifications
+
+Two subsystems have TLA+ specifications under `specs/` that are model-checked in CI:
+
+- `src/checkpoint.rs` — gradient checkpointing (Revolve, online, hints)
+- `src/bytecode_tape/optimize.rs` — bytecode tape optimizer (CSE + DCE, idempotency)
+
+The [`.github/workflows/specs.yml`](.github/workflows/specs.yml) job runs automatically on any push or PR touching `specs/**` or the guarded source files. It enforces spec-to-code alignment through three gates:
+
+1. **Source anchors** — every invariant in `specs/README.md` has a `// SPEC: <Name>` comment at the Rust line that upholds it. `specs/verify_anchors.sh` fails if any anchor is missing. Run locally with:
+   ```bash
+   ./specs/verify_anchors.sh
+   ```
+2. **Semantic property tests** — `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties (gradient equality against non-checkpointed reference, `optimize ∘ optimize = optimize`, post-optimise structural assertions). Run with:
+   ```bash
+   cargo test --features bytecode --test spec_invariants_checkpoint \
+       --test spec_invariants_tape_optimize
+   ```
+3. **TLC model checking** — the TLA+ specs themselves, run under TLC. Requires Java 11+ and `tla2tools.jar` in `specs/`:
+   ```bash
+   java -cp specs/tla2tools.jar tlc2.TLC -config specs/revolve/Revolve.cfg specs/revolve/Revolve.tla
+   java -cp specs/tla2tools.jar tlc2.TLC -config specs/tape_optimizer/Idempotency.cfg specs/tape_optimizer/Idempotency.tla
+   ```
+
+If you add or rename an invariant, update both the `specs/README.md` cross-reference table and the matching `// SPEC:` anchor in the source. The anchor verifier will catch missed pairs.
+
+See [`specs/README.md`](specs/README.md) for the full suite and recommended parameter sweeps.
+
 ### Security Audits
 
 Run dependency audits before submitting PRs:
@@ -125,6 +153,7 @@ cargo deny check
 - [ ] No clippy warnings
 - [ ] Documentation is updated if needed
 - [ ] CHANGELOG.md is updated for user-facing changes
+- [ ] If `src/checkpoint.rs` or `src/bytecode_tape/optimize.rs` changed, the TLA+ specs in `specs/` still pass (see [Formal Specifications](#formal-specifications))
 
 ### PR Description
 

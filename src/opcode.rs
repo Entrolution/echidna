@@ -5,6 +5,8 @@
 
 use num_traits::Float;
 
+use crate::kernels;
+
 /// Sentinel used in `arg_indices[1]` for unary ops (the second argument slot is unused).
 pub const UNUSED: u32 = u32::MAX;
 
@@ -316,9 +318,13 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         OpCode::Sub => (one, -one),
         OpCode::Mul => (b, a),
         OpCode::Div => {
+            // d/da(a/b) = 1/b, d/db(a/b) = -a/b² = -(a/b)/b = -r/b
+            // Using -r/b avoids squaring 1/b which overflows when |b| < ~1e-154
             let inv = one / b;
-            (inv, -a * inv * inv)
+            (inv, -r * inv)
         }
+        // a % b = a - b*trunc(a/b). Treating trunc as piecewise-constant (zero derivative a.e.):
+        // d/da = 1, d/db = -trunc(a/b). Matches Rust's truncation-based remainder.
         OpCode::Rem => (one, -(a / b).trunc()),
         OpCode::Powf => {
             // d/da a^b = b * a^(b-1)
@@ -328,32 +334,34 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                 let db = if a > zero { a.ln() } else { zero };
                 (zero, db)
             } else {
-                let da = if a == zero {
+                let da = if a == zero || r == zero || !a.is_finite() || !r.is_finite() {
+                    // Direct powf avoids 0/0 when a=0, catches underflow when
+                    // r=a^b underflows to 0 but a!=0, and avoids Inf/Inf = NaN
+                    // when either a or r is infinite (e.g., Inf^2 = Inf, whose
+                    // true derivative at Inf is Inf, not NaN).
                     b * a.powf(b - one)
                 } else {
                     b * r / a
                 };
-                let db = if r == zero { zero } else { r * a.ln() };
+                // For `a <= 0`, `a.ln()` is NaN (stdlib real-valued). A finite
+                // `r` at `a < 0` means `b` was integer (else `r = NaN`); the
+                // derivative w.r.t. `b` at an integer `b` is not classically
+                // defined, and the convention here is 0 — matching the
+                // forward-mode `Dual::powf` constant-integer fast path. This
+                // also prevents NaN from contaminating a live tape slot for
+                // `b` on reverse sweep.
+                let db = if r == zero || a <= zero {
+                    zero
+                } else {
+                    r * a.ln()
+                };
                 (da, db)
             }
         }
-        OpCode::Atan2 => {
-            // atan2(a, b): d/da = b/(a²+b²), d/db = -a/(a²+b²)
-            let denom = a * a + b * b;
-            if denom == zero {
-                (zero, zero)
-            } else {
-                (b / denom, -a / denom)
-            }
-        }
-        OpCode::Hypot => {
-            // hypot(a,b) = sqrt(a²+b²), d/da = a/r, d/db = b/r
-            if r == zero {
-                (zero, zero)
-            } else {
-                (a / r, b / r)
-            }
-        }
+        // Atan2 and Hypot delegate to `kernels` so the overflow-safe factoring
+        // (a/h)/h pattern stays the single source of truth across the AD types.
+        OpCode::Atan2 => kernels::atan2_partials(a, b),
+        OpCode::Hypot => kernels::hypot_partials(a, b, r),
         OpCode::Max => {
             if a >= b || b.is_nan() {
                 (one, zero)
@@ -376,6 +384,8 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let inv = one / a;
             (-inv * inv, zero)
         }
+        // sqrt'(x) = 1/(2√x) and cbrt'(x) = 1/(3x^{2/3}) are mathematically
+        // singular at x=0, producing IEEE inf. This is the correct answer.
         OpCode::Sqrt => {
             let two = one + one;
             (one / (two * r), zero)
@@ -389,23 +399,55 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             if exp == 0 {
                 (zero, zero) // d/dx(x^0) = 0
             } else if exp == i32::MIN {
-                // exp - 1 would overflow i32; use powf fallback
+                // exp - 1 would overflow i32; use r/a to avoid precision loss
                 let n = T::from(exp).unwrap();
-                (n * a.powf(T::from(exp as i64 - 1).unwrap()), zero)
+                (n * r / a, zero)
             } else {
                 let n = T::from(exp).unwrap();
                 (n * a.powi(exp - 1), zero)
             }
         }
 
-        // Exp/Log
+        // Exp/Log. Domain-restricted ops emit a NaN partial strictly
+        // outside their valid interval (a < 0 for Ln/Log2/Log10, a < -1
+        // for Ln1p, |a| > 1 for Atanh) so a caller that supplied
+        // out-of-domain inputs sees `(NaN, 0)` instead of a numerically
+        // plausible but semantically meaningless finite partial
+        // (e.g. `1/-1 = -1` for `Ln` at a = -1). Boundary values
+        // (a = 0 for Ln, a = -1 for Ln1p, |a| = 1 for Atanh) are left
+        // to the IEEE arithmetic — the partial evaluates to ±Inf, which
+        // is the correct one-sided derivative limit.
         OpCode::Exp => (r, zero), // d/da e^a = e^a = r
         OpCode::Exp2 => (r * T::ln(T::from(2.0).unwrap()), zero),
         OpCode::ExpM1 => (r + one, zero), // d/da (e^a - 1) = e^a = r+1
-        OpCode::Ln => (one / a, zero),
-        OpCode::Log2 => (one / (a * T::ln(T::from(2.0).unwrap())), zero),
-        OpCode::Log10 => (one / (a * T::ln(T::from(10.0).unwrap())), zero),
-        OpCode::Ln1p => (one / (one + a), zero),
+        OpCode::Ln => {
+            if a >= zero {
+                (one / a, zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
+        OpCode::Log2 => {
+            if a >= zero {
+                (one / (a * T::ln(T::from(2.0).unwrap())), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
+        OpCode::Log10 => {
+            if a >= zero {
+                (one / (a * T::ln(T::from(10.0).unwrap())), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
+        OpCode::Ln1p => {
+            if a >= -one {
+                (one / (one + a), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
 
         // Trig
         OpCode::Sin => (a.cos(), zero),
@@ -414,9 +456,9 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let c = a.cos();
             (one / (c * c), zero)
         }
-        OpCode::Asin => (one / (one - a * a).sqrt(), zero),
-        OpCode::Acos => (-one / (one - a * a).sqrt(), zero),
-        OpCode::Atan => (one / (one + a * a), zero),
+        OpCode::Asin => (one / ((one - a) * (one + a)).sqrt(), zero),
+        OpCode::Acos => (-one / ((one - a) * (one + a)).sqrt(), zero),
+        OpCode::Atan => (kernels::atan_deriv(a), zero),
 
         // Hyperbolic
         OpCode::Sinh => (a.cosh(), zero),
@@ -425,12 +467,28 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             let c = a.cosh();
             (one / (c * c), zero)
         }
-        OpCode::Asinh => (one / (a * a + one).sqrt(), zero),
-        OpCode::Acosh => (one / (a * a - one).sqrt(), zero),
-        OpCode::Atanh => (one / (one - a * a), zero),
+        OpCode::Asinh => (kernels::asinh_deriv(a), zero),
+        OpCode::Acosh => (kernels::acosh_deriv(a), zero),
+        OpCode::Atanh => {
+            if a >= -one && a <= one {
+                (one / ((one - a) * (one + a)), zero)
+            } else {
+                (T::nan(), zero)
+            }
+        }
 
-        // Misc
-        OpCode::Abs => (a.signum(), zero),
+        // Misc. `Abs` uses the symmetric midpoint 0 of the Clarke
+        // subdifferential [-1, 1] at the kink; relying on `a.signum()`
+        // leaks the sign bit of ±0 (`signum(+0) = +0`, `signum(-0) = -0`),
+        // which makes algebraically equivalent tape positions report
+        // different subgradients depending on how the zero was produced.
+        OpCode::Abs => {
+            if a == zero {
+                (zero, zero)
+            } else {
+                (a.signum(), zero)
+            }
+        }
         OpCode::Signum | OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
             (zero, zero)
         }
@@ -451,6 +509,10 @@ pub fn powi_exp_decode_raw(b_idx: u32) -> i32 {
 }
 
 /// Encode a `powi` exponent as a value that can be stored in `arg_indices[1]`.
+///
+/// This is a bit-preserving reinterpretation (`i32 as u32`), NOT a numeric
+/// conversion. The round-trip `powi_exp_decode_raw(powi_exp_encode(n)) == n`
+/// holds for all i32 values including negatives and `i32::MIN`.
 #[inline]
 #[must_use]
 pub fn powi_exp_encode(exp: i32) -> u32 {

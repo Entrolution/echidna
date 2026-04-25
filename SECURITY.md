@@ -2,12 +2,56 @@
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| >= 0.8.0 | Yes       |
-| < 0.8.0  | No        |
+| Crate           | Version    | Supported |
+|-----------------|------------|-----------|
+| `echidna`       | >= 0.10.0  | Yes       |
+| `echidna-optim` | >= 0.13.0  | Yes       |
+| `echidna`       | < 0.10.0   | No        |
+| `echidna-optim` | < 0.13.0   | No        |
 
-Only the latest minor release receives security updates. Versions prior to 0.8.0 have known correctness bugs including: GPU Taylor coefficient errors for POWI at x=0, REM with non-constant divisors, POWF with negative base, and ATAN2 at b=0 for K>=3; silent NaN in Laurent max/min; piggyback forward-adjoint gradient bias; optimizer NaN non-detection; and trust region convergence issues.
+Only the latest release of each crate receives security updates.
+`echidna` 0.10.0 and `echidna-optim` 0.13.0 are a coordinated release
+(`echidna-optim` 0.13.0 depends on `echidna = "0.10.0"`).
+
+0.10.0 is a minor bump over 0.9.0 driven by the `wgpu` 28 → 29
+transitive major; echidna's own public API is unchanged. No new
+numerical correctness issues were introduced in 0.9.0 → 0.10.0.
+
+### Known issues in unsupported versions
+
+Pre-0.10.0 `echidna` carries the following known numerical correctness
+bugs — see the CHANGELOG for per-version detail:
+
+- **0.9.0**: no known numerical correctness bugs; unsupported only
+  because it targets wgpu 28, which is no longer maintained upstream
+  and received no patches after `wgpu 29.0.0` (2026-03-18).
+- **0.8.2**: GPU Taylor `HYPOT` higher-order coefficients overflow
+  to Inf/NaN at extreme magnitudes (`|a.v[0]| ~ 1e20` in f32); GPU
+  Taylor `HYPOT` at function-domain boundaries (`hypot(Inf, finite)`,
+  `hypot(0, 0)` with non-zero seed) silently diverges from CPU.
+- **0.8.1**: atan derivative silently returns 0 for `|x| > 1.34e154`;
+  powf derivative silently returns 0 when `x^b` underflows; WGSL
+  forward/reverse/hvp batch dispatch produces corrupted results when
+  `batch_size × num_variables > 2³²`; Taylor max/min returns NaN
+  instead of valid value; Revolve checkpointing uses `O(num_steps)`
+  memory instead of `O(num_checkpoints)`.
+- **0.8.0**: GPU cbrt HVP second derivative is wrong; asin/acos/atanh
+  lose precision near domain boundaries; CUDA Taylor codegen
+  truncates 64-bit offsets.
+- **< 0.8.0**: additional issues documented in the changelog.
+
+Pre-0.12.0 `echidna-optim` silently collapses solver failure modes:
+piggyback / implicit / sparse-implicit solve functions returned
+`Option<T>` where any failure — primal divergence, tangent
+divergence, max-iter exhaustion, factor failure, residual exceedance
+— mapped to `None`, making recovery decisions platform-dependent.
+0.12.0 migrated all public entry points to `Result<T, E>` with
+typed error variants (`PiggybackError`, `ImplicitError`,
+`SparseImplicitError`) carrying iteration, norm, and dimension
+diagnostics. Additionally, `linalg::lu_factor` pre-0.12.0 accepted
+non-finite pivots (NaN / ±Inf passed both the exact-zero and
+tolerance checks and propagated through stored LU factors),
+returning NaN-tainted results under an `Ok` / `Some` label.
 
 ## Reporting a Vulnerability
 

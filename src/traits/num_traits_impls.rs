@@ -6,6 +6,7 @@ use num_traits::{
 
 use crate::dual::Dual;
 use crate::float::Float;
+use crate::kernels;
 use crate::reverse::Reverse;
 use crate::tape::{self, TapeThreadLocal};
 
@@ -608,9 +609,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         self.value.classify()
     }
 
-    // BUG-HUNT-NOTE: Returning Reverse::constant() (no tape entry) is a valid optimization.
-    // These are piecewise-constant functions with zero derivative a.e. Skipping tape
-    // recording saves space without affecting gradient correctness.
+    // Returning Reverse::constant() (no tape entry) is intentional: floor/ceil/round/trunc
+    // are piecewise-constant with zero derivative a.e. Skipping tape recording saves space
+    // without affecting gradient correctness.
     fn floor(self) -> Self {
         Reverse::constant(self.value.floor())
     }
@@ -651,7 +652,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         }
         let val = self.value.powi(n);
         let deriv = if n == i32::MIN {
-            F::from(n).unwrap() * self.value.powf(F::from(n as i64 - 1).unwrap())
+            F::from(n).unwrap() * val / self.value
         } else {
             F::from(n).unwrap() * self.value.powi(n - 1)
         };
@@ -659,6 +660,20 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn powf(self, n: Self) -> Self {
+        // Constant integer exponent fast path (see `Dual::powf`): if `n` is a
+        // tape constant and its value is a losslessly representable integer,
+        // dispatch to `powi`. This avoids recording `dy = val * ln(self) = NaN`
+        // for `self < 0` — the NaN would contaminate the constant's adjoint
+        // slot, which is silently dropped on the reverse sweep for a true
+        // constant, but breaks any caller that later promotes `n` to a live
+        // variable by building on the same tape shape.
+        if n.index == crate::tape::CONSTANT {
+            if let Some(ni) = n.value.to_i32() {
+                if F::from(ni).unwrap() == n.value {
+                    return NumFloat::powi(self, ni);
+                }
+            }
+        }
         if n.value == F::zero() {
             // a^0 = 1, d/da(a^0) = 0, d/db(a^b)|_{b=0} = ln(a) (for a > 0)
             let dy = if self.value > F::zero() {
@@ -669,13 +684,21 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
             return rev_binary(self, n, F::one(), F::zero(), dy);
         }
         let val = self.value.powf(n.value);
-        let dx = if self.value == F::zero() {
+        let dx = if self.value == F::zero() || val == F::zero() {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
+            // underflow when x^n underflows to 0 but x != 0
             n.value * self.value.powf(n.value - F::one())
         } else {
             n.value * val / self.value
         };
-        let dy = if val == F::zero() {
-            F::zero() // lim_{x→0+} x^y * ln(x) = 0 for y > 0
+        let dy = if val == F::zero() || self.value <= F::zero() {
+            // val == 0: lim_{x→0+} x^y * ln(x) = 0 for y > 0.
+            // self <= 0: ln(self) is NaN (stdlib real-valued). For self < 0
+            //   with finite val, b must have been integer (otherwise val = NaN);
+            //   the "derivative w.r.t. b at an integer b" is not classically
+            //   defined, and 0 is the conventional choice — matches the
+            //   forward-mode Dual::powf integer-dispatch fast path.
+            F::zero()
         } else {
             val * self.value.ln()
         };
@@ -757,7 +780,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(
             self,
             self.value.asin(),
-            F::one() / (F::one() - self.value * self.value).sqrt(),
+            F::one() / ((F::one() - self.value) * (F::one() + self.value)).sqrt(),
         )
     }
 
@@ -765,27 +788,29 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(
             self,
             self.value.acos(),
-            -F::one() / (F::one() - self.value * self.value).sqrt(),
+            -F::one() / ((F::one() - self.value) * (F::one() + self.value)).sqrt(),
         )
     }
 
     fn atan(self) -> Self {
-        rev_unary(
-            self,
-            self.value.atan(),
-            F::one() / (F::one() + self.value * self.value),
-        )
+        rev_unary(self, self.value.atan(), kernels::atan_deriv(self.value))
     }
 
     fn atan2(self, other: Self) -> Self {
+        // At the origin, atan2 gradient is mathematically undefined; return
+        // a tape-free constant (matches the previous behaviour bit-for-bit
+        // including `index() == CONSTANT` for downstream constant-folding
+        // and avoids growing the tape with a dead (0, 0)-partial entry).
         let h = self.value.hypot(other.value);
-        let denom = h * h;
-        if denom == F::zero() {
+        if h == F::zero() {
             return Reverse::constant(self.value.atan2(other.value));
         }
-        let dx = other.value / denom;
-        let dy = -self.value / denom;
-        rev_binary(self, other, self.value.atan2(other.value), dx, dy)
+        // `kernels::atan2_partials(a, b)` returns `(∂/∂a, ∂/∂b)` for the
+        // math convention `atan2(a, b)`. With Rust's `f64::atan2(self=y,
+        // other=x)`, `self` maps to kernel `a` and `other` to kernel `b`.
+        // `rev_binary(self, other, ..., d_self, d_other)` matches that order.
+        let (d_self, d_other) = kernels::atan2_partials(self.value, other.value);
+        rev_binary(self, other, self.value.atan2(other.value), d_self, d_other)
     }
 
     fn sinh(self) -> Self {
@@ -802,36 +827,24 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn asinh(self) -> Self {
-        rev_unary(
-            self,
-            self.value.asinh(),
-            F::one() / (self.value * self.value + F::one()).sqrt(),
-        )
+        rev_unary(self, self.value.asinh(), kernels::asinh_deriv(self.value))
     }
 
     fn acosh(self) -> Self {
-        rev_unary(
-            self,
-            self.value.acosh(),
-            F::one() / (self.value * self.value - F::one()).sqrt(),
-        )
+        rev_unary(self, self.value.acosh(), kernels::acosh_deriv(self.value))
     }
 
     fn atanh(self) -> Self {
         rev_unary(
             self,
             self.value.atanh(),
-            F::one() / (F::one() - self.value * self.value),
+            F::one() / ((F::one() - self.value) * (F::one() + self.value)),
         )
     }
 
     fn hypot(self, other: Self) -> Self {
         let h = self.value.hypot(other.value);
-        let (dx, dy) = if h == F::zero() {
-            (F::zero(), F::zero())
-        } else {
-            (self.value / h, other.value / h)
-        };
+        let (dx, dy) = kernels::hypot_partials(self.value, other.value, h);
         rev_binary(self, other, h, dx, dy)
     }
 

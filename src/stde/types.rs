@@ -59,7 +59,7 @@ impl<F: Float> WelfordAccumulator<F> {
     /// `sample` must be finite. A NaN or Inf sample will poison the running
     /// mean and variance, producing NaN for all subsequent updates.
     pub(super) fn update(&mut self, sample: F) {
-        debug_assert!(
+        assert!(
             sample.is_finite(),
             "WelfordAccumulator::update: sample must be finite"
         );
@@ -74,7 +74,7 @@ impl<F: Float> WelfordAccumulator<F> {
     pub(super) fn finalize(&self) -> (F, F, F) {
         let nf = F::from(self.count).unwrap();
         if self.count > 1 {
-            let var = self.m2 / (nf - F::one());
+            let var = (self.m2 / (nf - F::one())).max(F::zero());
             (self.mean, var, (var / nf).sqrt())
         } else {
             (self.mean, F::zero(), F::zero())

@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 //! Tests for second-order derivatives: forward-over-reverse (HVP, Hessian)
 //! and forward-over-forward (Dual<Dual<f64>>).
 
@@ -235,7 +236,7 @@ mod forward_over_reverse {
     #[test]
     fn hessian_symmetry_rosenbrock() {
         let x = [1.5_f64, 2.0];
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
         let (_, _, hess) = tape.hessian(&x);
         check_symmetry(&hess, "rosenbrock");
     }
@@ -246,7 +247,7 @@ mod forward_over_reverse {
     fn hessian_rosenbrock_analytic() {
         let x = 1.5_f64;
         let y = 2.0_f64;
-        let (tape, _) = record(|v| rosenbrock(v), &[x, y]);
+        let (tape, _) = record(rosenbrock, &[x, y]);
         let (_, _, hess) = tape.hessian(&[x, y]);
 
         // H[0][0] = 2 - 400*y + 1200*x²
@@ -317,7 +318,7 @@ mod forward_over_reverse {
     #[test]
     fn gradient_from_hvp_matches_tape_gradient() {
         let x = [1.5_f64, 2.0];
-        let (mut tape, _) = record(|v| rosenbrock(v), &x);
+        let (mut tape, _) = record(rosenbrock, &x);
 
         let tape_grad = tape.gradient(&x);
         let (hvp_grad, _) = tape.hvp(&x, &[1.0_f64, 0.0]);
@@ -339,7 +340,7 @@ mod forward_over_reverse {
     fn hvp_with_buf_matches_hvp() {
         let x = [1.5_f64, 2.0];
         let v = [0.7_f64, -0.3];
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
 
         let (grad1, hv1) = tape.hvp(&x, &v);
 

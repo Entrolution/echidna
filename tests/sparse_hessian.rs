@@ -1,5 +1,5 @@
 #![cfg(feature = "bytecode")]
-
+#![allow(clippy::needless_range_loop)] // idiomatic for parallel-indexed scientific code
 use echidna::{record, Scalar};
 
 fn rosenbrock<T: Scalar>(x: &[T]) -> T {
@@ -62,7 +62,7 @@ fn tridiagonal() {
         |v| {
             let mut sum = v[0] - v[0]; // zero
             for i in 0..v.len() - 1 {
-                sum = sum + v[i] * v[i + 1];
+                sum += v[i] * v[i + 1];
             }
             sum
         },
@@ -95,7 +95,7 @@ fn sparse_vs_dense_match() {
     let n = 5;
     let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
 
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
     let (val1, grad1, hess_dense) = tape.hessian(&x);
     let (val2, grad2, pattern, hess_values) = tape.sparse_hessian(&x);
 
@@ -129,7 +129,7 @@ fn fully_dense() {
         |v| {
             let mut s = v[0] - v[0]; // zero
             for i in 0..v.len() {
-                s = s + v[i];
+                s += v[i];
             }
             s * s
         },
@@ -160,10 +160,10 @@ fn fully_dense() {
 #[test]
 fn api_sparse_hessian() {
     let x = vec![1.5_f64, 2.0];
-    let (val, grad, pattern, values) = echidna::sparse_hessian(|v| rosenbrock(v), &x);
+    let (val, grad, pattern, values) = echidna::sparse_hessian(rosenbrock, &x);
 
     // Basic sanity: value and gradient should be correct
-    let (val2, grad2, _) = echidna::hessian(|v| rosenbrock(v), &x);
+    let (val2, grad2, _) = echidna::hessian(rosenbrock, &x);
     assert!((val - val2).abs() < 1e-10);
     for i in 0..2 {
         assert!((grad[i] - grad2[i]).abs() < 1e-10);
@@ -184,7 +184,7 @@ fn sparse_hessian_vec_matches_sparse_tridiag() {
         |v| {
             let mut sum = v[0] - v[0];
             for i in 0..v.len() - 1 {
-                sum = sum + v[i] * v[i + 1];
+                sum += v[i] * v[i + 1];
             }
             sum
         },
@@ -216,7 +216,7 @@ fn sparse_hessian_vec_matches_sparse_tridiag() {
 fn sparse_hessian_vec_matches_sparse_rosenbrock() {
     let n = 5;
     let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
 
     let (_, _, _, vals1) = tape.sparse_hessian(&x);
     let (_, _, _, vals2) = tape.sparse_hessian_vec::<4>(&x);
@@ -258,7 +258,7 @@ fn sparse_hessian_vec_fully_dense() {
         |v| {
             let mut s = v[0] - v[0];
             for i in 0..v.len() {
-                s = s + v[i];
+                s += v[i];
             }
             s * s
         },
@@ -280,8 +280,8 @@ fn sparse_hessian_vec_fully_dense() {
 #[test]
 fn api_sparse_hessian_vec() {
     let x = vec![1.5_f64, 2.0];
-    let (val1, grad1, _, vals1) = echidna::sparse_hessian(|v| rosenbrock(v), &x);
-    let (val2, grad2, _, vals2) = echidna::sparse_hessian_vec::<f64, 4>(|v| rosenbrock(v), &x);
+    let (val1, grad1, _, vals1) = echidna::sparse_hessian(rosenbrock, &x);
+    let (val2, grad2, _, vals2) = echidna::sparse_hessian_vec::<f64, 4>(rosenbrock, &x);
 
     assert!((val1 - val2).abs() < 1e-10);
     for i in 0..2 {
@@ -300,7 +300,7 @@ fn api_sparse_hessian_vec() {
 fn csr_lower_roundtrip() {
     let n = 5;
     let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
     let (_, _, pattern, _) = tape.sparse_hessian(&x);
 
     let csr = pattern.to_csr_lower();
@@ -357,7 +357,7 @@ fn csr_symmetric() {
 fn csr_reorder_values() {
     let n = 5;
     let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.01 * i as f64).collect();
-    let (tape, _) = record(|v| rosenbrock(v), &x);
+    let (tape, _) = record(rosenbrock, &x);
     let (_, _, pattern, hess_values) = tape.sparse_hessian(&x);
 
     let csr = pattern.to_csr_lower();

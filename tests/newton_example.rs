@@ -22,7 +22,7 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
 #[test]
 fn newton_step_rosenbrock() {
     let n = 2;
-    let (tape, _) = echidna::record(|x| rosenbrock(x), &[0.0_f64, 0.0]);
+    let (tape, _) = echidna::record(rosenbrock, &[0.0_f64, 0.0]);
 
     let mut x = vec![0.0_f64, 0.0];
     for _ in 0..50 {
