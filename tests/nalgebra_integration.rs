@@ -3,9 +3,10 @@
 #![cfg(feature = "simba")]
 
 use approx::{assert_abs_diff_eq, assert_relative_eq, assert_ulps_eq};
-use echidna::{Dual64, DualVec64, Reverse64};
+use echidna::{Dual64, DualVec32, DualVec64, Reverse64};
 use nalgebra::{Matrix3, Vector3};
 use num_traits::Float;
+use simba::scalar::SubsetOf;
 
 // ── Dual<f64> in nalgebra ──
 
@@ -315,4 +316,106 @@ fn reverse_matrix3_try_inverse() {
     };
     let fd = (f(2.0 + h) - f(2.0 - h)) / (2.0 * h);
     assert_relative_eq!(g[0], fd, max_relative = 1e-4);
+}
+
+// ── DualVec<F, N> SubsetOf conversions ──
+//
+// The `SubsetOf` impls are required for the `ComplexField` / `RealField` bounds,
+// but nalgebra's matrix ops don't exercise `is_in_subset` / `from_superset` at
+// runtime — so these direct tests guard against a silent regression in the
+// conversion logic (e.g. `is_in_subset` no longer rejecting live tangents).
+
+#[test]
+fn dual_vec_subsetof_identity() {
+    // DualVec<F, N> ⊂ DualVec<F, N>: the identity embedding round-trips exactly
+    // and is always in-subset — even with non-zero tangents.
+    let dv = DualVec64::<3>::new(2.5, [1.0, -2.0, 3.0]);
+    let up: DualVec64<3> = dv.to_superset();
+    assert_eq!(up.re, dv.re);
+    assert_eq!(up.eps, dv.eps);
+    let down = <DualVec64<3> as SubsetOf<DualVec64<3>>>::from_superset_unchecked(&dv);
+    assert_eq!(down.re, dv.re);
+    assert_eq!(down.eps, dv.eps);
+    assert!(<DualVec64<3> as SubsetOf<DualVec64<3>>>::is_in_subset(&dv));
+}
+
+#[test]
+fn dual_vec_subsetof_f64_embedding() {
+    // f64 ⊂ DualVec<f64, N>: a scalar embeds as a constant dual vector.
+    let dv: DualVec64<3> = 3.5_f64.to_superset();
+    assert_eq!(dv.re, 3.5);
+    assert!(
+        dv.eps.iter().all(|&e| e == 0.0),
+        "an embedded scalar must have zero tangents"
+    );
+    assert_eq!(
+        <f64 as SubsetOf<DualVec64<3>>>::from_superset_unchecked(&dv),
+        3.5
+    );
+
+    // is_in_subset accepts a constant dual but rejects one carrying a live
+    // tangent; from_superset (the checked projection) follows suit.
+    let with_tangent = DualVec64::<3>::new(3.5, [1.0, 0.0, 0.0]);
+    assert!(<f64 as SubsetOf<DualVec64<3>>>::is_in_subset(&dv));
+    assert!(!<f64 as SubsetOf<DualVec64<3>>>::is_in_subset(
+        &with_tangent
+    ));
+    assert_eq!(
+        <f64 as SubsetOf<DualVec64<3>>>::from_superset(&dv),
+        Some(3.5)
+    );
+    assert_eq!(
+        <f64 as SubsetOf<DualVec64<3>>>::from_superset(&with_tangent),
+        None
+    );
+}
+
+#[test]
+fn dual_vec_subsetof_f32_embedding() {
+    // f32 ⊂ DualVec<f32, N>.
+    let dv: DualVec32<3> = 1.25_f32.to_superset();
+    assert_eq!(dv.re, 1.25_f32);
+    assert!(dv.eps.iter().all(|&e| e == 0.0));
+    assert_eq!(
+        <f32 as SubsetOf<DualVec32<3>>>::from_superset_unchecked(&dv),
+        1.25_f32
+    );
+
+    let with_tangent = DualVec32::<3>::new(1.25, [1.0, 0.0, 0.0]);
+    assert!(<f32 as SubsetOf<DualVec32<3>>>::is_in_subset(&dv));
+    assert!(!<f32 as SubsetOf<DualVec32<3>>>::is_in_subset(
+        &with_tangent
+    ));
+}
+
+#[test]
+fn dual_vec_subsetof_cross_precision() {
+    // f32 ⊂ DualVec<f64, N> — widening is always lossless.
+    let widened: DualVec64<3> = 0.1_f32.to_superset();
+    assert_eq!(widened.re, 0.1_f32 as f64);
+    assert!(widened.eps.iter().all(|&e| e == 0.0));
+    assert_eq!(
+        <f32 as SubsetOf<DualVec64<3>>>::from_superset_unchecked(&widened),
+        0.1_f32
+    );
+    assert!(<f32 as SubsetOf<DualVec64<3>>>::is_in_subset(&widened));
+    let dv64_with_tangent = DualVec64::<3>::new(0.5, [1.0, 0.0, 0.0]);
+    assert!(!<f32 as SubsetOf<DualVec64<3>>>::is_in_subset(
+        &dv64_with_tangent
+    ));
+
+    // f64 ⊂ DualVec<f32, N> — narrowing is lossy (required by the SupersetOf<f64>
+    // bound on ComplexField). 0.1 is not f32-representable, so projecting back to
+    // f64 does not recover the original value.
+    let narrowed: DualVec32<3> = 0.1_f64.to_superset();
+    assert_eq!(narrowed.re, 0.1_f64 as f32);
+    assert!(narrowed.eps.iter().all(|&e| e == 0.0));
+    let back = <f64 as SubsetOf<DualVec32<3>>>::from_superset_unchecked(&narrowed);
+    assert_ne!(back, 0.1_f64);
+    assert_eq!(back, 0.1_f64 as f32 as f64);
+    assert!(<f64 as SubsetOf<DualVec32<3>>>::is_in_subset(&narrowed));
+    let dv32_with_tangent = DualVec32::<3>::new(0.5, [2.0, 0.0, 0.0]);
+    assert!(!<f64 as SubsetOf<DualVec32<3>>>::is_in_subset(
+        &dv32_with_tangent
+    ));
 }
