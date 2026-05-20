@@ -7,9 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.11.0] - 2026-05-20
 
-- **simba traits for DualVec**: implemented traits `SimdValue`, `PrimitiveSimdValue`, `SubsetOf`, `AbsDiffEq`, `RelativeEq`, `UlpsEq`, `Field`, `ComplexField`, `RealField` for `DualVec<F, N>`.
+**Coordinated release:** `echidna` 0.11.0 and `echidna-optim` 0.13.1.
+`echidna-optim`'s dep on `echidna` updated from `0.10.0` to `0.11.0`.
+
+Minor bump: adds new public API (simba trait implementations for
+`DualVec<F, N>`). No existing types changed and no numerical behaviour
+changed.
+
+### Added (echidna)
+
+- **simba traits for `DualVec<F, N>`**: implemented `SimdValue`,
+  `PrimitiveSimdValue`, `SubsetOf`, `AbsDiffEq`, `RelativeEq`, `UlpsEq`,
+  `Field`, `ComplexField`, and `RealField`, so `DualVec<F, N>` can be
+  used as a scalar type inside `nalgebra` matrices and solvers. The
+  implementations mirror the existing `Dual<F>` simba impls.
+
+### Changed (echidna-optim, 0.13.1)
+
+- `echidna` dep updated from `0.10.0` to `0.11.0` (follows the
+  coordinated release; `echidna-optim`'s public API is unchanged).
 
 ## [0.10.0] - 2026-04-24
 
