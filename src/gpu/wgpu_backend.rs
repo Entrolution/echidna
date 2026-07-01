@@ -562,6 +562,10 @@ impl GpuBackend for WgpuContext {
     fn upload_tape(&self, data: &GpuTapeData) -> WgpuTapeBuffers {
         use wgpu::util::DeviceExt;
 
+        if let Err(e) = data.validate() {
+            panic!("refusing to upload invalid GpuTapeData: {e}");
+        }
+
         let opcodes_buf = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

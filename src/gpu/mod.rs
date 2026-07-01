@@ -78,6 +78,13 @@ pub trait GpuBackend {
     ///
     /// The returned handle is used for all subsequent operations and holds
     /// GPU-resident buffers for the tape's opcodes, arguments, and constants.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `data` fails [`GpuTapeData::validate`]. The kernels index
+    /// device memory with these fields, so uploading invalid data would be
+    /// an out-of-bounds device access; data built by
+    /// [`GpuTapeData::from_tape`] from a valid tape always passes.
     fn upload_tape(&self, data: &GpuTapeData) -> Self::TapeBuffers;
 
     /// Number of declared outputs on the uploaded tape.
@@ -337,6 +344,136 @@ impl GpuTapeData {
         }
         let constants = tape.values_slice().iter().map(|&v| v as f32).collect();
         Ok(Self::build_from_tape(tape, constants))
+    }
+
+    /// Check the flattened tape against the invariants the GPU kernels
+    /// assume when indexing device buffers.
+    ///
+    /// Data produced by [`GpuTapeData::from_tape`] or
+    /// [`GpuTapeData::from_tape_f64_lossy`] from a valid tape always
+    /// passes. Hand-built data must pass before upload: the CUDA kernels
+    /// index raw device memory with these fields, so an out-of-range
+    /// operand or output index is an out-of-bounds device read or write
+    /// (the reverse sweep accumulates into `adjoints[arg1]` for every
+    /// non-`Powi` op whose second slot is not `UNUSED`, so even a unary
+    /// op with a stray second index writes out of bounds).
+    pub fn validate(&self) -> Result<(), GpuError> {
+        fn err<T>(msg: String) -> Result<T, GpuError> {
+            Err(GpuError::Other(format!("invalid GpuTapeData: {msg}")))
+        }
+        const OP_INPUT: u32 = 0;
+        const OP_CONST: u32 = 1;
+        const OP_ADD: u32 = 2;
+        const OP_MIN: u32 = 11;
+        const OP_POWI: u32 = 16;
+        const OP_FRACT: u32 = 42;
+        const UNUSED: u32 = u32::MAX;
+        // These mirror `OpCode`'s discriminants (as do the OP_* tables in
+        // the WGSL/CUDA kernels). Inserting an opcode mid-enum shifts every
+        // later discriminant; fail the build rather than misclassify.
+        // Neg (12) pins that 2..=11 is exactly the binary range, and
+        // Custom (43) that `> OP_FRACT` rejects exactly Custom and beyond.
+        const _: () = assert!(
+            OpCode::Input as u32 == OP_INPUT
+                && OpCode::Const as u32 == OP_CONST
+                && OpCode::Add as u32 == OP_ADD
+                && OpCode::Min as u32 == OP_MIN
+                && OpCode::Neg as u32 == OP_MIN + 1
+                && OpCode::Powi as u32 == OP_POWI
+                && OpCode::Fract as u32 == OP_FRACT
+                && OpCode::Custom as u32 == OP_FRACT + 1
+        );
+
+        let n = self.num_ops as usize;
+        if self.opcodes.len() != n {
+            return err(format!(
+                "opcodes.len() ({}) != num_ops ({n})",
+                self.opcodes.len()
+            ));
+        }
+        if self.arg0.len() != n {
+            return err(format!("arg0.len() ({}) != num_ops ({n})", self.arg0.len()));
+        }
+        if self.arg1.len() != n {
+            return err(format!("arg1.len() ({}) != num_ops ({n})", self.arg1.len()));
+        }
+        if self.num_ops != self.num_variables {
+            return err(format!(
+                "num_ops ({}) != num_variables ({})",
+                self.num_ops, self.num_variables
+            ));
+        }
+        if self.constants.len() != self.num_variables as usize {
+            return err(format!(
+                "constants.len() ({}) != num_variables ({})",
+                self.constants.len(),
+                self.num_variables
+            ));
+        }
+        if self.num_inputs > self.num_variables {
+            return err(format!(
+                "num_inputs ({}) > num_variables ({})",
+                self.num_inputs, self.num_variables
+            ));
+        }
+        let ni = self.num_inputs as usize;
+        for (i, &op) in self.opcodes.iter().enumerate() {
+            if op > OP_FRACT {
+                return err(format!(
+                    "opcodes[{i}] ({op}) is not a GPU-executable opcode"
+                ));
+            }
+            if (op == OP_INPUT) != (i < ni) {
+                return if i < ni {
+                    err(format!("opcodes[{i}] ({op}) should be Input"))
+                } else {
+                    err(format!(
+                        "opcodes[{i}] is Input, but only the first {ni} entries may be inputs"
+                    ))
+                };
+            }
+        }
+        // Input entries carry UNUSED in both arg slots; the prefix is
+        // covered by the biconditional above, so arg checks start after it.
+        for i in ni..n {
+            let op = self.opcodes[i];
+            if op == OP_CONST {
+                continue;
+            }
+            let a = self.arg0[i];
+            if a as usize >= i {
+                return err(format!("arg0[{i}] ({a}) must reference an earlier slot"));
+            }
+            let b = self.arg1[i];
+            if op == OP_POWI {
+                // arg1 holds the exponent's bit pattern, not an index.
+                continue;
+            }
+            if (OP_ADD..=OP_MIN).contains(&op) {
+                if b as usize >= i {
+                    return err(format!("arg1[{i}] ({b}) must reference an earlier slot"));
+                }
+            } else if b != UNUSED {
+                return err(format!(
+                    "arg1[{i}] ({b}) should be the UNUSED sentinel for unary opcode {op}"
+                ));
+            }
+        }
+        if self.output_index >= self.num_variables {
+            return err(format!(
+                "output_index ({}) >= num_variables ({})",
+                self.output_index, self.num_variables
+            ));
+        }
+        for (j, &oi) in self.output_indices.iter().enumerate() {
+            if oi >= self.num_variables {
+                return err(format!(
+                    "output_indices[{j}] ({oi}) >= num_variables ({})",
+                    self.num_variables
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -182,6 +182,109 @@ fn regression_26_malformed_tape_deserialization_returns_error() {
     );
 }
 
+// ── Corrupt-payload rejection ──
+//
+// A deserialized tape is the one place tape data crosses a trust boundary:
+// the bytes may be truncated, tampered with, or produced by a buggy writer.
+// Each test below serializes a real tape to a `serde_json::Value`, applies
+// one targeted corruption, and asserts deserialization returns a clean
+// error (never a panic, never a silently-wrong tape).
+
+fn tape_value() -> serde_json::Value {
+    let x = [1.5_f64, 2.5];
+    let (tape, _) = record(rosenbrock, &x);
+    serde_json::to_value(&tape).unwrap()
+}
+
+/// Like `tape_value`, but the recorded function contains a unary op (`sin`).
+fn tape_value_with_unary() -> (serde_json::Value, usize) {
+    use num_traits::Float;
+    let x = [0.5_f64, 1.0];
+    let (tape, _) = record(|v| (v[0] * v[0]).sin() + v[1], &x);
+    let v = serde_json::to_value(&tape).unwrap();
+    let sin_pos = v["opcodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|op| op == "Sin")
+        .expect("recorded tape should contain a Sin opcode");
+    (v, sin_pos)
+}
+
+/// Index of the last non-Input/non-Const opcode (a real operation).
+fn last_real_op(v: &serde_json::Value) -> usize {
+    v["opcodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rposition(|op| op != "Input" && op != "Const")
+        .expect("tape should contain at least one real op")
+}
+
+fn assert_rejected(v: serde_json::Value, what: &str) {
+    let r: Result<echidna::BytecodeTape<f64>, _> = serde_json::from_value(v);
+    assert!(r.is_err(), "{what}: corrupt payload deserialized Ok");
+}
+
+#[test]
+fn corrupt_payload_baseline_roundtrips() {
+    let v = tape_value();
+    let r: Result<echidna::BytecodeTape<f64>, _> = serde_json::from_value(v);
+    assert!(r.is_ok(), "unmutated payload must still deserialize");
+}
+
+#[test]
+fn deserialize_rejects_input_opcode_after_prefix() {
+    let mut v = tape_value();
+    let last = last_real_op(&v);
+    v["opcodes"][last] = serde_json::Value::from("Input");
+    assert_rejected(v, "Input opcode past the num_inputs prefix");
+}
+
+#[test]
+fn deserialize_rejects_unset_output_index_sentinel() {
+    let mut v = tape_value();
+    v["output_index"] = serde_json::Value::from(u32::MAX);
+    assert_rejected(v, "output_index = u32::MAX sentinel");
+}
+
+#[test]
+fn deserialize_rejects_forward_referencing_arg() {
+    let mut v = tape_value();
+    let last = last_real_op(&v);
+    // Self-reference: still < num_variables, so only a DAG-order check
+    // catches it. Evaluating such a tape reads an uncomputed slot.
+    v["arg_indices"][last][0] = serde_json::Value::from(last as u32);
+    assert_rejected(v, "arg0 referencing a not-yet-computed slot");
+}
+
+#[test]
+fn deserialize_rejects_unary_with_arg1_index() {
+    let (mut v, sin_pos) = tape_value_with_unary();
+    // A unary op must carry the UNUSED sentinel in slot 1. A real index
+    // here makes the reverse sweep accumulate an adjoint into an
+    // unrelated slot.
+    v["arg_indices"][sin_pos][1] = serde_json::Value::from(0u32);
+    assert_rejected(v, "unary op with a real index in arg slot 1");
+}
+
+#[test]
+fn deserialize_rejects_stale_custom_second_args() {
+    let mut v = tape_value();
+    v["custom_second_args"]["3"] = serde_json::Value::from(1u32);
+    assert_rejected(v, "non-empty custom_second_args without custom ops");
+}
+
+#[test]
+fn deserialize_rejects_mismatched_lengths_without_panic() {
+    // More arg_indices entries than opcodes: must be a clean error (this
+    // pins that no validation step indexes one array by another's length).
+    let mut v = tape_value();
+    let extra = serde_json::json!([0u32, 0u32]);
+    v["arg_indices"].as_array_mut().unwrap().push(extra);
+    assert_rejected(v, "arg_indices longer than opcodes");
+}
+
 #[test]
 fn roundtrip_nonsmooth_info() {
     use num_traits::Float;

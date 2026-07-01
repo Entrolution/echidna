@@ -492,6 +492,11 @@ impl CudaContext {
         if tape.has_custom_ops() {
             return Err(GpuError::CustomOpsNotSupported);
         }
+        // The f64 kernels index device memory with the tape's operand and
+        // output indices, so a structurally-invalid tape (e.g. one
+        // deserialized from tampered bytes) must be rejected before upload.
+        tape.validate()
+            .map_err(|e| GpuError::Other(format!("refusing to upload invalid tape: {e}")))?;
         let s = &self.stream;
         // SAFETY(u32 cast): OpCode is #[repr(u8)], so *op as u32 is lossless.
         let opcodes: Vec<u32> = tape.opcodes_slice().iter().map(|op| *op as u32).collect();
@@ -542,6 +547,9 @@ impl GpuBackend for CudaContext {
     /// preventing graceful error handling. Use `upload_tape_f64` for
     /// the `Result`-returning f64 variant.
     fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
+        if let Err(e) = data.validate() {
+            panic!("refusing to upload invalid GpuTapeData: {e}");
+        }
         let s = &self.stream;
         // Defensive fallback matching wgpu: single-output tapes set
         // `output_indices = []` and only populate `output_index`, but

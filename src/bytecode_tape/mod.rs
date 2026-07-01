@@ -39,6 +39,22 @@ pub use self::thread_local::{with_active_btape, BtapeGuard, BtapeThreadLocal};
 /// Sentinel index for constant entries (not tracked).
 pub const CONSTANT: u32 = u32::MAX;
 
+/// Error returned by [`BytecodeTape::validate`] describing a structural
+/// violation. When a tape has several violations, which one is reported
+/// is unspecified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TapeValidationError(String);
+
+impl std::fmt::Display for TapeValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid bytecode tape: {}", self.0)
+    }
+}
+
+impl std::error::Error for TapeValidationError {}
+
+crate::assert_send_sync!(TapeValidationError);
+
 /// Trait for user-registered custom operations on the bytecode tape.
 ///
 /// Operations are defined on `F` (the base float type). The tape automatically
@@ -478,6 +494,150 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
+    /// Check the tape's structural invariants.
+    ///
+    /// A well-formed tape — anything produced by [`crate::api::record`],
+    /// the `push_*` builders, or [`optimize`](Self::optimize) — always
+    /// passes. `Err` means the tape data was corrupted (most likely
+    /// deserialized from tampered or truncated bytes); evaluating such a
+    /// tape would panic on an out-of-bounds slot or silently produce
+    /// meaningless derivatives from uncomputed slots.
+    ///
+    /// Checked invariants:
+    /// - `opcodes`, `arg_indices`, and `values` each have exactly
+    ///   `num_variables` entries;
+    /// - the `Input` opcodes are exactly the first `num_inputs` entries;
+    /// - `output_index` and every entry of `output_indices` name a real
+    ///   tape slot;
+    /// - every operand index references a strictly earlier slot (the tape
+    ///   is stored in topological order), unary ops carry the `UNUSED`
+    ///   sentinel in their second slot, and custom-op callback indices
+    ///   are registered;
+    /// - `custom_second_args` keys name `Custom` ops and their values
+    ///   reference strictly earlier slots.
+    pub fn validate(&self) -> Result<(), TapeValidationError> {
+        fn err<T>(msg: String) -> Result<T, TapeValidationError> {
+            Err(TapeValidationError(msg))
+        }
+        let nv = self.num_variables as usize;
+        if self.opcodes.len() != nv {
+            return err(format!(
+                "opcodes.len() ({}) != num_variables ({nv})",
+                self.opcodes.len()
+            ));
+        }
+        if self.arg_indices.len() != nv {
+            return err(format!(
+                "arg_indices.len() ({}) != num_variables ({nv})",
+                self.arg_indices.len()
+            ));
+        }
+        if self.values.len() != nv {
+            return err(format!(
+                "values.len() ({}) != num_variables ({nv})",
+                self.values.len()
+            ));
+        }
+        let ni = self.num_inputs as usize;
+        if ni > nv {
+            return err(format!("num_inputs ({ni}) > num_variables ({nv})"));
+        }
+        for (i, &op) in self.opcodes.iter().enumerate() {
+            if (op == OpCode::Input) != (i < ni) {
+                return if i < ni {
+                    err(format!("opcodes[{i}] should be Input but is {op:?}"))
+                } else {
+                    err(format!(
+                        "opcodes[{i}] is Input, but only the first {ni} entries may be inputs"
+                    ))
+                };
+            }
+        }
+        if self.output_index as usize >= nv {
+            return err(format!(
+                "output_index ({}) >= num_variables ({nv})",
+                self.output_index
+            ));
+        }
+        for (j, &oi) in self.output_indices.iter().enumerate() {
+            if oi as usize >= nv {
+                return err(format!(
+                    "output_indices[{j}] ({oi}) >= num_variables ({nv})"
+                ));
+            }
+        }
+        for i in ni..nv {
+            let op = self.opcodes[i];
+            if op == OpCode::Const {
+                continue;
+            }
+            let [a, b] = self.arg_indices[i];
+            if a as usize >= i {
+                return err(format!(
+                    "arg_indices[{i}][0] ({a}) must reference an earlier slot"
+                ));
+            }
+            match op {
+                // The second slot holds the exponent's bit pattern, not an
+                // index (a negative exponent can collide with UNUSED).
+                OpCode::Powi => {}
+                // The second slot holds the callback index for both unary
+                // and binary custom ops.
+                OpCode::Custom => {
+                    if b as usize >= self.custom_ops.len() {
+                        return err(format!(
+                            "arg_indices[{i}][1] ({b}) is not a registered custom-op callback"
+                        ));
+                    }
+                }
+                OpCode::Add
+                | OpCode::Sub
+                | OpCode::Mul
+                | OpCode::Div
+                | OpCode::Rem
+                | OpCode::Powf
+                | OpCode::Atan2
+                | OpCode::Hypot
+                | OpCode::Max
+                | OpCode::Min => {
+                    if b as usize >= i {
+                        return err(format!(
+                            "arg_indices[{i}][1] ({b}) must reference an earlier slot"
+                        ));
+                    }
+                }
+                // Every remaining op is unary. A future binary opcode must
+                // be added to the explicit binary arm above, or valid tapes
+                // recording it will be rejected here.
+                _ => {
+                    if b != UNUSED {
+                        return err(format!(
+                            "arg_indices[{i}][1] ({b}) should be UNUSED for unary op {op:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        for (&k, &v) in &self.custom_second_args {
+            if k as usize >= nv {
+                return err(format!(
+                    "custom_second_args key {k} >= num_variables ({nv})"
+                ));
+            }
+            if self.opcodes[k as usize] != OpCode::Custom {
+                return err(format!(
+                    "custom_second_args key {k} does not reference a Custom op"
+                ));
+            }
+            if v >= k {
+                return err(format!(
+                    "custom_second_args[{k}] ({v}) must reference an earlier slot"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     // ── GPU accessor methods ──
 
     /// Slice view of all opcodes in the tape.
@@ -519,5 +679,163 @@ impl<F: Float> BytecodeTape<F> {
 impl<F: Float> Default for BytecodeTape<F> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    /// Hand-built valid tape: `f(x) = x * 3` as [Input, Const, Mul(0, 1)].
+    fn tiny() -> BytecodeTape<f64> {
+        BytecodeTape {
+            opcodes: vec![OpCode::Input, OpCode::Const, OpCode::Mul],
+            arg_indices: vec![[UNUSED, UNUSED], [UNUSED, UNUSED], [0, 1]],
+            values: vec![2.0, 3.0, 6.0],
+            num_inputs: 1,
+            num_variables: 3,
+            output_index: 2,
+            output_indices: Vec::new(),
+            custom_ops: Vec::new(),
+            custom_second_args: HashMap::new(),
+        }
+    }
+
+    fn assert_rejected(tape: &BytecodeTape<f64>, what: &str) {
+        assert!(tape.validate().is_err(), "{what} should fail validation");
+    }
+
+    #[test]
+    fn hand_built_tape_passes() {
+        tiny().validate().unwrap();
+    }
+
+    #[test]
+    fn recorded_and_optimized_tapes_pass() {
+        let (mut tape, _) = crate::api::record(
+            |v: &[crate::breverse::BReverse<f64>]| v[0] * v[0] + v[1] * v[0],
+            &[1.5, 2.5],
+        );
+        tape.validate().unwrap();
+        tape.optimize();
+        tape.validate().unwrap();
+    }
+
+    #[test]
+    fn live_custom_op_tape_passes() {
+        struct Scale;
+        impl CustomOp<f64> for Scale {
+            fn eval(&self, a: f64, b: f64) -> f64 {
+                a * b
+            }
+            fn partials(&self, a: f64, b: f64, _r: f64) -> (f64, f64) {
+                (b, a)
+            }
+        }
+        let mut tape = BytecodeTape::<f64>::new();
+        let h = tape.register_custom(Arc::new(Scale));
+        let x = tape.new_input(2.0);
+        let c = tape.push_const(3.0);
+        let bin = tape.push_custom_binary(x, c, h, 6.0);
+        let una = tape.push_custom_unary(bin, h, 6.0);
+        tape.set_output(una);
+        tape.validate().unwrap();
+    }
+
+    #[test]
+    fn negative_powi_exponent_is_not_an_index() {
+        // powi(-1) encodes its exponent as 0xFFFFFFFF — the same bits as
+        // UNUSED — and powi(-3) as another huge u32. Neither is an index.
+        for exp in [-1_i32, -3] {
+            let mut tape = tiny();
+            tape.opcodes[2] = OpCode::Powi;
+            tape.arg_indices[2] = [0, opcode::powi_exp_encode(exp)];
+            tape.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_length_mismatches() {
+        let mut tape = tiny();
+        tape.opcodes.pop();
+        assert_rejected(&tape, "short opcodes");
+
+        let mut tape = tiny();
+        tape.arg_indices.push([0, 0]);
+        assert_rejected(&tape, "long arg_indices");
+
+        let mut tape = tiny();
+        tape.values.pop();
+        assert_rejected(&tape, "short values");
+
+        let mut tape = tiny();
+        tape.num_inputs = 4;
+        assert_rejected(&tape, "num_inputs > num_variables");
+    }
+
+    #[test]
+    fn rejects_input_prefix_violations() {
+        let mut tape = tiny();
+        tape.opcodes[2] = OpCode::Input;
+        assert_rejected(&tape, "Input past the prefix");
+
+        let mut tape = tiny();
+        tape.opcodes[0] = OpCode::Const;
+        assert_rejected(&tape, "non-Input inside the prefix");
+    }
+
+    #[test]
+    fn rejects_out_of_range_outputs() {
+        let mut tape = tiny();
+        tape.output_index = 3;
+        assert_rejected(&tape, "output_index == num_variables");
+
+        let mut tape = tiny();
+        tape.output_index = u32::MAX;
+        assert_rejected(&tape, "output_index sentinel");
+
+        let mut tape = tiny();
+        tape.output_indices = vec![2, 7];
+        assert_rejected(&tape, "output_indices entry out of range");
+    }
+
+    #[test]
+    fn rejects_non_topological_args() {
+        let mut tape = tiny();
+        tape.arg_indices[2][0] = 2;
+        assert_rejected(&tape, "self-referencing arg0");
+
+        let mut tape = tiny();
+        tape.arg_indices[2][1] = 2;
+        assert_rejected(&tape, "self-referencing arg1");
+    }
+
+    #[test]
+    fn rejects_unary_with_index_in_arg1() {
+        let mut tape = tiny();
+        tape.opcodes[2] = OpCode::Sin;
+        tape.arg_indices[2] = [0, 1];
+        assert_rejected(&tape, "unary op with a real index in slot 1");
+    }
+
+    #[test]
+    fn rejects_unregistered_custom_callback() {
+        let mut tape = tiny();
+        tape.opcodes[2] = OpCode::Custom;
+        tape.arg_indices[2] = [0, 0]; // callback 0, but custom_ops is empty
+        assert_rejected(&tape, "custom op without a registered callback");
+    }
+
+    #[test]
+    fn rejects_bad_custom_second_args() {
+        // Out-of-range key must be a clean error, not a panic inside
+        // validate() itself.
+        let mut tape = tiny();
+        tape.custom_second_args.insert(99, 0);
+        assert_rejected(&tape, "side-table key out of range");
+
+        let mut tape = tiny();
+        tape.custom_second_args.insert(2, 0); // slot 2 is Mul, not Custom
+        assert_rejected(&tape, "side-table key naming a non-Custom op");
     }
 }
