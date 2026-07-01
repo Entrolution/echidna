@@ -148,6 +148,17 @@ fn build_powf() -> (BytecodeTape<f64>, f64) {
         &[2.0],
     )
 }
+fn build_powf_int() -> (BytecodeTape<f64>, f64) {
+    // `powf` with a constant *integer* exponent. BReverse records `OpCode::Powf`
+    // (no integer lowering), so this exercises the Powf path — including the
+    // negative-base case, where `x^3` is finite (x<0 is only valid at integer
+    // exponents). WGSL `pow(x<0, y)` is undefined, so this is the regression
+    // guard for the negative-base fix.
+    record(
+        |v: &[BReverse<f64>]| v[0].powf(BReverse::constant(3.0)),
+        &[2.0],
+    )
+}
 fn build_hypot() -> (BytecodeTape<f64>, f64) {
     record(|v: &[BReverse<f64>]| v[0].hypot(v[1]), &[3.0, 4.0])
 }
@@ -442,7 +453,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "powi",
         n_inputs: 1,
         build: build_powi,
-        points: &[&[2.0], &[-3.0], &[0.5]],
+        // Includes negative and zero bases: (-3)^3 = -27, 0^3 = 0.
+        points: &[&[2.0], &[-3.0], &[0.5], &[0.0]],
         f32_ulp: 8,
         f64_ulp: 8,
     },
@@ -452,6 +464,16 @@ const PARITY_CASES: &[ParityCase] = &[
         build: build_powf,
         points: &[&[2.0], &[0.5], &[10.0]],
         f32_ulp: 32,
+        f64_ulp: 16,
+    },
+    ParityCase {
+        name: "powf_int",
+        n_inputs: 1,
+        // Negative base with integer exponent: (-2)^3 = -8, (-3)^3 = -27,
+        // 0^3 = 0. Value and gradient must be finite and match CPU.
+        build: build_powf_int,
+        points: &[&[2.0], &[-2.0], &[-3.0], &[0.0]],
+        f32_ulp: 16,
         f64_ulp: 16,
     },
     // Remainder.

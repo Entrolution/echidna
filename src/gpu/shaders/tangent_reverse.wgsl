@@ -95,6 +95,19 @@ struct TapeMeta {
 fn sinh_f(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
 fn cosh_f(x: f32) -> f32 { return (exp(x) + exp(-x)) * 0.5; }
 
+fn powf_real(base: f32, b: f32) -> f32 {
+    // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
+    // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
+    // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
+    // non-integer exponent at a negative base is NaN — the same as on CPU.
+    if base >= 0.0 { return pow(base, b); }
+    let rb = round(b);
+    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 { return -mag; }
+    return mag;
+}
+
 // Precision-preserving EXPM1 / LN1P primals for small |x|, matching
 // forward.wgsl helpers. `exp(x) - 1` and `log(1 + x)` cancel
 // catastrophically as x → 0; the Taylor-series shortcut avoids that.
@@ -146,7 +159,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 4u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a*b; rt=b*at+a*bt; }
             case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-a*inv*inv*bt; }
             case 6u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=a-trunc(a/b)*b; rt=at-trunc(a/b)*bt; }
-            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=pow(a,b); let dx=select(b*r/a*at, b*pow(a,b-1.0)*at, a==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0); rt=dx+dy; }
+            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0); rt=dx+dy; }
             case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let mx=max(abs(a),abs(b)); if mx==0.0 {rt=0.0;} else {let au=a/mx; let bu=b/mx; let d=mx*(au*au+bu*bu); rt=(bu*at-au*bt)/d;} }
             case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=sqrt(a*a+b*b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
             case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a>=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
@@ -155,7 +168,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 13u: { r=1.0/a; rt=-at/(a*a); }
             case 14u: { r=sqrt(a); rt=at/(2.0*r); }
             case 15u: { let s=sign(a); r=s*pow(abs(a),1.0/3.0); rt=at/(3.0*r*r); }
-            case 16u: { let e=bitcast<i32>(bi); let n=f32(e); r=pow(a,n); rt=select(n*pow(a,n-1.0)*at, 0.0, e==0); }
+            case 16u: { let e=bitcast<i32>(bi); let n=f32(e); r=powf_real(a,n); rt=select(n*powf_real(a,n-1.0)*at, 0.0, e==0); }
             case 17u: { r=exp(a); rt=r*at; }
             case 18u: { r=exp2(a); rt=r*log(2.0)*at; }
             case 19u: { r=expm1_f32(a); rt=(r+1.0)*at; }
@@ -251,13 +264,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 7u /* POWF */: {
                 let b=primals[base+bi]; let bt=tans[base+bi];
-                let ab1 = pow(a, b-1.0);
+                let ab1 = powf_real(a, b-1.0);
                 da_re = b * ab1;
-                // For a <= 0, `log(a)` is NaN. Finite `r` at a < 0 implies b
-                // was integer; the classical derivative w.r.t. b is undefined
-                // there, convention is 0 — mirrors CPU OpCode::Powf safety net.
+                // For a <= 0, only the exponent-direction sub-term `log(a)*bt`
+                // is NaN (log of a negative). Drop just that term — the
+                // second-order ∂²/∂a² contribution `b*(b-1)*a^(b-2)*at` is
+                // finite (a < 0 is reachable only at integer b) and must be
+                // kept; hard-zeroing all of da_eps silently drops the Hessian.
                 if a <= 0.0 {
-                    da_eps = 0.0;
+                    da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at);
                 } else {
                     da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at + log(a)*bt);
                 }
@@ -334,7 +349,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // derivative. Mirrors the CUDA fix in tape_eval.cu.
                     da_re=1.0; da_eps=0.0;
                 } else {
-                    let n=f32(e); da_re=n*pow(a,n-1.0); da_eps=n*(n-1.0)*pow(a,n-2.0)*at;
+                    let n=f32(e); da_re=n*powf_real(a,n-1.0); da_eps=n*(n-1.0)*powf_real(a,n-2.0)*at;
                 }
             }
             case 17u /* EXP */: { da_re=r; da_eps=r*at; }

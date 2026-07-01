@@ -89,6 +89,19 @@ struct TapeMeta {
 fn sinh_f(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
 fn cosh_f(x: f32) -> f32 { return (exp(x) + exp(-x)) * 0.5; }
 
+fn powf_real(base: f32, b: f32) -> f32 {
+    // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
+    // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
+    // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
+    // non-integer exponent at a negative base is NaN — the same as on CPU.
+    if base >= 0.0 { return pow(base, b); }
+    let rb = round(b);
+    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 { return -mag; }
+    return mag;
+}
+
 // Precision-preserving EXPM1 / LN1P primals for small |x|, matching
 // forward.wgsl helpers. `exp(x) - 1` and `log(1 + x)` cancel
 // catastrophically as x → 0; the Taylor-series shortcut avoids that.
@@ -198,10 +211,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 7u /* POWF */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
-                r = pow(a, b);
+                r = powf_real(a, b);
                 // Guard: at a=0, b/a and log(a) are undefined; split dx/dy
-                let dx = select(b * r / a * at, b * pow(a, b - 1.0) * at, a == 0.0);
-                let dy = select(r * log(a) * bt, 0.0, r == 0.0);
+                let dx = select(b * r / a * at, b * powf_real(a, b - 1.0) * at, a == 0.0);
+                // db = a^b * ln(a). For a <= 0, ln(a) is NaN and `NaN * 0 = NaN`
+                // would poison rt even when bt = 0; the convention (matching the
+                // CPU `OpCode::Powf`) is db = 0 for a <= 0.
+                let dy = select(r * log(a) * bt, 0.0, r == 0.0 || a <= 0.0);
                 rt = dx + dy;
             }
             case 8u /* ATAN2 */: {
@@ -259,8 +275,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 16u /* POWI */: {
                 let exp = bitcast<i32>(b_idx);
                 let n = f32(exp);
-                r = pow(a, n);
-                rt = select(n * pow(a, n - 1.0) * at, 0.0, exp == 0);
+                r = powf_real(a, n);
+                rt = select(n * powf_real(a, n - 1.0) * at, 0.0, exp == 0);
             }
             case 17u /* EXP */: { r = exp(a); rt = r * at; }
             case 18u /* EXP2 */: { r = exp2(a); rt = r * log(2.0) * at; }

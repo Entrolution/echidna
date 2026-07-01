@@ -164,10 +164,23 @@ fn signum_f32(x: f32) -> f32 {
     return 1.0;
 }
 
+fn powf_real(base: f32, b: f32) -> f32 {
+    // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
+    // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
+    // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
+    // non-integer exponent at a negative base is NaN — the same as on CPU.
+    if base >= 0.0 { return pow(base, b); }
+    let rb = round(b);
+    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 { return -mag; }
+    return mag;
+}
+
 fn powi_f32(base: f32, exp_bits: u32) -> f32 {
     // The exponent is stored as i32 reinterpreted as u32.
     let n = bitcast<i32>(exp_bits);
-    return pow(base, f32(n));
+    return powf_real(base, f32(n));
 }
 
 // ── Main kernel ──
@@ -224,7 +237,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 4u /* MUL */: { r = a * b; }
             case 5u /* DIV */: { r = a / b; }
             case 6u /* REM */: { r = rem_f32(a, b); }
-            case 7u /* POWF */: { r = pow(a, b); }
+            case 7u /* POWF */: { r = powf_real(a, b); }
             case 8u /* ATAN2 */: { r = atan2(a, b); }
             case 9u /* HYPOT */: { r = hypot_f32(a, b); }
             case 10u /* MAX */: { r = max(a, b); }

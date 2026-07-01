@@ -171,6 +171,16 @@ fn cosh_f(x: f32) -> f32 {{ return (exp(x) + exp(-x)) * 0.5; }}
 fn asinh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x + 1.0)); }}
 fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
 fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
+fn powf_real(base: f32, b: f32) -> f32 {{
+    // WGSL `pow(x, y)` is undefined for x < 0. Rust/C `powf` define x^y for
+    // x < 0 only at integer y: sign(x)^y * |x|^y; non-integer y is NaN.
+    if base >= 0.0 {{ return pow(base, b); }}
+    let rb = round(b);
+    if rb != b {{ return bitcast<f32>(0x7fc00000u); }}
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 {{ return -mag; }}
+    return mag;
+}}
 "
     )
     .unwrap();
@@ -1063,7 +1073,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     for i in 0..k {
         writeln!(s, "                    r.v[{i}] = sf * e.v[{i}];").unwrap();
     }
-    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
+    // `sf * e.v[0]` already gives the correct primal a^n for a < 0; overriding
+    // with WGSL `pow(a.v[0], n)` clobbers it to NaN (WGSL `pow` is undefined
+    // for a negative base). `powf_real` keeps the native-pow accuracy for the
+    // positive-magnitude computation while restoring the sign.
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], n);").unwrap();
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
     writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
