@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (echidna)
+
+- GPU power operations (`powi`, and `powf` with an integer exponent) at a
+  negative base silently produced NaN values and gradients on the wgpu
+  backend — WGSL `pow(x, y)` is undefined for `x < 0`. All WGSL shader
+  sites now route through a sign-correcting helper, the tangent kernel
+  keeps the finite second-order term for negative bases, and the
+  generated Taylor kernels route constant integer exponents through the
+  integer-power jet on both backends (previously NaN for coefficients of
+  order ≥ 2 even on CUDA).
+- Deserializing a `BytecodeTape` now fully validates the payload via the
+  new `BytecodeTape::validate` (also exported, with
+  `TapeValidationError`): extra `Input` opcodes, out-of-range or sentinel
+  output indices, forward-referencing operand indices, and stale
+  `custom_second_args` entries are rejected with a clean error instead of
+  panicking — or silently producing wrong derivatives from uncomputed
+  slots — at evaluation time.
+- `GpuTapeData` is validated at upload via the new
+  `GpuTapeData::validate`: an out-of-range operand or output index in
+  hand-built data would index raw device memory out of bounds on CUDA.
+  Both backends' `upload_tape` now panic with a clear message
+  (documented on the trait), and the CUDA f64 upload path returns an
+  error instead.
+- `grad_checkpointed_disk` isolates each invocation's checkpoint files in
+  a uniquely-named subdirectory. Concurrent or nested computations
+  sharing one scratch directory previously overwrote — and deleted
+  during cleanup — each other's checkpoints, producing silently wrong
+  gradients or panics. Checkpoint files are also registered with the
+  cleanup guard before being written, so a panic mid-write cannot leak
+  them.
+
+### Fixed (echidna-optim)
+
+- `piggyback_tangent_solve` now requires both the primal and the tangent
+  iterates to converge before returning. The tangent starts at zero and
+  converges on its own schedule, so a warm-started primal previously
+  returned a truncated Neumann sum — a silently unconverged JVP (with
+  `z0 = z*` it returned after one iteration with `G_x·ẋ` instead of
+  `(I − G_z)⁻¹·G_x·ẋ`). Reaching `max_iter` with a converged primal but
+  unconverged tangent now reports `IterationsExhaustedTangent` (whose
+  `z_norm` can therefore be at or below `tol`; see its documentation).
+
 ## [0.11.0] - 2026-05-20
 
 **Coordinated release:** `echidna` 0.11.0 and `echidna-optim` 0.13.1.
