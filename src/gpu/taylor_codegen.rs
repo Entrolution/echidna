@@ -601,6 +601,70 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     writeln!(s, "    return c;\n}}\n").unwrap();
 }
 
+/// Emit the WGSL Taylor-jet integer-power computation, mirroring CPU
+/// `taylor_powi`: sets `r = a^exponent`, handling zero and negative bases
+/// (which WGSL `pow` cannot). `n_expr` is an f32 exponent expression and
+/// `ni_expr` its i32 form. Shared by the POWI opcode and the constant-
+/// integer-exponent POWF path so the two cannot drift.
+fn write_wgsl_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
+    writeln!(s, "                let n = {n_expr};").unwrap();
+    writeln!(s, "                let ni = {ni_expr};").unwrap();
+    writeln!(s, "                if n == 0.0 {{ r = jet_const(1.0); }}").unwrap();
+    writeln!(s, "                else if n == 1.0 {{ r = a; }}").unwrap();
+    // a.v[0] == 0 with small |n|: repeated squaring preserves the higher-order
+    // Taylor coefficients (the log|a| = log(0) = -inf path below poisons them
+    // with NaN). Chain matches CPU `taylor_powi_squaring`.
+    writeln!(
+        s,
+        "                else if a.v[0] == 0.0 && ni == 2 {{ r = jet_mul(a, a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "                else if a.v[0] == 0.0 && ni == 3 {{ r = jet_mul(jet_mul(a, a), a); }}"
+    )
+    .unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 4 {{ let a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 5 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 6 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 7 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 8 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}").unwrap();
+    // Negative base (a.v[0] < 0) or a.v[0] == 0 with |n| > 8: sign(a)^n * |a|^n.
+    writeln!(s, "                else if a.v[0] <= 0.0 {{").unwrap();
+    writeln!(
+        s,
+        "                    let sf = select(1.0, -1.0, ni % 2 != 0);"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "                    let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);"
+    )
+    .unwrap();
+    writeln!(s, "                    var abs_a: JetK;").unwrap();
+    writeln!(s, "                    abs_a.v[0] = abs(a.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+    }
+    writeln!(
+        s,
+        "                    let e = jet_exp(jet_scale(jet_ln(abs_a), n));"
+    )
+    .unwrap();
+    for i in 0..k {
+        writeln!(s, "                    r.v[{i}] = sf * e.v[{i}];").unwrap();
+    }
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], n);").unwrap();
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(
+        s,
+        "                    r = jet_exp(jet_scale(jet_ln(a), n));"
+    )
+    .unwrap();
+    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "                }}").unwrap();
+}
+
 fn write_wgsl_main_kernel(s: &mut String, k: usize) {
     writeln!(
         s,
@@ -676,19 +740,31 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     }
     writeln!(s, "            }}").unwrap();
 
-    // POWF — guard a<=0 (ln(a) is NaN/Inf)
+    // POWF — a constant integer exponent (in i32 range) is routed to the powi
+    // jet, which is finite for any base (a<0 is well-defined at integer
+    // powers), mirroring CPU `taylor_powf`. A non-integer or variable exponent
+    // at a<=0 is genuinely NaN.
     writeln!(s, "            case 7u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
-    writeln!(s, "                if a.v[0] <= 0.0 {{").unwrap();
+    // `< 2^31` (not `<= i32::MAX`): 2147483647.0 rounds up to 2^31 in f32, so
+    // the `<=` form would admit 2^31 and overflow the `i32(..)` cast below.
+    let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && abs(b.v[0]) < 2147483648.0");
+    for i in 1..k {
+        b_int_cond.push_str(&format!(" && b.v[{i}] == 0.0"));
+    }
+    writeln!(s, "                let b_is_int = {b_int_cond};").unwrap();
+    writeln!(s, "                if b_is_int {{").unwrap();
+    write_wgsl_powi_jet(s, k, "b.v[0]", "i32(b.v[0])");
+    writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
         s,
         "                    let da = b.v[0] * pow(a.v[0], b.v[0] - 1.0);"
     )
     .unwrap();
-    // CPU OpCode::Powf sets db = 0 for a ≤ 0 (finite r at a < 0 means b was
-    // integer; classical db at integer b is undefined, convention is 0).
-    // Any db from log(|a|) would diverge from the CPU.
+    // Reached only for a non-integer or variable exponent at a <= 0, where
+    // a^b is genuinely NaN (real result undefined) — the constant-integer
+    // case was routed to the powi jet above. db = 0 matches CPU OpCode::Powf.
     writeln!(s, "                    let db = 0.0;").unwrap();
     writeln!(s, "                    r.v[0] = val;").unwrap();
     if k > 1 {
@@ -1001,89 +1077,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     // POWI — handle negative bases via sign(a)^n * exp(n * ln(|a|))
     writeln!(s, "            case 16u: {{").unwrap();
-    writeln!(s, "                let n = f32(bitcast<i32>(b_idx));").unwrap();
-    writeln!(s, "                let ni = bitcast<i32>(b_idx);").unwrap();
-    writeln!(s, "                if n == 0.0 {{").unwrap();
-    writeln!(s, "                    r = jet_const(1.0);").unwrap();
-    writeln!(s, "                }} else if n == 1.0 {{").unwrap();
-    writeln!(s, "                    r = a;").unwrap();
-    // a.v[0] == 0 with small |n| ≥ 2: use repeated jet multiplication to preserve
-    // higher-order Taylor coefficients (e.g., x^n at x=0 has the first nonzero
-    // coefficient at index n, which squaring reproduces correctly). The generic
-    // `a.v[0] <= 0.0` path below uses `log|a| = log(0) = -inf` and cannot
-    // represent these without poisoning all coefficients with NaN.
-    // Chain form matches CPU `taylor_powi_squaring`: a² := a·a, a³ := a²·a,
-    // a⁴ := a²·a², a⁵ := a⁴·a, a⁶ := a⁴·a², a⁷ := a⁴·a²·a, a⁸ := a⁴·a⁴.
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 2 {{").unwrap();
-    writeln!(s, "                    r = jet_mul(a, a);").unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 3 {{").unwrap();
-    writeln!(s, "                    r = jet_mul(jet_mul(a, a), a);").unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 4 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); r = jet_mul(a2, a2);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 5 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 6 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a2);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 7 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 8 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a4);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
-    writeln!(
-        s,
-        "                    let sf = select(1.0, -1.0, ni % 2 != 0);"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "                    let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);"
-    )
-    .unwrap();
-    write!(
-        s,
-        "                    var abs_a: JetK;\n                    abs_a.v[0] = abs(a.v[0]);\n"
-    )
-    .unwrap();
-    for i in 1..k {
-        writeln!(s, "                    abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
-    }
-    writeln!(s, "                    let lna = jet_ln(abs_a);").unwrap();
-    writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
-    writeln!(s, "                    let e = jet_exp(nlna);").unwrap();
-    for i in 0..k {
-        writeln!(s, "                    r.v[{i}] = sf * e.v[{i}];").unwrap();
-    }
-    // `sf * e.v[0]` already gives the correct primal a^n for a < 0; overriding
-    // with WGSL `pow(a.v[0], n)` clobbers it to NaN (WGSL `pow` is undefined
-    // for a negative base). `powf_real` keeps the native-pow accuracy for the
-    // positive-magnitude computation while restoring the sign.
-    writeln!(s, "                    r.v[0] = powf_real(a.v[0], n);").unwrap();
-    writeln!(s, "                }} else {{").unwrap();
-    writeln!(s, "                    let lna = jet_ln(a);").unwrap();
-    writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
-    writeln!(s, "                    r = jet_exp(nlna);").unwrap();
-    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
-    writeln!(s, "                }}").unwrap();
+    write_wgsl_powi_jet(s, k, "f32(bitcast<i32>(b_idx))", "bitcast<i32>(b_idx)");
     writeln!(s, "            }}").unwrap();
 
     // Transcendental unary
@@ -1648,6 +1642,60 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
     }
 }
 
+/// Emit the CUDA Taylor-jet integer-power computation, mirroring CPU
+/// `taylor_powi` (and the WGSL `write_wgsl_powi_jet`): sets `r = a^exponent`,
+/// handling zero and negative bases. `n_expr` is an F exponent expression and
+/// `ni_expr` its int form. Shared by the POWI opcode and the constant-integer-
+/// exponent POWF path so the two cannot drift.
+fn write_cuda_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
+    writeln!(s, "            int ni = {ni_expr};").unwrap();
+    writeln!(s, "            F n = {n_expr};").unwrap();
+    writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
+    writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
+    // a.v[0] == 0 with small |n|: repeated squaring preserves higher-order
+    // coefficients (the log|a| = log(0) = -inf path poisons them). Matches CPU
+    // `taylor_powi_squaring`.
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 2) {{ r = jet_mul(a, a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 3) {{ r = jet_mul(jet_mul(a, a), a); }}"
+    )
+    .unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 4) {{ JetK a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 5) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 6) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 7) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 8) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}").unwrap();
+    // Negative base (or a==0 with |n|>8): sign(a)^n * |a|^n. C `pow` handles a
+    // negative base at an integer exponent (Annex F), so r.v[0] stays native.
+    writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
+    writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
+    writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
+    writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+    }
+    writeln!(
+        s,
+        "                JetK e = jet_exp(jet_scale(jet_ln(abs_a), n));"
+    )
+    .unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = sf * e.v[{i}];").unwrap();
+    }
+    writeln!(s, "                r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(
+        s,
+        "            else {{ r = jet_exp(jet_scale(jet_ln(a), n)); r.v[0] = pow(a.v[0], n); }}"
+    )
+    .unwrap();
+}
+
 fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "extern \"C\" __global__ void taylor_forward_kth(").unwrap();
     writeln!(s, "    const unsigned int* __restrict__ opcodes,").unwrap();
@@ -1765,7 +1813,9 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // POWF — guard a<=0 (ln(a) is NaN/Inf)
+    // POWF — a constant integer exponent (in i32 range) is routed to the powi
+    // jet, finite for any base (a<0 is well-defined at integer powers),
+    // mirroring CPU `taylor_powf`. A non-integer/variable exponent at a<=0 is NaN.
     writeln!(s, "        case 7: {{").unwrap();
     writeln!(
         s,
@@ -1775,15 +1825,25 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     for c in 0..k {
         writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
     }
-    writeln!(s, "            if (a.v[0] <= F(0)) {{").unwrap();
+    // `< 2^31` (not `<= i32::MAX`): 2147483647 rounds up to 2^31 in f32, so the
+    // `<=` form would admit 2^31 and overflow the `(int)` cast below.
+    let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && fabs(b.v[0]) < F(2147483648.0)");
+    for i in 1..k {
+        b_int_cond.push_str(&format!(" && b.v[{i}] == F(0)"));
+    }
+    writeln!(s, "            bool b_is_int = {b_int_cond};").unwrap();
+    writeln!(s, "            if (b_is_int) {{").unwrap();
+    write_cuda_powi_jet(s, k, "b.v[0]", "(int)b.v[0]");
+    writeln!(s, "            }} else if (a.v[0] <= F(0)) {{").unwrap();
     writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
         s,
         "                F da = b.v[0] * pow(a.v[0], b.v[0] - F(1));"
     )
     .unwrap();
-    // CPU OpCode::Powf sets db = 0 for a ≤ 0 (finite val at a < 0 means b was
-    // integer; classical db at integer b is undefined, convention is 0).
+    // Reached only for a non-integer or variable exponent at a <= 0, where
+    // a^b is genuinely NaN — the constant-integer case is routed to the powi
+    // jet above. db = 0 matches CPU OpCode::Powf.
     writeln!(s, "                F db = F(0);").unwrap();
     writeln!(s, "                r.v[0] = val;").unwrap();
     if k > 1 {
@@ -2046,71 +2106,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // POWI — handle negative bases via sign(a)^n * exp(n * ln(|a|))
     writeln!(s, "        case 16: {{").unwrap();
-    writeln!(s, "            int ni = (int)b_idx;").unwrap();
-    writeln!(s, "            F n = (F)ni;").unwrap();
-    writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
-    writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
-    // a.v[0] == 0 with small |n| ≥ 2: use repeated jet_mul to preserve
-    // higher-order Taylor coefficients. The `log|a| = log(0) = -inf` path
-    // below poisons all coefficients with NaN at a = 0, so explicit squaring
-    // for |n| ∈ {2,…,8} is required to match CPU `taylor_powi_squaring`.
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 2) {{ r = jet_mul(a, a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 3) {{ r = jet_mul(jet_mul(a, a), a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 4) {{ JetK a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 5) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 6) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 7) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 8) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}"
-    )
-    .unwrap();
-    writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
-    writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
-    writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
-    writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
-    for i in 1..k {
-        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
-    }
-    writeln!(
-        s,
-        "                JetK e = jet_exp(jet_scale(jet_ln(abs_a), n));"
-    )
-    .unwrap();
-    for i in 0..k {
-        writeln!(s, "                r.v[{i}] = sf * e.v[{i}];").unwrap();
-    }
-    writeln!(s, "                r.v[0] = pow(a.v[0], n);").unwrap();
-    writeln!(s, "            }}").unwrap();
-    writeln!(
-        s,
-        "            else {{ r = jet_exp(jet_scale(jet_ln(a), n)); r.v[0] = pow(a.v[0], n); }}"
-    )
-    .unwrap();
+    write_cuda_powi_jet(s, k, "(F)ni", "(int)b_idx");
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 

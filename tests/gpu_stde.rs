@@ -292,6 +292,12 @@ fn f_powf25<T: Scalar>(x: &[T]) -> T {
     let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.5).unwrap());
     x[0].powf(exp)
 }
+fn f_powf3<T: Scalar>(x: &[T]) -> T {
+    // Integer exponent recorded via `powf` (OpCode::Powf, no integer lowering),
+    // so the negative-base Taylor-jet path is exercised.
+    let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(3.0).unwrap());
+    x[0].powf(exp)
+}
 fn f_arith<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
     let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
@@ -391,6 +397,12 @@ macro_rules! opcode_tests_for_backend {
                 };
                 check_1d(&ctx, f_powf25, 2.0, "powf");
                 check_1d(&ctx, f_powi3, 2.0, "powi");
+                // Negative base with integer exponent: x³ at x=-2 has value -8
+                // and finite Taylor coefficients. WGSL `pow(x<0, ·)` is
+                // undefined; the codegen routes constant-integer POWF/POWI
+                // through the sign-correcting powi jet.
+                check_1d(&ctx, f_powi3, -2.0, "powi_neg");
+                check_1d(&ctx, f_powf3, -2.0, "powf_neg");
             }
             #[test]
             fn op_arithmetic() {
