@@ -6,8 +6,10 @@
 //!
 //! # Context Contract
 //!
-//! Both [`WgpuContext`] and [`CudaContext`] implement the [`GpuBackend`] trait,
-//! which defines the shared f32 operation set:
+//! Both `WgpuContext` and `CudaContext` implement the [`GpuBackend`] trait,
+//! which defines the shared f32 operation set (plain-code references because
+//! each context type only exists under its own feature flag, so a doc build
+//! with one backend enabled cannot resolve a link to the other):
 //!
 //! - `new() -> Option<Self>` — acquire a GPU device (inherent, not in trait)
 //! - [`upload_tape`](GpuBackend::upload_tape) — upload tape to device
@@ -18,7 +20,7 @@
 //! - [`sparse_hessian`](GpuBackend::sparse_hessian) — GPU-accelerated sparse Hessian
 //! - [`taylor_forward_2nd_batch`](GpuBackend::taylor_forward_2nd_batch) — batched second-order Taylor forward propagation (requires `stde`)
 //!
-//! CUDA additionally provides f64 methods as inherent methods on [`CudaContext`].
+//! CUDA additionally provides f64 methods as inherent methods on `CudaContext`.
 //!
 //! # GPU-Accelerated STDE (requires `stde`)
 //!
@@ -56,9 +58,9 @@ pub use cuda_backend::{CudaContext, CudaTapeBuffers};
 
 /// Common interface for GPU backends (f32 operations).
 ///
-/// Both [`WgpuContext`] and [`CudaContext`] implement this trait for the f32
+/// Both `WgpuContext` and `CudaContext` implement this trait for the f32
 /// operation set. CUDA additionally provides f64 methods as inherent methods
-/// on [`CudaContext`] directly.
+/// on `CudaContext` directly.
 ///
 /// # Associated Type
 ///
