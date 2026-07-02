@@ -1,25 +1,21 @@
 //! Per-opcode math kernels (single source of truth for formulas).
 //!
-//! Historical context: before this module, each opcode's numerical
-//! formula was duplicated across several CPU AD types (`Dual`,
-//! `DualVec`, `Reverse`, `BReverse`, `Laurent`) and the bytecode-tape
-//! opcode dispatcher (`opcode.rs`). The GPU side — WGSL shaders and the
-//! CUDA NVRTC kernel — carry yet another copy in their respective
-//! source-level languages. A change to one copy could drift silently
-//! from the others; Phase 7 of Cycle 6 found multiple such drifts
-//! (atan large-|a|, div small-|b|, hypot Inf handling).
+//! Each opcode's numerical formula is easy to duplicate across the CPU AD
+//! types (`Dual`, `DualVec`, `Reverse`, `BReverse`, `Laurent`) and the
+//! bytecode-tape opcode dispatcher (`opcode.rs`), with the GPU side — WGSL
+//! shaders and the CUDA NVRTC kernel — carrying yet another copy in their
+//! respective source-level languages. A change to one copy can drift silently
+//! from the others; such drift has produced real bugs (atan large-|a|, div
+//! small-|b|, hypot Inf handling, out-of-domain log/atanh partials).
 //!
-//! Going forward, any numerical formula shared between the CPU AD
-//! types **and** the opcode dispatcher should live here as a single
-//! generic function over `num_traits::Float`. Each AD type then
-//! delegates to the helper, so CPU drift becomes impossible. GPU
-//! drift is caught by `tests/gpu_cpu_parity.rs`.
-//!
-//! Scope note: This module is intentionally minimal at the start.
-//! Only the formulas most prone to recent drift (hypot partials,
-//! atan large-|a|) are extracted; the rest remain inline in the AD
-//! types and opcode dispatcher. Every extraction here must come with
-//! a call-site refactor so we don't add abstraction for its own sake.
+//! Any numerical formula shared between the CPU AD types **and** the opcode
+//! dispatcher should live here as a single generic function over
+//! `num_traits::Float`; each AD type delegates to the helper so CPU drift
+//! becomes impossible, and GPU drift is caught by `tests/gpu_cpu_parity.rs`.
+//! Currently extracted: `hypot_partials`, `atan2_partials`, `atan_deriv`,
+//! `asinh_deriv`, `acosh_deriv`, and the domain-guarded log / `atanh`
+//! derivatives below. Every new extraction must come with a call-site refactor
+//! so we don't add abstraction for its own sake.
 
 use num_traits::Float;
 
@@ -125,9 +121,99 @@ pub fn acosh_deriv<T: Float>(a: T) -> T {
     }
 }
 
+/// Derivative of `ln(a) = 1/a`, guarded to the real domain.
+///
+/// Domain-restricted logs emit a NaN partial *strictly* outside their valid
+/// interval (`a < 0`) so a caller that supplied an out-of-domain input sees NaN
+/// rather than a finite-but-meaningless value (`1/-2 = -0.5`). The boundary
+/// `a = 0` is left to IEEE arithmetic — `1/0 = +Inf`, the correct one-sided
+/// derivative limit. Every AD mode and the bytecode `OpCode` dispatcher delegate
+/// here so the convention has a single source of truth.
+#[inline]
+pub fn ln_deriv<T: Float>(a: T) -> T {
+    if a >= T::zero() {
+        T::one() / a
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `log2(a) = 1/(a·ln 2)`, guarded to `a >= 0` (see [`ln_deriv`]).
+#[inline]
+pub fn log2_deriv<T: Float>(a: T) -> T {
+    if a >= T::zero() {
+        T::one() / (a * T::from(2.0).unwrap().ln())
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `log10(a) = 1/(a·ln 10)`, guarded to `a >= 0` (see [`ln_deriv`]).
+#[inline]
+pub fn log10_deriv<T: Float>(a: T) -> T {
+    if a >= T::zero() {
+        T::one() / (a * T::from(10.0).unwrap().ln())
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `ln(1+a) = 1/(1+a)`, guarded to `a >= -1`.
+///
+/// The boundary `a = -1` yields IEEE `1/0 = +Inf`; `a < -1` yields NaN.
+#[inline]
+pub fn ln_1p_deriv<T: Float>(a: T) -> T {
+    if a >= -T::one() {
+        T::one() / (T::one() + a)
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `atanh(a) = 1/((1-a)(1+a))`, guarded to `|a| <= 1`.
+///
+/// Unlike `asin`/`acos` (whose `sqrt(neg)` self-guards to NaN), `atanh`'s
+/// derivative is a bare reciprocal that stays finite for `|a| > 1`
+/// (`1/((1-1.5)(1+1.5)) = -0.8`), so it needs an explicit domain guard. The
+/// boundary `|a| = 1` yields IEEE `1/0 = +Inf`.
+#[inline]
+pub fn atanh_deriv<T: Float>(a: T) -> T {
+    if a >= -T::one() && a <= T::one() {
+        T::one() / ((T::one() - a) * (T::one() + a))
+    } else {
+        T::nan()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domain_restricted_derivs_guard_outside_and_keep_boundary() {
+        // Out of domain → NaN (not finite garbage).
+        assert!(ln_deriv(-2.0_f64).is_nan());
+        assert!(log2_deriv(-2.0_f64).is_nan());
+        assert!(log10_deriv(-2.0_f64).is_nan());
+        assert!(ln_1p_deriv(-2.0_f64).is_nan());
+        assert!(atanh_deriv(1.5_f64).is_nan());
+        assert!(atanh_deriv(-1.5_f64).is_nan());
+
+        // Boundary → IEEE +Inf one-sided limit.
+        assert!(ln_deriv(0.0_f64).is_infinite() && ln_deriv(0.0_f64) > 0.0);
+        assert!(log2_deriv(0.0_f64).is_infinite() && log2_deriv(0.0_f64) > 0.0);
+        assert!(log10_deriv(0.0_f64).is_infinite() && log10_deriv(0.0_f64) > 0.0);
+        assert!(ln_1p_deriv(-1.0_f64).is_infinite() && ln_1p_deriv(-1.0_f64) > 0.0);
+        assert!(atanh_deriv(1.0_f64).is_infinite() && atanh_deriv(1.0_f64) > 0.0);
+        assert!(atanh_deriv(-1.0_f64).is_infinite() && atanh_deriv(-1.0_f64) > 0.0);
+
+        // In domain → known values.
+        assert!((ln_deriv(2.0_f64) - 0.5).abs() < 1e-15);
+        assert!((log2_deriv(2.0_f64) - 1.0 / (2.0 * 2.0_f64.ln())).abs() < 1e-15);
+        assert!((log10_deriv(2.0_f64) - 1.0 / (2.0 * 10.0_f64.ln())).abs() < 1e-15);
+        assert!((ln_1p_deriv(3.0_f64) - 0.25).abs() < 1e-15);
+        assert!((atanh_deriv(0.5_f64) - 1.0 / (0.75)).abs() < 1e-15);
+    }
 
     /// Pin the factored-form precision near `a = 1`. The factored form
     /// `(a-1)·(a+1)` and the unfactored form `a*a - 1` are mathematically

@@ -732,23 +732,19 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn ln(self) -> Self {
-        rev_unary(self, self.value.ln(), F::one() / self.value)
+        rev_unary(self, self.value.ln(), kernels::ln_deriv(self.value))
     }
 
     fn log2(self) -> Self {
-        rev_unary(self, self.value.log2(), F::one() / (self.value * F::LN_2()))
+        rev_unary(self, self.value.log2(), kernels::log2_deriv(self.value))
     }
 
     fn log10(self) -> Self {
-        rev_unary(
-            self,
-            self.value.log10(),
-            F::one() / (self.value * F::LN_10()),
-        )
+        rev_unary(self, self.value.log10(), kernels::log10_deriv(self.value))
     }
 
     fn ln_1p(self) -> Self {
-        rev_unary(self, self.value.ln_1p(), F::one() / (F::one() + self.value))
+        rev_unary(self, self.value.ln_1p(), kernels::ln_1p_deriv(self.value))
     }
 
     fn log(self, base: Self) -> Self {
@@ -835,11 +831,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
     }
 
     fn atanh(self) -> Self {
-        rev_unary(
-            self,
-            self.value.atanh(),
-            F::one() / ((F::one() - self.value) * (F::one() + self.value)),
-        )
+        rev_unary(self, self.value.atanh(), kernels::atanh_deriv(self.value))
     }
 
     fn hypot(self, other: Self) -> Self {

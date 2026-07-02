@@ -37,6 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gradients or panics. Checkpoint files are also registered with the
   cleanup guard before being written, so a panic mid-write cannot leak
   them.
+- Derivatives of the domain-restricted logarithms and `atanh` (`ln`,
+  `log2`, `log10`, `ln_1p`, `atanh`) now return NaN when the input is
+  strictly outside the real domain in the scalar forward and reverse AD
+  modes (`Dual`, `DualVec`, `Reverse`), matching the bytecode tape.
+  Previously these returned a finite but meaningless partial — e.g.
+  `grad(|x| x[0].ln(), &[-2.0])` gave `[-0.5]` instead of `[NaN]`.
+  Boundary values (`x = 0` for `ln`, `x = -1` for `ln_1p`, `|x| = 1` for
+  `atanh`) keep the IEEE `1/0 = ±Inf` one-sided limit.
+
+### Added (echidna)
+
+- Guarded per-op derivative helpers `kernels::ln_deriv`, `log2_deriv`,
+  `log10_deriv`, `ln_1p_deriv`, and `atanh_deriv` — the single source of
+  truth for the out-of-domain (NaN) derivative convention shared by the
+  AD types and the bytecode `OpCode` dispatcher.
 
 ### Fixed (echidna-optim)
 
