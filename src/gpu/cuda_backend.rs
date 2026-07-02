@@ -477,7 +477,10 @@ impl CudaContext {
     }
 
     fn grid_dim(batch_size: u32) -> (u32, u32, u32) {
-        ((batch_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1)
+        // div_ceil (not `(n + BLOCK - 1) / BLOCK`): the manual form overflows
+        // u32 for batch_size > u32::MAX - BLOCK_SIZE + 1, silently
+        // under-dispatching in release builds.
+        (batch_size.div_ceil(BLOCK_SIZE), 1, 1)
     }
 
     fn block_dim() -> (u32, u32, u32) {

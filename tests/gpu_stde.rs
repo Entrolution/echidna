@@ -8,6 +8,10 @@ use echidna::gpu::CudaContext;
 use echidna::gpu::WgpuContext;
 use echidna::gpu::{GpuBackend, GpuTapeData};
 
+// The shared helpers below are each used by a feature-dependent subset of
+// the tests (some sections are wgpu- or cuda-only), so under a single-backend
+// build a helper can be legitimately unused.
+#[allow(dead_code)]
 fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
     let hundred = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(100.0).unwrap());
@@ -16,10 +20,12 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     dx * dx + hundred * t * t
 }
 
+#[allow(dead_code)]
 fn polynomial<T: Scalar>(x: &[T]) -> T {
     x[0] * x[0] + x[1] * x[1]
 }
 
+#[allow(dead_code)]
 fn trig_func<T: Scalar>(x: &[T]) -> T {
     let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
     x[0].sin() * x[1].cos() + (x[0] * x[1] / two).exp()
