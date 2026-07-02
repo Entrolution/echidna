@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the divisor is zero, matching `Taylor % Taylor`. Previously they
   left a NaN constant term beside finite (or `Inf`) higher-order
   coefficients — an internally inconsistent series.
+- `jacobian_forward` now computes the Jacobian through custom ops exactly
+  (via `CustomOp::eval_dual`) instead of panicking. Forward-mode dense
+  Jacobians previously rejected custom ops and directed callers to
+  reverse-mode `jacobian`; they now match the sparse Jacobian paths, which
+  already handled custom ops.
 
 ### Added (echidna)
 

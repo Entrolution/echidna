@@ -10,8 +10,10 @@
 use echidna::{BReverse, BytecodeTape};
 use std::sync::Arc;
 
-// ── M14: jacobian_forward rejects custom ops ────────────────────────
-
+// A constant-derivative custom op used by the custom-op rejection tests below
+// (`taylor_grad`, `ode_taylor_step`, `third_order_hvvp`). `jacobian_forward`
+// itself now supports custom ops exactly via `CustomOp::eval_dual` — its
+// positive coverage lives in `tests/custom_primitives.rs`.
 struct Scale;
 impl echidna::CustomOp<f64> for Scale {
     fn eval(&self, a: f64, _b: f64) -> f64 {
@@ -22,23 +24,7 @@ impl echidna::CustomOp<f64> for Scale {
     }
 }
 
-#[test]
-#[should_panic(expected = "custom ops")]
-fn jacobian_forward_rejects_custom_ops() {
-    let x = [1.0_f64];
-    let mut tape = BytecodeTape::with_capacity(10);
-    let handle = tape.register_custom(Arc::new(Scale));
-    let idx = tape.new_input(x[0]);
-    let input = BReverse::from_tape(x[0], idx);
-    let output = {
-        let _guard = echidna::bytecode_tape::BtapeGuard::new(&mut tape);
-        input.custom_unary(handle, 2.0 * x[0])
-    };
-    tape.set_output(output.index());
-    let _ = tape.jacobian_forward(&x);
-}
-
-// ── M16: hessian / hvp reject multi-output tapes ────────────────────
+// ── hessian / hvp reject multi-output tapes ─────────────────────────
 
 fn rosenbrock_multi(x: &[BReverse<f64>]) -> Vec<BReverse<f64>> {
     let r0 = x[0] * x[0];
