@@ -204,7 +204,7 @@ pub use api::{
 pub use breverse::BReverse;
 #[cfg_attr(docsrs, doc(cfg(feature = "bytecode")))]
 #[cfg(feature = "bytecode")]
-pub use bytecode_tape::{BytecodeTape, CustomOp, CustomOpHandle};
+pub use bytecode_tape::{BytecodeTape, CustomOp, CustomOpHandle, TapeValidationError};
 #[cfg_attr(docsrs, doc(cfg(feature = "bytecode")))]
 #[cfg(feature = "bytecode")]
 pub use checkpoint::{

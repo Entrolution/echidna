@@ -8,6 +8,10 @@ use echidna::gpu::CudaContext;
 use echidna::gpu::WgpuContext;
 use echidna::gpu::{GpuBackend, GpuTapeData};
 
+// The shared helpers below are each used by a feature-dependent subset of
+// the tests (some sections are wgpu- or cuda-only), so under a single-backend
+// build a helper can be legitimately unused.
+#[allow(dead_code)]
 fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
     let hundred = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(100.0).unwrap());
@@ -16,10 +20,12 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     dx * dx + hundred * t * t
 }
 
+#[allow(dead_code)]
 fn polynomial<T: Scalar>(x: &[T]) -> T {
     x[0] * x[0] + x[1] * x[1]
 }
 
+#[allow(dead_code)]
 fn trig_func<T: Scalar>(x: &[T]) -> T {
     let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
     x[0].sin() * x[1].cos() + (x[0] * x[1] / two).exp()
@@ -292,6 +298,12 @@ fn f_powf25<T: Scalar>(x: &[T]) -> T {
     let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.5).unwrap());
     x[0].powf(exp)
 }
+fn f_powf3<T: Scalar>(x: &[T]) -> T {
+    // Integer exponent recorded via `powf` (OpCode::Powf, no integer lowering),
+    // so the negative-base Taylor-jet path is exercised.
+    let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(3.0).unwrap());
+    x[0].powf(exp)
+}
 fn f_arith<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
     let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
@@ -391,6 +403,12 @@ macro_rules! opcode_tests_for_backend {
                 };
                 check_1d(&ctx, f_powf25, 2.0, "powf");
                 check_1d(&ctx, f_powi3, 2.0, "powi");
+                // Negative base with integer exponent: x³ at x=-2 has value -8
+                // and finite Taylor coefficients. WGSL `pow(x<0, ·)` is
+                // undefined; the codegen routes constant-integer POWF/POWI
+                // through the sign-correcting powi jet.
+                check_1d(&ctx, f_powi3, -2.0, "powi_neg");
+                check_1d(&ctx, f_powf3, -2.0, "powf_neg");
             }
             #[test]
             fn op_arithmetic() {

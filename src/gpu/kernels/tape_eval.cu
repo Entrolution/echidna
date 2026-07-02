@@ -676,9 +676,13 @@ extern "C" __global__ void tangent_reverse(
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 F ab1 = pow(a, b-F(1));
                 da_re = b * ab1;
-                // For a<=0, log(a) is NaN; convention is to zero the dy-like
-                // terms (CPU OpCode::Powf safety net parity).
-                if (a <= F(0)) { da_eps = F(0); }
+                // For a <= 0, only the exponent-direction sub-term log(a)*bt
+                // is NaN (log of a negative). Drop just that term — the
+                // second-order d²/da² contribution b*(b-1)*a^(b-2)*at is
+                // finite (a < 0 is reachable only at integer b, where C pow
+                // is defined) and must be kept; zeroing all of da_eps
+                // silently drops the Hessian.
+                if (a <= F(0)) { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at); }
                 else { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt); }
                 F rr = primals[base+i];
                 if (rr == F(0) || a <= F(0)) {

@@ -157,7 +157,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 7u /* POWF */: {
                 let b = values[v_base + b_idx];
-                da = b * pow(a, b - 1.0);
+                da = b * powf_real(a, b - 1.0);
                 // For a <= 0, `log(a)` is NaN. A finite `r` at a < 0 means b
                 // was integer; the classical derivative w.r.t. b at integer b
                 // is undefined, and the convention here is 0 — matches the
@@ -218,7 +218,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let exp = bitcast<i32>(b_idx);
                 if exp == 0 { da = 0.0; } else {
                 let n = f32(exp);
-                da = n * pow(a, n - 1.0); }
+                da = n * powf_real(a, n - 1.0); }
             }
 
             // Exp/Log
@@ -303,6 +303,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Manual implementations for WGSL builtins not available.
+fn powf_real(base: f32, b: f32) -> f32 {
+    // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
+    // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
+    // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
+    // non-integer exponent at a negative base is NaN — the same as on CPU.
+    if base >= 0.0 { return pow(base, b); }
+    let rb = round(b);
+    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 { return -mag; }
+    return mag;
+}
+
 fn sinh(x: f32) -> f32 {
     return (exp(x) - exp(-x)) * 0.5;
 }

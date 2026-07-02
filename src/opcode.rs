@@ -120,8 +120,9 @@ pub enum OpCode {
     Fract,
 
     // ── Custom ──
-    /// User-registered custom operation. The callback index is stored in
-    /// `arg_indices[1]` (for unary ops) or in a side table (for binary ops).
+    /// User-registered custom operation. `arg_indices[1]` holds the callback
+    /// index for both arities; a binary custom op's second *operand* lives in
+    /// the tape's `custom_second_args` side table.
     Custom,
 }
 

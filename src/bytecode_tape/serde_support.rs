@@ -47,80 +47,23 @@ impl<'de, F: Float + Deserialize<'de>> Deserialize<'de> for BytecodeTape<F> {
 
         let data = TapeData::<F>::deserialize(deserializer)?;
 
-        let nv = data.num_variables as usize;
-        if data.opcodes.len() != data.arg_indices.len() {
+        // Custom ops carry Rust callbacks that cannot be serialized, so a
+        // payload containing them (or their operand side table) can never
+        // be restored to a working tape. These scans touch only the field
+        // they inspect — nothing here may index one array by another's
+        // length before `validate()` has confirmed the lengths agree.
+        if let Some(i) = data.opcodes.iter().position(|&op| op == OpCode::Custom) {
             return Err(serde::de::Error::custom(format!(
-                "opcodes.len() ({}) != arg_indices.len() ({})",
-                data.opcodes.len(),
-                data.arg_indices.len()
+                "opcodes[{i}] is Custom, which cannot be deserialized (custom ops have no serializable callback)"
             )));
         }
-        if data.opcodes.len() != nv {
-            return Err(serde::de::Error::custom(format!(
-                "opcodes.len() ({}) != num_variables ({})",
-                data.opcodes.len(),
-                nv
-            )));
-        }
-        if data.values.len() != nv {
-            return Err(serde::de::Error::custom(format!(
-                "values.len() ({}) != num_variables ({})",
-                data.values.len(),
-                nv
-            )));
-        }
-        if data.num_inputs > data.num_variables {
-            return Err(serde::de::Error::custom(format!(
-                "num_inputs ({}) > num_variables ({})",
-                data.num_inputs, data.num_variables
-            )));
-        }
-        for i in 0..data.num_inputs as usize {
-            if data.opcodes[i] != OpCode::Input {
-                return Err(serde::de::Error::custom(format!(
-                    "opcodes[{}] should be Input but is {:?}",
-                    i, data.opcodes[i]
-                )));
-            }
-        }
-        if data.output_index != u32::MAX && data.output_index >= data.num_variables {
-            return Err(serde::de::Error::custom(format!(
-                "output_index ({}) >= num_variables ({})",
-                data.output_index, data.num_variables
-            )));
-        }
-        for (i, &oi) in data.output_indices.iter().enumerate() {
-            if oi >= data.num_variables {
-                return Err(serde::de::Error::custom(format!(
-                    "output_indices[{}] ({}) >= num_variables ({})",
-                    i, oi, data.num_variables
-                )));
-            }
-        }
-        for (i, &[a, b]) in data.arg_indices.iter().enumerate() {
-            if data.opcodes[i] == OpCode::Custom {
-                return Err(serde::de::Error::custom(format!(
-                    "opcodes[{i}] is Custom, which cannot be deserialized (custom ops have no serializable callback)"
-                )));
-            }
-            if data.opcodes[i] != OpCode::Input && data.opcodes[i] != OpCode::Const {
-                if a >= data.num_variables {
-                    return Err(serde::de::Error::custom(format!(
-                        "arg_indices[{}][0] ({}) >= num_variables ({})",
-                        i, a, data.num_variables
-                    )));
-                }
-                // b may be UNUSED (0xFFFFFFFF) for unary ops, or a powi exponent
-                if b != u32::MAX && data.opcodes[i] != OpCode::Powi && b >= data.num_variables {
-                    return Err(serde::de::Error::custom(format!(
-                        "arg_indices[{}][1] ({}) >= num_variables ({})",
-                        i, b, data.num_variables
-                    )));
-                }
-            }
+        if !data.custom_second_args.is_empty() {
+            return Err(serde::de::Error::custom(
+                "custom_second_args must be empty: custom ops cannot be deserialized",
+            ));
         }
 
-        Ok(BytecodeTape {
+        let tape = BytecodeTape {
             opcodes: data.opcodes,
             arg_indices: data.arg_indices,
             values: data.values,
@@ -130,6 +73,13 @@ impl<'de, F: Float + Deserialize<'de>> Deserialize<'de> for BytecodeTape<F> {
             output_indices: data.output_indices,
             custom_ops: Vec::new(),
             custom_second_args: data.custom_second_args,
-        })
+        };
+        // Full structural validation: buffer lengths, the Input prefix,
+        // output indices, per-op operand bounds (strictly-earlier slots),
+        // and side-table consistency. Rejecting here turns every corrupt
+        // payload into a clean error instead of a panic (or silently wrong
+        // derivatives) at evaluation time.
+        tape.validate().map_err(serde::de::Error::custom)?;
+        Ok(tape)
     }
 }

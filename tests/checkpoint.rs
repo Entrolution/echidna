@@ -633,20 +633,16 @@ fn disk_cleanup() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
     let _ = echidna::grad_checkpointed_disk(step, loss, &x0, num_steps, 3, dir.path());
 
-    // Verify no checkpoint files remain.
+    // The run must leave the directory exactly as it found it. Assert full
+    // emptiness rather than filtering by file name, so a leak of ANY entry
+    // (checkpoint file or per-run subdirectory) is caught.
     let remaining: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.starts_with("ckpt_"))
-                .unwrap_or(false)
-        })
         .collect();
     assert!(
         remaining.is_empty(),
-        "checkpoint files not cleaned up: {:?}",
+        "checkpoint artifacts not cleaned up: {:?}",
         remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
     );
 }
@@ -670,21 +666,72 @@ fn disk_cleanup_on_panic() {
 
     assert!(result.is_err(), "should have panicked");
 
-    // Verify checkpoint files are cleaned up despite panic.
+    // The drop guard must remove every artifact despite the panic. Assert
+    // full emptiness rather than filtering by file name, so a leak of ANY
+    // entry (checkpoint file or per-run subdirectory) is caught.
     let remaining: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.starts_with("ckpt_"))
-                .unwrap_or(false)
-        })
         .collect();
     assert!(
         remaining.is_empty(),
-        "checkpoint files not cleaned up after panic: {:?}",
+        "checkpoint artifacts not cleaned up after panic: {:?}",
         remaining.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn disk_concurrent_calls_share_directory() {
+    // Two simultaneous gradient computations share one scratch directory.
+    // Each must see only its own checkpoints: the two states have different
+    // dimensions, so any cross-read fails loudly (checkpoint-size assert)
+    // or corrupts a recomputed segment. Both results are checked against
+    // the in-memory variant, and the shared directory must end up empty.
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let shared = dir.path().to_path_buf();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let (p1, b1) = (shared.clone(), barrier.clone());
+    let t1 = std::thread::spawn(move || {
+        let x0 = [0.5_f64, 0.3];
+        let step = |x: &[BReverse<f64>]| vec![x[0].sin() * x[1], x[0] + x[1] * x[1]];
+        let loss = |x: &[BReverse<f64>]| x[0] * x[0] + x[1];
+        b1.wait();
+        let g_disk = echidna::grad_checkpointed_disk(step, loss, &x0, 20, 3, &p1);
+        let g_mem = echidna::grad_checkpointed(step, loss, &x0, 20, 3);
+        (g_disk, g_mem)
+    });
+
+    let (p2, b2) = (shared.clone(), barrier.clone());
+    let t2 = std::thread::spawn(move || {
+        let x0 = [0.4_f64, 0.2, 0.1];
+        let step =
+            |x: &[BReverse<f64>]| vec![x[1] * x[2] + x[0], x[0].cos() * x[2], x[1] + x[0] * x[2]];
+        let loss = |x: &[BReverse<f64>]| x[0] * x[1] + x[2];
+        b2.wait();
+        let g_disk = echidna::grad_checkpointed_disk(step, loss, &x0, 20, 3, &p2);
+        let g_mem = echidna::grad_checkpointed(step, loss, &x0, 20, 3);
+        (g_disk, g_mem)
+    });
+
+    let (d1, m1) = t1.join().expect("dim-2 computation panicked");
+    let (d2, m2) = t2.join().expect("dim-3 computation panicked");
+    for (i, (d, m)) in d1.iter().zip(m1.iter()).enumerate() {
+        assert!(
+            (d - m).abs() < 1e-10,
+            "dim-2 gradient mismatch at {i}: disk={d}, memory={m}"
+        );
+    }
+    for (i, (d, m)) in d2.iter().zip(m2.iter()).enumerate() {
+        assert!(
+            (d - m).abs() < 1e-10,
+            "dim-3 gradient mismatch at {i}: disk={d}, memory={m}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(dir.path()).unwrap().count(),
+        0,
+        "shared directory should be empty after both runs"
     );
 }
 
