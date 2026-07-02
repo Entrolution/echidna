@@ -66,6 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Jacobians previously rejected custom ops and directed callers to
   reverse-mode `jacobian`; they now match the sparse Jacobian paths, which
   already handled custom ops.
+- `Taylor::hypot` / `Laurent::hypot` now return the correct series when both
+  leading coefficients are zero and the lowest non-zero term is at order ≥ 2
+  (e.g. `hypot(t², 0) = t²`). Previously only an order-1 leading zero was
+  handled and higher-order cases returned `[0, Inf, …]`.
+- `Dual::powf` / `DualVec::powf` no longer produce a NaN tangent for a negative
+  base with a live (differentiated) exponent. The exponent-direction term
+  `xⁿ·ln(x)` is guarded to zero for a base ≤ 0 (matching reverse mode); the
+  primal and base-direction tangent were already finite for integer exponents.
+- The `Taylor`/`TaylorDyn` series kernels for `ln`/`log2`/`log10`/`ln_1p`/
+  `atanh`/`acosh` (and `Laurent::atanh`/`ln_1p`) now return an all-NaN jet when
+  the leading coefficient is strictly outside the real domain, matching the
+  scalar AD modes. Previously they emitted a NaN primal beside finite
+  higher-order coefficients. Branch-point boundaries (e.g. `ln` at 0) keep
+  their IEEE singularity.
 
 ### Added (echidna)
 

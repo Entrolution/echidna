@@ -194,3 +194,74 @@ fn l9_taylor_dyn_rem_zero_divisor_returns_nan() {
         coeffs
     );
 }
+
+// Series domain-NaN: the Taylor log / atanh / acosh kernels must return an
+// all-NaN jet strictly outside the real domain (mirroring the scalar Phase-4
+// convention) rather than a NaN primal beside finite higher coefficients.
+#[test]
+fn taylor_log_atanh_acosh_domain_nan() {
+    // ln / log2 / log10: leading coefficient < 0.
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 1.0, 0.0]).ln()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 1.0, 0.0]).log2()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 1.0, 0.0]).log10()
+    ));
+    // ln_1p: leading coefficient < -1.
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0]).ln_1p()
+    ));
+    // atanh: |leading| > 1.
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([1.5, 1.0, 0.0, 0.0]).atanh()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-1.5, 1.0, 0.0, 0.0]).atanh()
+    ));
+    // acosh: leading coefficient < 1 (the a[0] <= -1 gap plus the -1<a<1 range).
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0]).acosh()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([0.5, 1.0, 0.0, 0.0]).acosh()
+    ));
+}
+
+// In-domain jets are unchanged (regression anchor, prevents over-guarding).
+#[test]
+fn taylor_ln_in_domain_unchanged() {
+    let r = Taylor::<f64, 4>::new([2.0, 1.0, 0.0, 0.0]).ln();
+    assert!((r.coeff(0) - 2.0_f64.ln()).abs() < 1e-12);
+    // d/dt ln(2+t) = 1/(2+t) = 0.5 at t=0.
+    assert!((r.coeff(1) - 0.5).abs() < 1e-12);
+    assert!(r.coeff(0).is_finite());
+}
+
+// The `a[0]==0` boundary for ln stays the IEEE branch-point singularity (-Inf),
+// NOT NaN — the guard is strictly `< 0`, matching the scalar boundary convention.
+#[test]
+fn taylor_ln_zero_leading_stays_singular_not_nan() {
+    let r = Taylor::<f64, 4>::new([0.0, 1.0, 0.0, 0.0]).ln();
+    assert!(
+        r.coeff(0).is_infinite() && r.coeff(0) < 0.0,
+        "ln(0) leading must be -Inf, got {}",
+        r.coeff(0)
+    );
+    assert!(!r.coeff(0).is_nan());
+}
+
+// Laurent `atanh` / `ln_1p` have no independent domain guard — they inherit it
+// from the kernel fix and now return all-NaN out of domain (Laurent `ln`/`log2`/
+// `log10` were already guarded independently).
+#[test]
+fn laurent_atanh_ln_1p_domain_nan() {
+    assert!(laurent_is_nan(
+        &Laurent::<f64, 4>::new([1.5, 1.0, 0.0, 0.0], 0).atanh()
+    ));
+    assert!(laurent_is_nan(
+        &Laurent::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0], 0).ln_1p()
+    ));
+}

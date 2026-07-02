@@ -121,6 +121,18 @@ pub fn taylor_exp<F: Float>(a: &[F], c: &mut [F]) {
 #[inline]
 pub fn taylor_ln<F: Float>(a: &[F], c: &mut [F]) {
     let n = c.len();
+    if a[0] < F::zero() {
+        // `ln` is undefined on the negatives; emit an all-NaN jet rather than a
+        // NaN primal beside finite higher coefficients computed from `1/a[0]`.
+        // The `a[0] == 0` branch point is left to the IEEE singularity
+        // (`c[0] = -Inf`), matching `taylor_sqrt` and the scalar convention.
+        // This also covers `taylor_log2`/`taylor_log10`/`taylor_ln_1p` (which
+        // delegate here) and `taylor_powf`'s non-integer negative-base path.
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     let inv_a0 = F::one() / a[0];
     c[0] = a[0].ln();
     for k in 1..n {
@@ -387,6 +399,16 @@ pub fn taylor_asinh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
 #[inline]
 pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
     let n = c.len();
+    if a[0] < F::one() {
+        // `acosh` domain is `a >= 1`. For `-1 < a[0] < 1` the `a²-1 < 0` sqrt
+        // already yields an all-NaN jet, but `a[0] <= -1` leaves `a²-1 >= 0`, so
+        // the recurrence produces finite higher coefficients beside a NaN
+        // primal. Emit an all-NaN jet across the whole out-of-domain range.
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     c[0] = a[0].acosh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
@@ -411,6 +433,16 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
 #[inline]
 pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
     let n = c.len();
+    if a[0] < -F::one() || a[0] > F::one() {
+        // `atanh` domain is `|a| <= 1`. Outside it, `1 - a²` is finite so the
+        // recurrence would produce finite higher coefficients beside a NaN
+        // primal; emit an all-NaN jet instead. (`|a[0]| == 1` is left to the
+        // IEEE `±Inf` singularity, matching the scalar boundary convention.)
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     c[0] = a[0].atanh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
@@ -448,9 +480,10 @@ pub fn taylor_powf<F: Float>(
 ) {
     // Constant integer exponent fast path: if `b` is a plain scalar (higher
     // coefficients are zero) and that scalar is an integer, route to
-    // `taylor_powi`. Otherwise `taylor_ln(a)` returns NaN for `a[0] <= 0`,
-    // poisoning the entire result — even for negative-base integer powers
-    // that have well-defined Taylor coefficients.
+    // `taylor_powi`. Otherwise `taylor_ln(a)` yields an all-NaN jet for
+    // `a[0] < 0` (and an Inf-singular jet at `a[0] == 0`), poisoning the entire
+    // result — even for negative-base integer powers that have well-defined
+    // Taylor coefficients.
     if b[1..].iter().all(|&bk| bk == F::zero()) {
         let b0 = b[0];
         if let Some(ni) = b0.to_i32() {
