@@ -88,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truth for the out-of-domain (NaN) derivative convention shared by the
   AD types and the bytecode `OpCode` dispatcher.
 
+### Changed (echidna)
+
+- `<Laurent as num_traits::Zero>::is_zero` is now value-based — it returns
+  true when the series evaluates to `0` at the expansion point — instead of
+  structural (all coefficients zero). This aligns `is_zero` with the
+  `is_zero() ⟺ == Self::zero()` contract (`Laurent`'s `==`/`PartialOrd` are
+  value-based) and with the other AD types. A positive-pole series such as `t`
+  now reports `is_zero() == true`. `Laurent`'s own arithmetic uses a structural
+  check internally, so pole formation (e.g. `1/t`) is unaffected.
+
 ### Fixed (echidna-optim)
 
 - `piggyback_tangent_solve` now requires both the primal and the tangent
