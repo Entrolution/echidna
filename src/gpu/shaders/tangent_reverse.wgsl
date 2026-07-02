@@ -172,10 +172,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u: { r=exp(a); rt=r*at; }
             case 18u: { r=exp2(a); rt=r*log(2.0)*at; }
             case 19u: { r=expm1_f32(a); rt=(r+1.0)*at; }
-            case 20u: { r=log(a); rt=at/a; }
-            case 21u: { r=log2(a); rt=at/(a*log(2.0)); }
-            case 22u: { r=log(a)/log(10.0); rt=at/(a*log(10.0)); }
-            case 23u: { r=ln1p_f32(a); rt=at/(1.0+a); }
+            case 20u: { r=log(a); rt=select(bitcast<f32>(0x7fc00000u), at/a, a >= 0.0); }
+            case 21u: { r=log2(a); rt=select(bitcast<f32>(0x7fc00000u), at/(a*log(2.0)), a >= 0.0); }
+            case 22u: { r=log(a)/log(10.0); rt=select(bitcast<f32>(0x7fc00000u), at/(a*log(10.0)), a >= 0.0); }
+            case 23u: { r=ln1p_f32(a); rt=select(bitcast<f32>(0x7fc00000u), at/(1.0+a), a >= -1.0); }
             case 24u: { r=sin(a); rt=cos(a)*at; }
             case 25u: { r=cos(a); rt=-sin(a)*at; }
             case 26u: { r=tan(a); let c=cos(a); rt=at/(c*c); }
@@ -191,7 +191,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 32u: { r=tanh(a); let c=cosh_f(a); rt=at/(c*c); }
             case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); if ax>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {rt=at/sqrt(a*a+1.0);} }
             case 34u: { r=log(a+sqrt(a*a-1.0)); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt(a*a-1.0);} }
-            case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=at/((1.0-a)*(1.0+a)); }
+            case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(0x7fc00000u), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
             case 36u: { r=abs(a); if a!=a {rt=0.0;} else {let bits=bitcast<u32>(a); let s=select(1.0, -1.0, (bits&0x80000000u)!=0u); rt=s*at;} }
             case 37u: { if a!=a {r=a;} else if a>=0.0 {r=1.0;} else {r=-1.0;} rt=0.0; }
             case 38u: { r=floor(a); rt=0.0; }
@@ -355,10 +355,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u /* EXP */: { da_re=r; da_eps=r*at; }
             case 18u /* EXP2 */: { let l2=log(2.0); da_re=r*l2; da_eps=r*l2*l2*at; }
             case 19u /* EXPM1 */: { da_re=r+1.0; da_eps=(r+1.0)*at; }
-            case 20u /* LN */: { da_re=1.0/a; da_eps=-at/(a*a); }
-            case 21u /* LOG2 */: { let l2=log(2.0); da_re=1.0/(a*l2); da_eps=-at/(a*a*l2); }
-            case 22u /* LOG10 */: { let l10=log(10.0); da_re=1.0/(a*l10); da_eps=-at/(a*a*l10); }
-            case 23u /* LN1P */: { let t=1.0+a; da_re=1.0/t; da_eps=-at/(t*t); }
+            case 20u /* LN */: { if (a >= 0.0) { da_re=1.0/a; da_eps=-at/(a*a); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
+            case 21u /* LOG2 */: { if (a >= 0.0) { let l2=log(2.0); da_re=1.0/(a*l2); da_eps=-at/(a*a*l2); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
+            case 22u /* LOG10 */: { if (a >= 0.0) { let l10=log(10.0); da_re=1.0/(a*l10); da_eps=-at/(a*a*l10); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
+            case 23u /* LN1P */: { if (a >= -1.0) { let t=1.0+a; da_re=1.0/t; da_eps=-at/(t*t); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
             case 24u /* SIN */: { da_re=cos(a); da_eps=-sin(a)*at; }
             case 25u /* COS */: { da_re=-sin(a); da_eps=-cos(a)*at; }
             case 26u /* TAN */: { let c=cos(a); let s=1.0/(c*c); da_re=s; da_eps=2.0*tan(a)*s*at; }
@@ -414,7 +414,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     da_eps = -a * at / (t * t * t);
                 }
             }
-            case 35u /* ATANH */: { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); }
+            case 35u /* ATANH */: { if (a >= -1.0 && a <= 1.0) { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
             case 36u /* ABS */: {
                 if a != a {
                     da_re = 0.0;

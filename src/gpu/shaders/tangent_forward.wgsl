@@ -281,10 +281,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u /* EXP */: { r = exp(a); rt = r * at; }
             case 18u /* EXP2 */: { r = exp2(a); rt = r * log(2.0) * at; }
             case 19u /* EXPM1 */: { r = expm1_f32(a); rt = (r + 1.0) * at; }
-            case 20u /* LN */: { r = log(a); rt = at / a; }
-            case 21u /* LOG2 */: { r = log2(a); rt = at / (a * log(2.0)); }
-            case 22u /* LOG10 */: { r = log(a) / log(10.0); rt = at / (a * log(10.0)); }
-            case 23u /* LN1P */: { r = ln1p_f32(a); rt = at / (1.0 + a); }
+            case 20u /* LN */: { r = log(a); rt = select(bitcast<f32>(0x7fc00000u), at / a, a >= 0.0); }
+            case 21u /* LOG2 */: { r = log2(a); rt = select(bitcast<f32>(0x7fc00000u), at / (a * log(2.0)), a >= 0.0); }
+            case 22u /* LOG10 */: { r = log(a) / log(10.0); rt = select(bitcast<f32>(0x7fc00000u), at / (a * log(10.0)), a >= 0.0); }
+            case 23u /* LN1P */: { r = ln1p_f32(a); rt = select(bitcast<f32>(0x7fc00000u), at / (1.0 + a), a >= -1.0); }
             case 24u /* SIN */: { r = sin(a); rt = cos(a) * at; }
             case 25u /* COS */: { r = cos(a); rt = -sin(a) * at; }
             case 26u /* TAN */: { r = tan(a); let c = cos(a); rt = at / (c * c); }
@@ -322,7 +322,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     rt = at / sqrt((a - 1.0) * (a + 1.0));
                 }
             }
-            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / ((1.0 - a) * (1.0 + a)); }
+            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = select(bitcast<f32>(0x7fc00000u), at / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
             case 36u /* ABS */: {
                 r = abs(a);
                 // Match Rust's `signum` via sign-bit inspection so that

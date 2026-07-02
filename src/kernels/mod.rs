@@ -11,7 +11,8 @@
 //! Any numerical formula shared between the CPU AD types **and** the opcode
 //! dispatcher should live here as a single generic function over
 //! `num_traits::Float`; each AD type delegates to the helper so CPU drift
-//! becomes impossible, and GPU drift is caught by `tests/gpu_cpu_parity.rs`.
+//! becomes impossible, and GPU drift is caught by `tests/gpu_cpu_parity.rs`
+//! (and `tests/domain_nan_convention.rs` for the out-of-domain convention).
 //! Currently extracted: `hypot_partials`, `atan2_partials`, `atan_deriv`,
 //! `asinh_deriv`, `acosh_deriv`, and the domain-guarded log / `atanh`
 //! derivatives below. Every new extraction must come with a call-site refactor
@@ -128,7 +129,9 @@ pub fn acosh_deriv<T: Float>(a: T) -> T {
 /// rather than a finite-but-meaningless value (`1/-2 = -0.5`). The boundary
 /// `a = 0` is left to IEEE arithmetic — `1/0 = +Inf`, the correct one-sided
 /// derivative limit. Every AD mode and the bytecode `OpCode` dispatcher delegate
-/// here so the convention has a single source of truth.
+/// here so the convention has a single source of truth; the wgpu and CUDA
+/// kernels carry the same guard in their own languages (reverse, forward-tangent,
+/// and HVP sweeps), pinned by `tests/domain_nan_convention.rs`.
 #[inline]
 pub fn ln_deriv<T: Float>(a: T) -> T {
     if a >= T::zero() {

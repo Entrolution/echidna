@@ -39,12 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them.
 - Derivatives of the domain-restricted logarithms and `atanh` (`ln`,
   `log2`, `log10`, `ln_1p`, `atanh`) now return NaN when the input is
-  strictly outside the real domain in the scalar forward and reverse AD
-  modes (`Dual`, `DualVec`, `Reverse`), matching the bytecode tape.
-  Previously these returned a finite but meaningless partial — e.g.
-  `grad(|x| x[0].ln(), &[-2.0])` gave `[-0.5]` instead of `[NaN]`.
-  Boundary values (`x = 0` for `ln`, `x = -1` for `ln_1p`, `|x| = 1` for
-  `atanh`) keep the IEEE `1/0 = ±Inf` one-sided limit.
+  strictly outside the real domain across every AD mode — the scalar
+  forward and reverse types (`Dual`, `DualVec`, `Reverse`), the bytecode
+  tape, and the wgpu and CUDA GPU kernels (reverse, forward-tangent, and
+  Hessian-vector-product sweeps). Previously these returned a finite but
+  meaningless partial — e.g. `grad(|x| x[0].ln(), &[-2.0])` gave `[-0.5]`
+  instead of `[NaN]`, and the GPU backends disagreed with the CPU. Boundary
+  values (`x = 0` for `ln`, `x = -1` for `ln_1p`, `|x| = 1` for `atanh`)
+  keep the IEEE `1/0 = ±Inf` one-sided limit.
 
 ### Added (echidna)
 

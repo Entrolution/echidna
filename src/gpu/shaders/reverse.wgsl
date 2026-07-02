@@ -225,10 +225,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u /* EXP */: { da = r; }
             case 18u /* EXP2 */: { da = r * log(2.0); }
             case 19u /* EXPM1 */: { da = r + 1.0; }
-            case 20u /* LN */: { da = 1.0 / a; }
-            case 21u /* LOG2 */: { da = 1.0 / (a * log(2.0)); }
-            case 22u /* LOG10 */: { da = 1.0 / (a * log(10.0)); }
-            case 23u /* LN1P */: { da = 1.0 / (1.0 + a); }
+            case 20u /* LN */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / a, a >= 0.0); }
+            case 21u /* LOG2 */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (a * log(2.0)), a >= 0.0); }
+            case 22u /* LOG10 */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (a * log(10.0)), a >= 0.0); }
+            case 23u /* LN1P */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (1.0 + a), a >= -1.0); }
 
             // Trig
             case 24u /* SIN */: { da = cos(a); }
@@ -269,7 +269,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     da = 1.0 / sqrt((a - 1.0) * (a + 1.0));
                 }
             }
-            case 35u /* ATANH */: { da = 1.0 / ((1.0 - a) * (1.0 + a)); }
+            case 35u /* ATANH */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
 
             // Misc
             case 36u /* ABS */: {
