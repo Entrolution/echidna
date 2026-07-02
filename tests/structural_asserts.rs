@@ -123,3 +123,71 @@ fn ode_taylor_step_rejects_custom_ops() {
 // These tests would require a GPU backend to exercise; the check fires at
 // runtime in `laplacian_gpu` when passed a multi-output tape. Covered
 // structurally by the source-level check (tape.num_outputs != 1 → Err).
+
+// ── third_order_hvvp: reject custom ops and multi-output tapes ───────
+//
+// Like `hessian_vec`, the nested-dual sweep linearizes custom ops, so 2nd/3rd
+// order through them is only first-order-accurate; and it seeds the single
+// `output_index`, so a multi-output tape silently gets one output's tensor.
+
+#[test]
+#[should_panic(expected = "custom ops")]
+fn third_order_hvvp_rejects_custom_ops() {
+    let x = [1.0_f64];
+    let mut tape = BytecodeTape::with_capacity(10);
+    let handle = tape.register_custom(Arc::new(Scale));
+    let idx = tape.new_input(x[0]);
+    let input = BReverse::from_tape(x[0], idx);
+    let output = {
+        let _guard = echidna::bytecode_tape::BtapeGuard::new(&mut tape);
+        input.custom_unary(handle, 2.0 * x[0])
+    };
+    tape.set_output(output.index());
+    let _ = tape.third_order_hvvp(&x, &[1.0], &[1.0]);
+}
+
+#[test]
+#[should_panic(expected = "scalar-output")]
+fn third_order_hvvp_rejects_multi_output_tape() {
+    let (tape, _) = echidna::record_multi(rosenbrock_multi, &[1.0_f64, 2.0]);
+    let _ = tape.third_order_hvvp(&[1.0_f64, 2.0], &[1.0, 0.0], &[0.0, 1.0]);
+}
+
+// ── sparse-Hessian family rejects multi-output tapes ─────────────────
+//
+// Mirrors the dense `hessian`/`hvp`/`hessian_vec` scalar-output guard.
+
+#[test]
+#[should_panic(expected = "scalar-output")]
+fn sparse_hessian_rejects_multi_output_tape() {
+    let (tape, _) = echidna::record_multi(rosenbrock_multi, &[1.0_f64, 2.0]);
+    let _ = tape.sparse_hessian(&[1.0_f64, 2.0]);
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+#[should_panic(expected = "scalar-output")]
+fn sparse_hessian_par_rejects_multi_output_tape() {
+    let (tape, _) = echidna::record_multi(rosenbrock_multi, &[1.0_f64, 2.0]);
+    let _ = tape.sparse_hessian_par(&[1.0_f64, 2.0]);
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+#[should_panic(expected = "scalar-output")]
+fn hessian_par_rejects_multi_output_tape() {
+    let (tape, _) = echidna::record_multi(rosenbrock_multi, &[1.0_f64, 2.0]);
+    let _ = tape.hessian_par(&[1.0_f64, 2.0]);
+}
+
+// Sanity: scalar-output sparse Hessian still works.
+#[test]
+fn sparse_hessian_on_scalar_output_still_works() {
+    let (tape, _) = echidna::record(
+        |x: &[BReverse<f64>]| x[0] * x[0] + x[1] * x[1],
+        &[1.0_f64, 2.0],
+    );
+    let (_val, _grad, _pattern, h) = tape.sparse_hessian(&[1.0_f64, 2.0]);
+    // H of x² + y² is diag(2, 2); the two diagonal entries are present.
+    assert!(h.iter().any(|&v| (v - 2.0).abs() < 1e-12));
+}

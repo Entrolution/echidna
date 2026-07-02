@@ -78,6 +78,52 @@ fn l9_taylor_rem_zero_divisor_returns_nan() {
     );
 }
 
+// Scalar-variant `Rem`: `Taylor % scalar` and `scalar % Taylor` must apply the
+// same zero-divisor guard as the Taylor%Taylor impl. Previously `Taylor % 0`
+// left `coeffs[0] % 0 = NaN` beside finite higher coefficients, and
+// `scalar % zero-const-Taylor` produced an Inf/NaN mix.
+#[test]
+fn taylor_rem_scalar_zero_divisor_returns_nan() {
+    let a = Taylor::<f64, 4>::new([3.0, 1.0, 2.0, 0.0]);
+    let r = a % 0.0_f64;
+    assert!(taylor_is_nan(&r), "Taylor % 0 must yield all-NaN");
+}
+
+#[test]
+fn scalar_rem_taylor_zero_divisor_returns_nan() {
+    let b = Taylor::<f64, 4>::new([0.0, 1.0, 0.0, 0.0]);
+    let r = 7.0_f64 % b;
+    assert!(
+        taylor_is_nan(&r),
+        "scalar % zero-const Taylor must yield all-NaN"
+    );
+}
+
+// TaylorDyn scalar Rem variants delegate to the guarded generic impl — anchor
+// that the delegation genuinely carries the zero-divisor guard.
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_dyn_rem_scalar_zero_divisor_returns_nan() {
+    use echidna::{TaylorDyn, TaylorDynGuard};
+
+    let _guard = TaylorDynGuard::<f64>::new(4);
+    let a = TaylorDyn::<f64>::from_coeffs(&[3.0, 1.0, 2.0, 0.0]);
+    let r = a % 0.0_f64;
+    assert!(
+        r.coeffs().iter().all(|c| c.is_nan()),
+        "TaylorDyn % 0 must yield all-NaN, got {:?}",
+        r.coeffs()
+    );
+
+    let b = TaylorDyn::<f64>::from_coeffs(&[0.0, 1.0, 0.0, 0.0]);
+    let r2 = 7.0_f64 % b;
+    assert!(
+        r2.coeffs().iter().all(|c| c.is_nan()),
+        "scalar % zero-const TaylorDyn must yield all-NaN, got {:?}",
+        r2.coeffs()
+    );
+}
+
 // L9 sibling on TaylorDyn: the dynamic-sized Taylor must receive the
 // same zero-divisor guard as the static-sized Taylor.
 #[cfg(feature = "taylor")]

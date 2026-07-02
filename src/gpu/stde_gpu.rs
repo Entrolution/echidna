@@ -102,6 +102,16 @@ pub fn hessian_diagonal_gpu<B: GpuBackend>(
     tape: &B::TapeBuffers,
     x: &[f32],
 ) -> Result<(f32, Vec<f32>), GpuError> {
+    // `result.values[0]` and the per-element `c2s` mapping assume the tape has a
+    // single scalar output; on multi-output tapes the batched layout is
+    // `[batch * num_outputs + out]`, so indexing would silently interleave
+    // outputs. Enforce single-output, matching `laplacian_gpu`.
+    if backend.num_outputs(tape) != 1 {
+        return Err(GpuError::Other(format!(
+            "hessian_diagonal_gpu requires a scalar-output tape; got {} outputs",
+            backend.num_outputs(tape)
+        )));
+    }
     let n = x.len();
 
     // Build n basis directions

@@ -530,6 +530,32 @@ fn gpu_hessian_diagonal_matches_cpu() {
     }
 }
 
+// hessian_diagonal_gpu reads `values[0]` / per-element `c2s` assuming a scalar
+// output; on a multi-output tape that silently interleaves. The guard (shared
+// backend-agnostic Rust, fires before any GPU dispatch) must reject it, matching
+// `laplacian_gpu`.
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_hessian_diagonal_rejects_multi_output() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let (tape, _) = echidna::record_multi(
+        |v: &[echidna::BReverse<f64>]| vec![v[0] * v[0], v[1] * v[1]],
+        &[1.0_f64, 2.0],
+    );
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let res = echidna::gpu::stde_gpu::hessian_diagonal_gpu(&ctx, &tape_buf, &[1.0f32, 2.0]);
+    assert!(
+        res.is_err(),
+        "hessian_diagonal_gpu must reject a multi-output tape"
+    );
+}
+
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
 #[test]
 fn gpu_polynomial_exact_laplacian() {

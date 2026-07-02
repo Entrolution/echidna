@@ -47,6 +47,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of `[NaN]`, and the GPU backends disagreed with the CPU. Boundary
   values (`x = 0` for `ln`, `x = -1` for `ln_1p`, `|x| = 1` for `atanh`)
   keep the IEEE `1/0 = ±Inf` one-sided limit.
+- The sparse-Hessian family (`sparse_hessian`, `sparse_hessian_vec`,
+  `sparse_hessian_with_pattern`, `sparse_hessian_par`) and `hessian_par`
+  now require a scalar-output tape, matching the dense `hessian` / `hvp` /
+  `hessian_vec`. On a multi-output tape they previously returned, without
+  warning, the Hessian of a single output.
+- `third_order_hvvp` now requires a scalar-output tape and rejects tapes
+  containing custom ops (which its nested-dual sweep can only linearize to
+  first order), matching `hessian_vec`.
+- `hessian_diagonal_gpu` now returns an error for multi-output tapes
+  instead of silently interleaving outputs, matching `laplacian_gpu`.
+- `Taylor % scalar` and `scalar % Taylor` now flag the whole series NaN
+  when the divisor is zero, matching `Taylor % Taylor`. Previously they
+  left a NaN constant term beside finite (or `Inf`) higher-order
+  coefficients — an internally inconsistent series.
 
 ### Added (echidna)
 
@@ -65,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(I − G_z)⁻¹·G_x·ẋ`). Reaching `max_iter` with a converged primal but
   unconverged tangent now reports `IterationsExhaustedTangent` (whose
   `z_norm` can therefore be at or below `tol`; see its documentation).
+- `implicit_tangent_sparse`, `implicit_adjoint_sparse`, and
+  `implicit_jacobian_sparse` now return `NumericSingular` when the solve
+  produces a non-finite result (e.g. a NaN reaching the right-hand side via
+  `x_dot` / `z̄`), matching the dense implicit functions. Previously they
+  could return `Ok` with NaN entries.
 
 ## [0.11.0] - 2026-05-20
 
