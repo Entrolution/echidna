@@ -715,7 +715,9 @@ pub fn taylor_hypot<F: Float>(
         // shifted series, then shift the result back by one to represent the
         // `|t|·…` factor. This mirrors CPU `Taylor::abs` and gives the true
         // Taylor expansion rather than the `log(0)·exp` path's NaN/Inf.
-        if n > 1 && (a[1] != F::zero() || b[1] != F::zero()) {
+        if n > 1
+            && (a[1..n].iter().any(|&v| v != F::zero()) || b[1..n].iter().any(|&v| v != F::zero()))
+        {
             let mut a_shifted = vec![F::zero(); n];
             let mut b_shifted = vec![F::zero(); n];
             a_shifted[..(n - 1)].copy_from_slice(&a[1..n]);
@@ -734,11 +736,13 @@ pub fn taylor_hypot<F: Float>(
             c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
             return;
         }
-        // Deeper-order zero (a and b both vanish past the first-non-zero
-        // we can detect in the shifted series) or identically-zero — fall
-        // through to the direct square-then-sqrt path, which gives 0 for
-        // the primal and Inf for higher derivatives (the latter matches
-        // the singular-derivative convention at a true zero).
+        // Both series are identically zero past the leading coefficient — fall
+        // through to the direct square-then-sqrt path, which gives 0 for the
+        // primal and Inf for higher derivatives (the latter matches the
+        // singular-derivative convention at a true zero). A leading zero with a
+        // higher-order signal is handled by the peel-and-recurse branch above,
+        // which shifts one order at a time until a non-zero leading coefficient
+        // drives a non-zero scale.
         taylor_mul(a, a, scratch1);
         taylor_mul(b, b, scratch2);
         for k in 0..n {

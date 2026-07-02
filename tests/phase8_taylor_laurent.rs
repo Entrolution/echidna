@@ -65,6 +65,58 @@ fn l8_taylor_sqrt_negative_a0_returns_nan() {
     );
 }
 
+// taylor_hypot with both leading primals zero must peel ANY higher-order signal,
+// not just order 1. `hypot(t², 0) = t²`; the old guard only checked order 1, so it
+// fell through to the square→sqrt path and returned `[0, Inf, …]`. Assert per
+// coefficient — Taylor `==` compares only `coeff(0)`.
+#[test]
+fn taylor_hypot_higher_order_leading_zero() {
+    let zero = Taylor::<f64, 4>::new([0.0, 0.0, 0.0, 0.0]);
+
+    // hypot(t², 0) = t²  →  [0, 0, 1, 0]
+    let r = Taylor::<f64, 4>::new([0.0, 0.0, 1.0, 0.0]).hypot(zero);
+    assert_eq!(r.coeff(0), 0.0);
+    assert_eq!(
+        r.coeff(1),
+        0.0,
+        "coeff(1) must be 0 (was Inf), got {}",
+        r.coeff(1)
+    );
+    assert!(
+        (r.coeff(2) - 1.0).abs() < 1e-12,
+        "coeff(2) = {}",
+        r.coeff(2)
+    );
+    assert_eq!(r.coeff(3), 0.0);
+
+    // hypot(t³, 0) = t³  →  [0, 0, 0, 1]
+    let r3 = Taylor::<f64, 4>::new([0.0, 0.0, 0.0, 1.0]).hypot(zero);
+    assert!(
+        (r3.coeff(3) - 1.0).abs() < 1e-12,
+        "coeff(3) = {}",
+        r3.coeff(3)
+    );
+    for k in 0..3 {
+        assert_eq!(r3.coeff(k), 0.0, "coeff({k}) = {}", r3.coeff(k));
+    }
+}
+
+// Laurent(t², pole 2).hypot(0) rebases to a common pole, introducing leading
+// zeros with an order-2 signal — reaching the kernel's `scale==0` branch (contra
+// the old "unreachable" comment). Must normalize to a clean pole-2 t².
+#[test]
+fn laurent_hypot_rebased_leading_zero() {
+    let r = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], 2).hypot(Laurent::<f64, 4>::zero());
+    assert_eq!(r.pole_order(), 2, "pole_order = {}", r.pole_order());
+    assert!(
+        (r.coeff(2) - 1.0).abs() < 1e-12,
+        "coeff(2) = {}",
+        r.coeff(2)
+    );
+    assert_eq!(r.coeff(0), 0.0);
+    assert_eq!(r.coeff(1), 0.0);
+}
+
 // L9: Taylor::rem with zero divisor must not silently produce Inf/NaN in
 // individual coefficient slots — it should return a uniformly NaN result.
 #[test]

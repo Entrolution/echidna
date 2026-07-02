@@ -152,8 +152,11 @@ impl<F: Float> Dual<F> {
         } else {
             n.re * val / self.re * self.eps
         };
-        let dy = if val == F::zero() {
-            // lim_{x→0+} x^y * ln(x) = 0 for y > 0
+        let dy = if val == F::zero() || self.re <= F::zero() {
+            // `lim_{x→0+} x^y·ln(x) = 0` for y > 0; and for a negative base
+            // `ln(x)` is undefined (complex), so the exponent direction is
+            // treated as locally constant — matching `Reverse`/`opcode`. The
+            // base-direction `dx` term above stays finite for integer exponents.
             F::zero()
         } else {
             val * self.re.ln() * n.eps

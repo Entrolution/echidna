@@ -170,7 +170,10 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         } else {
             n.re * val / self.re
         };
-        let dy_factor = if val == F::zero() {
+        let dy_factor = if val == F::zero() || self.re <= F::zero() {
+            // Negative/zero base: `ln(x)` is undefined for x <= 0, so the
+            // exponent direction is treated as locally constant (matches
+            // `Reverse`/`opcode`). The base-direction factor stays finite.
             F::zero()
         } else {
             val * self.re.ln()

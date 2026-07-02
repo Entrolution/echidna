@@ -813,14 +813,13 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         // directional information that Laurent can meaningfully
         // represent.
         //
-        // Note: the kernel's `scale == 0` recursive shift-and-square
-        // branch (which handles leading-zero-but-non-trivial higher-
-        // order seeds) is unreachable from normalized Laurent
-        // inputs — `Laurent::new`'s normalization strips leading
-        // zeros into the pole_order, so post-rebase either the
-        // lower-pole operand has a non-zero leading coefficient
-        // (driving a non-zero scale) or both operands are
-        // identically zero (caught above).
+        // Note: rebasing the two operands to a common (more-negative) pole
+        // introduces leading zeros in the higher-pole operand's coefficient
+        // array, so the kernel's `scale == 0` peel-and-recurse branch IS
+        // reachable — e.g. `Laurent(t², pole 2).hypot(0)` rebases `t²` to
+        // `[0, 0, 1, …]` at the common pole 0. The kernel handles this by
+        // peeling leading zeros one order at a time; `normalize()` then
+        // restores the correct pole order.
         if self.is_all_zero() && other.is_all_zero() {
             return Self::zero();
         }
