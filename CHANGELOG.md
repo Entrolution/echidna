@@ -105,6 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reverse-gradient sweep and the wgpu Hessian-vector-product first phase) now use
   the cancellation-safe factored `(a-1)(a+1)`, matching every other site and the
   CPU kernel.
+- The GPU 2nd-order Taylor kernels (wgpu + CUDA) now match the CPU on three edge
+  cases: `max(x, NaN)` / `min(x, NaN)` return the finite operand (the NaN
+  tie-break was previously dropped, so the GPU returned `NaN`); `sqrt` at a zero
+  primal produces a uniform `+Inf` higher-coefficient jet (the vertical tangent)
+  instead of a sign-dependent `±Inf`/`NaN` mix; and `x % y` with a zero-leading
+  divisor returns an all-NaN jet instead of an `Inf`/`NaN` mix.
 
 ### Added (echidna)
 

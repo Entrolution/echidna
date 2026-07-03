@@ -595,6 +595,74 @@ macro_rules! opcode_tests_for_backend {
                 );
             }
 
+            // GPU-low: MAX/MIN keep CPU's NaN tie-break — max(x, NaN) = min(x, NaN) = x,
+            // the finite operand (pre-fix `x >= NaN` is false so GPU returned NaN).
+            #[test]
+            fn op_max_min_nan_tiebreak() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (mx, _, _) = run_binary_jet(
+                    &ctx,
+                    |v| num_traits::Float::max(v[0], v[1]),
+                    1.0,
+                    f32::NAN,
+                    [1.0, 0.0],
+                );
+                assert_eq!(mx, 1.0, "max(1, NaN) must be the finite operand, got {mx}");
+                let (mn, _, _) = run_binary_jet(
+                    &ctx,
+                    |v| num_traits::Float::min(v[0], v[1]),
+                    1.0,
+                    f32::NAN,
+                    [1.0, 0.0],
+                );
+                assert_eq!(mn, 1.0, "min(1, NaN) must be the finite operand, got {mn}");
+            }
+
+            // GPU-low: REM by a zero-leading divisor is an all-NaN jet (matches CPU
+            // Taylor::rem), not the Inf/NaN mix from trunc(x/0).
+            #[test]
+            fn op_rem_zero_divisor_all_nan() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (c0, c1, c2) = run_binary_jet(&ctx, |v| v[0] % v[1], 3.0, 0.0, [1.0, 0.0]);
+                assert!(
+                    c0.is_nan() && c1.is_nan() && c2.is_nan(),
+                    "x % 0 jet must be all-NaN, got ({c0}, {c1}, {c2})"
+                );
+            }
+
+            // GPU-low: sqrt at a0==0 gives a uniform +Inf higher-coeff jet (vertical
+            // tangent), not the sign-dependent +Inf/-Inf the recurrence produced.
+            #[test]
+            fn op_sqrt_zero_uniform_inf() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (tape, _) = record(f_sqrt, &[0.0_f64]);
+                let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+                let tape_buf = ctx.upload_tape(&gpu_data);
+                let r = ctx
+                    .taylor_forward_2nd_batch(&tape_buf, &[0.0f32], &[1.0f32], 1)
+                    .unwrap();
+                assert_eq!(r.values[0], 0.0, "sqrt(0) primal must be 0");
+                assert!(
+                    r.c1s[0].is_infinite() && r.c1s[0] > 0.0,
+                    "sqrt(0) c1 must be +Inf, got {}",
+                    r.c1s[0]
+                );
+                assert!(
+                    r.c2s[0].is_infinite() && r.c2s[0] > 0.0,
+                    "sqrt(0) c2 must be +Inf (uniform), got {}",
+                    r.c2s[0]
+                );
+            }
+
             // M9: ln1p(-1) is the domain singularity -Inf. x=-1 is above the series
             // threshold, so log1p_f returns the naive `log(1.0 + (-1)) = log(0) = -Inf`
             // (NOT -1). Pins that the small-|x| series branch never clamps x=-1.
@@ -1531,6 +1599,26 @@ fn check_series_domain_jet(
     check(gpu_result.values[0], primal_class, "c0");
     check(gpu_result.c1s[0], c1_class, "c1");
     check(gpu_result.c2s[0], c2_class, "c2");
+}
+
+/// Run a binary-op GPU jet and return `(c0, c1, c2)`. Used for the GPU-low parity
+/// tests (MAX/MIN NaN tie-break, REM zero-divisor) where the inputs include NaN/0.
+#[cfg(feature = "stde")]
+fn run_binary_jet(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f32,
+    x1: f32,
+    seed: [f32; 2],
+) -> (f32, f32, f32) {
+    // The tape is structural (`f(in0, in1)`); the NaN/0 inputs only matter at eval.
+    let (tape, _) = record(f, &[x0 as f64, x1 as f64]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let r = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0, x1], &seed, 1)
+        .unwrap();
+    (r.values[0], r.c1s[0], r.c2s[0])
 }
 
 /// Read only the GPU jet primal (`values[0]`) of a unary op — for the domain
