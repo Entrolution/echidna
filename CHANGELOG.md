@@ -80,6 +80,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scalar AD modes. Previously they emitted a NaN primal beside finite
   higher-order coefficients. Branch-point boundaries (e.g. `ln` at 0) keep
   their IEEE singularity.
+- The GPU 2nd-order Taylor kernels (wgpu + CUDA) now match the CPU series
+  accuracy for `asin`/`acos`/`atanh` near `|x| = 1` and for `exp_m1`/`ln_1p`
+  at small arguments. The inverse-trig jet denominators use the
+  cancellation-safe factored form `(1 − x)(1 + x)` (as `acosh` already did),
+  and the `exp_m1`/`ln_1p` primals are computed accurately — via the native
+  `expm1`/`log1p` device intrinsics on CUDA and guard-free series polyfills on
+  wgpu (the naive `exp(x) − 1` / `log(1 + x)` lost most of their significance
+  for small arguments).
 
 ### Added (echidna)
 

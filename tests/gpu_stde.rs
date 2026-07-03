@@ -225,6 +225,37 @@ fn check_1d(
     );
 }
 
+/// Assert the GPU jet PRIMAL (`values[0]`) matches an f64 reference to within a
+/// relative tolerance. Used for M9 (expm1/ln1p small-arg accuracy): the naive
+/// `exp(x)-1`/`log(1+x)` lose ~5-100% relative accuracy at `x ~ 1e-6..1e-7` in
+/// f32, the series polyfills recover it. The reference is taken at the actually
+/// uploaded f32 input so the check isolates the primal-formula error from f32
+/// input quantization.
+#[cfg(feature = "stde")]
+fn check_primal_rel(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+    truth: fn(f64) -> f64,
+    tol: f64,
+    label: &str,
+) {
+    let x = [x0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap();
+    let want = truth(x0 as f32 as f64);
+    let got = gpu_result.values[0] as f64;
+    let rel = (got - want).abs() / want.abs().max(f64::MIN_POSITIVE);
+    assert!(
+        rel < tol,
+        "{label}: gpu primal={got} truth={want} rel={rel} (tol {tol})"
+    );
+}
+
 fn f_exp<T: Scalar>(x: &[T]) -> T {
     x[0].exp()
 }
@@ -434,6 +465,90 @@ macro_rules! opcode_tests_for_backend {
                 };
                 check_1d(&ctx, f_abs_fn, -2.0, "abs_neg");
                 check_1d(&ctx, f_abs_fn, 2.0, "abs_pos");
+            }
+
+            // M7: near-|x|=1 finiteness + coarse-parity regression anchor. This
+            // is deliberately NOT red-first — the factored-vs-naive precision
+            // gain is below the f32 parity floor here (cf. gpu_cpu_parity.rs
+            // acosh near-1); the factoring itself is pinned by the codegen-string
+            // test `m7_inverse_trig_denominators_factored`.
+            #[test]
+            fn op_asin_acos_atanh_near_boundary() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                for &x in &[0.9_f64, 0.99] {
+                    check_1d(&ctx, f_asin, x, "asin_near");
+                    check_1d(&ctx, f_acos, x, "acos_near");
+                    check_1d(&ctx, f_atanh, x, "atanh_near");
+                }
+            }
+
+            // M9: expm1/ln1p small-arg accuracy. Genuinely red-first on Metal —
+            // the naive f32 primal is ~5% wrong at 1e-6 and ~100% wrong at 1e-7,
+            // the series polyfills reach < 1e-3 relative.
+            #[test]
+            fn op_expm1_ln1p_primal_accuracy() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                check_primal_rel(&ctx, f_exp_m1, 1e-6, |x| x.exp_m1(), 1e-3, "expm1@1e-6");
+                check_primal_rel(&ctx, f_exp_m1, 1e-7, |x| x.exp_m1(), 1e-3, "expm1@1e-7");
+                check_primal_rel(&ctx, f_ln_1p, 1e-6, |x| x.ln_1p(), 1e-3, "ln1p@1e-6");
+                check_primal_rel(&ctx, f_ln_1p, 1e-7, |x| x.ln_1p(), 1e-3, "ln1p@1e-7");
+            }
+
+            // M9: above the series threshold expm1_f falls back to `exp(x)-1.0`;
+            // for x past the f32 exp-overflow point (~88.7) that is `+Inf - 1 = +Inf`.
+            // Pins the large-x limit.
+            #[test]
+            fn op_expm1_overflow_stays_inf() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (tape, _) = record(f_exp_m1, &[90.0_f64]);
+                let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+                let tape_buf = ctx.upload_tape(&gpu_data);
+                let r = ctx
+                    .taylor_forward_2nd_batch(&tape_buf, &[90.0f32], &[1.0f32], 1)
+                    .unwrap();
+                assert!(
+                    r.values[0].is_infinite() && r.values[0] > 0.0,
+                    "expm1(90) primal must be +Inf, got {}",
+                    r.values[0]
+                );
+                // Just BELOW the overflow point expm1(87)=6.08e37 is finite and
+                // f32-representable, and `exp(87)-1.0` is exact there. (A Kahan
+                // `(u-1)*x/log(u)` form would overflow the `um1*x` intermediate to
+                // +Inf here — Metal fast-math even reassociates a parenthesized
+                // `um1*(x/log u)` back into it — which is why the split avoids it.)
+                // CPU/CUDA stay finite, so WGSL must too.
+                check_primal_rel(&ctx, f_exp_m1, 87.0, |x| x.exp_m1(), 1e-3, "expm1@87");
+            }
+
+            // M9: ln1p(-1) is the domain singularity -Inf. x=-1 is above the series
+            // threshold, so log1p_f returns the naive `log(1.0 + (-1)) = log(0) = -Inf`
+            // (NOT -1). Pins that the small-|x| series branch never clamps x=-1.
+            #[test]
+            fn op_ln1p_neg_one_is_singular() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (tape, _) = record(f_ln_1p, &[-1.0_f64]);
+                let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+                let tape_buf = ctx.upload_tape(&gpu_data);
+                let r = ctx
+                    .taylor_forward_2nd_batch(&tape_buf, &[-1.0f32], &[1.0f32], 1)
+                    .unwrap();
+                assert!(
+                    r.values[0].is_infinite() && r.values[0] < 0.0,
+                    "ln1p(-1) primal must be -Inf, got {}",
+                    r.values[0]
+                );
             }
         }
     };
