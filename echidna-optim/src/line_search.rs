@@ -67,6 +67,17 @@ pub fn backtracking_armijo<F: Float, O: Objective<F>>(
     params: &ArmijoParams<F>,
 ) -> Option<LineSearchResult<F>> {
     let n = x.len();
+
+    // Reject misconfigured params: with `rho` outside `(0, 1)` the step length
+    // never shrinks (`rho >= 1` → infinite loop), and `alpha_min <= 0` lets `alpha`
+    // underflow to `0` and return a degenerate zero-step "success". The whole check
+    // is a positive-range predicate so a NaN `rho`/`alpha_min` is rejected too (a
+    // negated `<= 0` form would let NaN slip through). Returning `None` routes to
+    // `LineSearchFailed` in the callers (L-BFGS, Newton).
+    if !(params.rho > F::zero() && params.rho < F::one() && params.alpha_min > F::zero()) {
+        return None;
+    }
+
     let dg = dot(grad_x, d);
 
     // Not a descent direction — caller should handle this
@@ -176,5 +187,57 @@ mod tests {
 
         let result = backtracking_armijo(&mut obj, &x, &d, f_x, &grad, &ArmijoParams::default());
         assert!(result.is_none());
+    }
+
+    // Termination guards (green-only-observable — the pre-fix `rho >= 1` bug is an
+    // infinite loop, so it cannot be run as an assertion-flip red-first).
+    #[test]
+    fn armijo_rejects_rho_ge_one() {
+        let mut obj = Quadratic;
+        let x = vec![2.0, 3.0];
+        let (f_x, grad) = obj.eval_grad(&x);
+        let d: Vec<f64> = grad.iter().map(|&g| -g).collect();
+        // rho >= 1 would spin forever (alpha never shrinks); must be rejected.
+        let params = ArmijoParams {
+            rho: 1.0,
+            ..Default::default()
+        };
+        let result = backtracking_armijo(&mut obj, &x, &d, f_x, &grad, &params);
+        assert!(result.is_none(), "rho >= 1 must be rejected, not looped");
+    }
+
+    #[test]
+    fn armijo_rejects_nonpositive_alpha_min() {
+        let mut obj = Quadratic;
+        let x = vec![2.0, 3.0];
+        let (f_x, grad) = obj.eval_grad(&x);
+        let d: Vec<f64> = grad.iter().map(|&g| -g).collect();
+        // alpha_min <= 0 would let alpha underflow to a degenerate zero-step.
+        let params = ArmijoParams {
+            alpha_min: 0.0,
+            ..Default::default()
+        };
+        let result = backtracking_armijo(&mut obj, &x, &d, f_x, &grad, &params);
+        assert!(result.is_none(), "alpha_min <= 0 must be rejected");
+    }
+
+    #[test]
+    fn armijo_rejects_nan_params() {
+        let mut obj = Quadratic;
+        let x = vec![2.0, 3.0];
+        let (f_x, grad) = obj.eval_grad(&x);
+        let d: Vec<f64> = grad.iter().map(|&g| -g).collect();
+        // NaN rho / alpha_min must be rejected by the positive-range guard, not
+        // slip through a negated `<= 0` comparison.
+        let nan_rho = ArmijoParams {
+            rho: f64::NAN,
+            ..Default::default()
+        };
+        assert!(backtracking_armijo(&mut obj, &x, &d, f_x, &grad, &nan_rho).is_none());
+        let nan_amin = ArmijoParams {
+            alpha_min: f64::NAN,
+            ..Default::default()
+        };
+        assert!(backtracking_armijo(&mut obj, &x, &d, f_x, &grad, &nan_amin).is_none());
     }
 }

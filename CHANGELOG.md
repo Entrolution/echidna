@@ -125,6 +125,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (echidna-optim)
 
+- The trust-region solver rejects a `TrustRegionConfig` with `eta` outside
+  `[0, 1/4)` at entry (`NumericalError`). An `eta >= 1/4` could reject a step
+  without shrinking the radius, silently stalling to `MaxIterations`; `[0, 1/4)`
+  is the range required for the standard convergence guarantee.
+- The trust-region radius-expansion boundary test now uses a `sqrt(eps)` relative
+  tolerance instead of ~1 ULP, so the expansion branch actually fires on genuine
+  boundary steps (faster convergence on large-step problems; results unchanged).
+- The L-BFGS curvature filter tightened from `cos θ > eps` to `cos θ > sqrt(eps)`,
+  rejecting near-orthogonal `(s, y)` pairs whose `ρ = 1/(s·y)` would otherwise
+  blow up and corrupt the two-loop recursion into a garbage search direction.
+- The backtracking Armijo line search validates its parameters (`rho` in `(0, 1)`,
+  `alpha_min > 0`): a misconfigured `rho >= 1` previously never shrank the step
+  length and spun forever, and `alpha_min <= 0` returned a degenerate zero-step;
+  both now fail cleanly as `LineSearchFailed`.
 - `piggyback_tangent_solve` now requires both the primal and the tangent
   iterates to converge before returning. The tangent starts at zero and
   converges on its own schedule, so a warm-started primal previously
