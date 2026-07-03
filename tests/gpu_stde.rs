@@ -636,6 +636,47 @@ macro_rules! opcode_tests_for_backend {
                 );
             }
 
+            // GPU-low (WGSL primal conventions): SIGNUM(-0.0) = -1 (sign-bit, not
+            // the +1 that `a >= 0.0` gave), and ROUND is ties-away-from-zero (WGSL
+            // `round()` is ties-to-even). Exercised through the Taylor-jet primal.
+            #[test]
+            fn op_signum_round_wgsl_conventions() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let neg_zero = f32::from_bits(0x8000_0000);
+                let sn = series_jet_primal(
+                    &ctx,
+                    |v| num_traits::sign::Signed::signum(&v[0]),
+                    neg_zero as f64,
+                );
+                assert_eq!(sn, -1.0, "signum(-0.0) jet primal must be -1, got {sn}");
+                // ties-away: round(2.5)=3, round(-2.5)=-3, round(0.5)=1 (ties-to-even
+                // would give 2, -2, 0).
+                let r_up = series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), 2.5);
+                assert_eq!(r_up, 3.0, "round(2.5) must be 3 (ties away), got {r_up}");
+                let r_dn = series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), -2.5);
+                assert_eq!(r_dn, -3.0, "round(-2.5) must be -3 (ties away), got {r_dn}");
+                let r_half = series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), 0.5);
+                assert_eq!(
+                    r_half, 1.0,
+                    "round(0.5) must be 1 (ties away), got {r_half}"
+                );
+                // Regression: the additive `trunc(a+0.5)` form double-rounds — it
+                // off-by-ones large odd integers and rounds nextbelow(0.5) up to 1.
+                let r_bigodd =
+                    series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), 8388609.0);
+                assert_eq!(
+                    r_bigodd, 8388609.0,
+                    "round(8388609) must be itself, got {r_bigodd}"
+                );
+                let below_half = f32::from_bits(0x3EFFFFFF); // nextbelow(0.5) ~ 0.49999997
+                let r_nb =
+                    series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), below_half as f64);
+                assert_eq!(r_nb, 0.0, "round(nextbelow(0.5)) must be 0, got {r_nb}");
+            }
+
             // GPU-low: sqrt at a0==0 gives a uniform +Inf higher-coeff jet (vertical
             // tangent), not the sign-dependent +Inf/-Inf the recurrence produced.
             #[test]

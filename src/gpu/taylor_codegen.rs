@@ -200,6 +200,12 @@ fn is_nan_f32(x: f32) -> bool {{
     // i.e. `(bits & 0x7fffffff) > 0x7f800000` (0x7f800000 is exactly +Inf).
     return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
 }}
+fn signum_f32(x: f32) -> f32 {{
+    // Rust f32::signum: -1 for -0.0 (sign bit set), +1 for +0.0/positive, NaN at NaN.
+    // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit instead.
+    if (is_nan_f32(x)) {{ return x; }}
+    return select(1.0, -1.0, (bitcast<u32>(x) & 0x80000000u) != 0u);
+}}
 fn log1p_f(x: f32) -> f32 {{
     // Accurate log(1+x). For small |x| the naive `log(1 + x)` loses the low bits
     // of `x` when it is added to 1.0; the Kahan `log(u)*x/(u-1)` trick is defeated
@@ -1293,7 +1299,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                switch op {{").unwrap();
     writeln!(
         s,
-        "                    case 37u: {{ val = select(sign(a.v[0]), 1.0, a.v[0] == 0.0); }}"
+        "                    case 37u: {{ val = signum_f32(a.v[0]); }}"
     )
     .unwrap();
     writeln!(
@@ -1304,7 +1310,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                    case 39u: {{ val = ceil(a.v[0]); }}").unwrap();
     writeln!(
         s,
-        "                    case 40u: {{ val = round(a.v[0]); }}"
+        "                    case 40u: {{ let t = trunc(a.v[0]); val = select(t, t + select(-1.0, 1.0, a.v[0] >= 0.0), abs(a.v[0] - t) >= 0.5); }}"
     )
     .unwrap();
     writeln!(
@@ -2578,5 +2584,24 @@ mod tests {
             cuda.contains("if (b.v[0] == (F)0) {"),
             "CUDA REM must guard a zero-leading divisor"
         );
+    }
+
+    // GPU-low (WGSL primal conventions): SIGNUM uses the sign-bit helper (so -0.0
+    // gives -1, not +1), and ROUND is ties-away-from-zero (WGSL `round()` is
+    // ties-to-even). CUDA's `round`/`copysign` are already ties-away / sign-bit.
+    #[test]
+    fn m_wgsl_signum_round_conventions() {
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(wgsl.contains("fn signum_f32"));
+        assert!(wgsl.contains("val = signum_f32(a.v[0]);"));
+        assert!(!wgsl.contains("val = select(sign(a.v[0]), 1.0"));
+        // Ties-away via trunc-then-fractional-compare (`a - trunc(a)` is exact, so
+        // no double-rounding — the additive `trunc(a+0.5)` form regresses large
+        // odd integers and `nextbelow(0.5)`).
+        assert!(wgsl.contains(
+            "let t = trunc(a.v[0]); val = select(t, t + select(-1.0, 1.0, a.v[0] >= 0.0), abs(a.v[0] - t) >= 0.5);"
+        ));
+        assert!(!wgsl.contains("val = round(a.v[0]);"));
+        assert!(!wgsl.contains("trunc(a.v[0] + select(-0.5, 0.5"));
     }
 }

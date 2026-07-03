@@ -111,6 +111,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   primal produces a uniform `+Inf` higher-coefficient jet (the vertical tangent)
   instead of a sign-dependent `±Inf`/`NaN` mix; and `x % y` with a zero-leading
   divisor returns an all-NaN jet instead of an `Inf`/`NaN` mix.
+- The wgpu GPU kernels now match the CPU on two piecewise ops: `signum(-0.0)`
+  returns `-1` (it previously returned `+1` from an `a >= 0.0` test that ignores the
+  sign bit), and `round` uses ties-away-from-zero — WGSL's built-in `round` is
+  ties-to-even, so `round(2.5)` gave `2` instead of `3`. Both now agree with Rust
+  `f32::round` / `f32::signum` and the CUDA backend.
 
 ### Added (echidna)
 

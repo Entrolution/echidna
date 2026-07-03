@@ -130,6 +130,15 @@ fn abs_deriv_f32(x: f32) -> f32 {
     return select(1.0, -1.0, (b & 0x80000000u) != 0u);
 }
 
+fn signum_f32(x: f32) -> f32 {
+    // Rust f32::signum: -1 for -0.0 (sign bit), +1 for +0.0/positive, NaN at NaN.
+    // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit. Bitcast NaN test
+    // since `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -203,10 +212,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 34u: { if a < 1.0 { let n=bitcast<f32>(0x7fc00000u); r=n; rt=n; } else { r=log(a+sqrt((a-1.0)*(a+1.0))); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt((a-1.0)*(a+1.0));} } }
             case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(0x7fc00000u), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
             case 36u: { r=abs(a); rt=abs_deriv_f32(a)*at; }
-            case 37u: { if a!=a {r=a;} else if a>=0.0 {r=1.0;} else {r=-1.0;} rt=0.0; }
+            case 37u: { r = signum_f32(a); rt=0.0; }
             case 38u: { r=floor(a); rt=0.0; }
             case 39u: { r=ceil(a); rt=0.0; }
-            case 40u: { r=round(a); rt=0.0; }
+            case 40u: { let t=trunc(a); r=select(t, t + select(-1.0, 1.0, a >= 0.0), abs(a - t) >= 0.5); rt=0.0; }
             case 41u: { r=trunc(a); rt=0.0; }
             case 42u: { r=a-trunc(a); rt=at; }
             default: {}
