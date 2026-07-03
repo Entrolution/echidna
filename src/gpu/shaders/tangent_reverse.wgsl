@@ -120,6 +120,16 @@ fn ln1p_f32(x: f32) -> f32 {
     return log(1.0 + x);
 }
 
+fn abs_deriv_f32(x: f32) -> f32 {
+    // Unified abs' convention (matches kernels::abs_deriv): 0 at the kink
+    // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
+    // test inspects the bits — `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if (x == 0.0) { return 0.0; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -192,7 +202,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); if ax>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {rt=at/sqrt(a*a+1.0);} }
             case 34u: { if a < 1.0 { let n=bitcast<f32>(0x7fc00000u); r=n; rt=n; } else { r=log(a+sqrt((a-1.0)*(a+1.0))); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt((a-1.0)*(a+1.0));} } }
             case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(0x7fc00000u), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
-            case 36u: { r=abs(a); if a!=a {rt=0.0;} else {let bits=bitcast<u32>(a); let s=select(1.0, -1.0, (bits&0x80000000u)!=0u); rt=s*at;} }
+            case 36u: { r=abs(a); rt=abs_deriv_f32(a)*at; }
             case 37u: { if a!=a {r=a;} else if a>=0.0 {r=1.0;} else {r=-1.0;} rt=0.0; }
             case 38u: { r=floor(a); rt=0.0; }
             case 39u: { r=ceil(a); rt=0.0; }
@@ -421,14 +431,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 35u /* ATANH */: { if (a >= -1.0 && a <= 1.0) { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
-            case 36u /* ABS */: {
-                if a != a {
-                    da_re = 0.0;
-                } else {
-                    let bits = bitcast<u32>(a);
-                    da_re = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
-                }
-            }
+            case 36u /* ABS */: { da_re = abs_deriv_f32(a); }
             case 37u, 38u, 39u, 40u, 41u: { /* zero derivative */ }
             case 42u /* FRACT */: { da_re=1.0; }
             default: {}

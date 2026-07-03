@@ -443,18 +443,10 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         OpCode::Acosh => (kernels::acosh_deriv(a), zero),
         OpCode::Atanh => (kernels::atanh_deriv(a), zero),
 
-        // Misc. `Abs` uses the symmetric midpoint 0 of the Clarke
-        // subdifferential [-1, 1] at the kink; relying on `a.signum()`
-        // leaks the sign bit of ±0 (`signum(+0) = +0`, `signum(-0) = -0`),
-        // which makes algebraically equivalent tape positions report
-        // different subgradients depending on how the zero was produced.
-        OpCode::Abs => {
-            if a == zero {
-                (zero, zero)
-            } else {
-                (a.signum(), zero)
-            }
-        }
+        // `Abs` delegates to `kernels::abs_deriv`: 0 at the kink (value-based, so
+        // `±0` agree and the sign bit of a produced zero can't leak into the
+        // subgradient); see its doc for the full rationale.
+        OpCode::Abs => (kernels::abs_deriv(a), zero),
         OpCode::Signum | OpCode::Floor | OpCode::Ceil | OpCode::Round | OpCode::Trunc => {
             (zero, zero)
         }

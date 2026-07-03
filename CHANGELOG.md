@@ -121,6 +121,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (echidna)
 
+- The derivative of `abs` at the kink `x = 0` is now `0` (the minimal-norm
+  subgradient) across every AD mode (`Dual`, `DualVec`, `Reverse`, the bytecode
+  tape) and both GPU backends, via the new single-source `kernels::abs_deriv`.
+  Previously most modes returned `±1` (from `signum`, which leaks the sign bit of
+  a zero — `signum(-0.0) = -1`), so algebraically identical points could report
+  different subgradients depending on how the zero was produced. `0` is value-based
+  (`+0` and `-0` agree) and matches PyTorch / JAX / TensorFlow. `sign(x)` off the
+  kink and `NaN` at `NaN` are unchanged, and the wgpu tangent shaders now propagate
+  `NaN` at a NaN input (they previously zeroed the derivative there). Sharp /
+  limiting subgradients still force `±1` via the nonsmooth machinery.
 - `<Laurent as num_traits::Zero>::is_zero` is now value-based — it returns
   true when the series evaluates to `0` at the expansion point — instead of
   structural (all coefficients zero). This aligns `is_zero` with the

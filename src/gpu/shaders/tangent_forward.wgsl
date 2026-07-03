@@ -130,6 +130,16 @@ fn hypot_f32(a: f32, b: f32) -> f32 {
     return mx * sqrt(1.0 + r * r);
 }
 
+fn abs_deriv_f32(x: f32) -> f32 {
+    // Unified abs' convention (matches kernels::abs_deriv): 0 at the kink
+    // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
+    // test inspects the bits — `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if (x == 0.0) { return 0.0; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -332,18 +342,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = select(bitcast<f32>(0x7fc00000u), at / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
-            case 36u /* ABS */: {
-                r = abs(a);
-                // Match Rust's `signum` via sign-bit inspection so that
-                // -0.0 produces -1 (not +1 as `a >= 0.0` would yield).
-                if a != a {
-                    rt = 0.0;
-                } else {
-                    let bits = bitcast<u32>(a);
-                    let s = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
-                    rt = s * at;
-                }
-            }
+            case 36u /* ABS */: { r = abs(a); rt = abs_deriv_f32(a) * at; }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: {
                 // Zero derivative ops
                 switch op {

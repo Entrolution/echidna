@@ -449,7 +449,8 @@ impl<F: Float + TapeThreadLocal> Signed for Reverse<F> {
     #[inline]
     fn abs(&self) -> Self {
         let value = self.value.abs();
-        let index = tape::with_active_tape(|t| t.push_unary(self.index, self.value.signum()));
+        let index =
+            tape::with_active_tape(|t| t.push_unary(self.index, kernels::abs_deriv(self.value)));
         Reverse { value, index }
     }
     #[inline]
@@ -628,7 +629,7 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         rev_unary(self, self.value.fract(), F::one())
     }
     fn abs(self) -> Self {
-        rev_unary(self, self.value.abs(), self.value.signum())
+        rev_unary(self, self.value.abs(), kernels::abs_deriv(self.value))
     }
     fn signum(self) -> Self {
         Reverse::constant(self.value.signum())

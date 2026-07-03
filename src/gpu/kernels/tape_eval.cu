@@ -72,6 +72,9 @@ static __device__ __forceinline__ F domain_nan() { return F(nan("")); }
 // Math helpers — use the right precision
 // Match Rust's f64::signum: +1 for +0, -1 for -0, NaN for NaN.
 __device__ F _sign(F x) { return (x != x) ? x : copysign(F(1), x); }
+// abs' convention (matches kernels::abs_deriv): 0 at the kink (value-based, so
+// +/-0 agree), sign(x) elsewhere, NaN at NaN (via _sign).
+__device__ F _abs_deriv(F x) { return (x == F(0)) ? F(0) : _sign(x); }
 __device__ F _cbrt(F x) { return copysign(pow(fabs(x), F(1.0/3.0)), x); }
 // Match Rust's `f32::fract() = x - trunc(x)` (truncation), not WGSL/C's
 // floor-based `x - floor(x)` convention — they disagree for negative x.
@@ -325,7 +328,7 @@ extern "C" __global__ void reverse_sweep(
                 break;
             }
             case OP_ATANH:  da = (a >= -F(1) && a <= F(1)) ? F(1)/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
-            case OP_ABS:    da = _sign(a); break;
+            case OP_ABS:    da = _abs_deriv(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
             case OP_ROUND:  case OP_TRUNC: da = F(0); break;
             case OP_FRACT:  da = F(1); break;
@@ -476,7 +479,7 @@ extern "C" __global__ void tangent_forward(
                 break;
             }
             case OP_ATANH: r=atanh(a); rt=(a >= -F(1) && a <= F(1)) ? at/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
-            case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
+            case OP_ABS:   r=fabs(a); rt=_abs_deriv(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
             case OP_FLOOR:  r=floor(a); rt=F(0); break;
             case OP_CEIL:   r=ceil(a); rt=F(0); break;
@@ -626,7 +629,7 @@ extern "C" __global__ void tangent_reverse(
                 break;
             }
             case OP_ATANH: r=atanh(a); rt=(a >= -F(1) && a <= F(1)) ? at/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
-            case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
+            case OP_ABS:   r=fabs(a); rt=_abs_deriv(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
             case OP_FLOOR:  r=floor(a); rt=F(0); break;
             case OP_CEIL:   r=ceil(a); rt=F(0); break;
@@ -840,7 +843,7 @@ extern "C" __global__ void tangent_reverse(
                 break;
             }
             case OP_ATANH:  if (a >= -F(1) && a <= F(1)) { F t=(F(1)-a)*(F(1)+a); da_re=F(1)/t; da_eps=F(2)*a*at/(t*t); } else { da_re=domain_nan(); da_eps=domain_nan(); } break;
-            case OP_ABS:    da_re=_sign(a); break;
+            case OP_ABS:    da_re=_abs_deriv(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
             case OP_ROUND:  case OP_TRUNC: break;
             case OP_FRACT:  da_re=F(1); break;

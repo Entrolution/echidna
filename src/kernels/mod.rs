@@ -199,6 +199,31 @@ pub fn atanh_deriv<T: Float>(a: T) -> T {
     }
 }
 
+/// Derivative (subgradient) of `|a|`, unified across every AD mode and both GPU
+/// backends: `0` at the kink `a = 0`, `sign(a)` elsewhere, `NaN` at `NaN`.
+///
+/// `0` is the minimal-norm element of the Clarke subdifferential `[-1, 1]` at the
+/// kink — the convention PyTorch / JAX / TensorFlow use. Crucially it is *value*-
+/// based: `a == 0` catches both `+0.0` and `-0.0`, so the result never depends on
+/// the sign bit of a zero (which is reachable via `0*-1`, `x - x`, underflow…).
+/// Relying on `a.signum()` alone would leak that sign bit — `signum(+0.0) = +1`,
+/// `signum(-0.0) = -1` in Rust — making algebraically equivalent points report
+/// different subgradients. `NaN` flows through via `signum(NaN) = NaN`.
+///
+/// Every eager AD type (`Dual`, `DualVec`, `Reverse`) and the bytecode `OpCode`
+/// dispatcher delegate here; the wgpu and CUDA kernels carry the same
+/// `a == 0 -> 0` guard. Sharp/limiting subgradients (Clarke, `jacobian_limiting`)
+/// still force `±1` explicitly via `forced_reverse_partials`, independent of this
+/// smooth default.
+#[inline]
+pub fn abs_deriv<T: Float>(a: T) -> T {
+    if a == T::zero() {
+        T::zero()
+    } else {
+        a.signum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +266,17 @@ mod tests {
                                                  // Boundary a=1 → +Inf (1/sqrt(0)); in domain a=2 → 1/sqrt(3).
         assert!(acosh_deriv(1.0_f64).is_infinite() && acosh_deriv(1.0_f64) > 0.0);
         assert!((acosh_deriv(2.0_f64) - 1.0 / 3.0_f64.sqrt()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn abs_deriv_is_zero_at_the_kink_regardless_of_sign_bit() {
+        // The kink returns 0 (minimal-norm subgradient), value-based so +0 and -0
+        // agree; sign(a) elsewhere; NaN -> NaN.
+        assert_eq!(abs_deriv(0.0_f64), 0.0);
+        assert_eq!(abs_deriv(-0.0_f64), 0.0);
+        assert_eq!(abs_deriv(2.0_f64), 1.0);
+        assert_eq!(abs_deriv(-3.0_f64), -1.0);
+        assert!(abs_deriv(f64::NAN).is_nan());
     }
 
     /// Pin the factored-form precision near `a = 1`. The factored form

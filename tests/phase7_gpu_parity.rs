@@ -1,25 +1,21 @@
 //! Phase 7 Commit 2 regressions — GPU compile-flag parity and pinning
-//! tests for the M26/M28 investigations that found the GPU kernels
-//! already matched CPU behaviour.
+//! tests for the M28 investigation that found the GPU kernels already
+//! matched CPU behaviour.
 //!
-//! Covers L25 (NVRTC `--fmad=false`), M26 (ABS at ±0), M28 (CUDA REM).
+//! Covers L25 (NVRTC `--fmad=false`) and M28 (CUDA REM). The ABS-at-±0
+//! convention (formerly M26 here) moved to `tests/abs_kink_convention.rs`.
 //! M23 (device.poll error propagation) is compile-tested only — it
 //! requires a driver reset to exercise the error path at runtime, which
 //! can't be simulated from a unit test.
 
 #![cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
 
-use echidna::gpu::{GpuBackend, GpuTapeData};
-use echidna::{record, BReverse};
-
-#[cfg(feature = "gpu-wgpu")]
-use num_traits::Float;
-
-#[cfg(feature = "gpu-wgpu")]
-use echidna::gpu::WgpuContext;
-
+// The remaining tests (L25 FMA parity, M28 CUDA REM) are all CUDA-only; the
+// ABS-at-±0 (M26) wgpu tests moved to tests/abs_kink_convention.rs.
 #[cfg(feature = "gpu-cuda")]
-use echidna::gpu::CudaContext;
+use echidna::gpu::{CudaContext, GpuBackend, GpuTapeData};
+#[cfg(feature = "gpu-cuda")]
+use echidna::{record, BReverse};
 
 // ── L25: NVRTC --fmad=false gives bit-exact CPU-GPU parity on mul+add ──
 // With `--fmad=true` (CUDA default), NVRTC fuses `a*b + c` into a single
@@ -61,55 +57,9 @@ fn l25_cuda_fmad_disabled_bit_exact_with_cpu_f64() {
     );
 }
 
-// ── M26: ABS at ±0.0 matches CPU (WGSL bit-inspect + CUDA _sign) ──
-// Investigation finding: the agent reported the WGSL shader already used
-// `bitcast<u32>` to inspect the sign bit, which correctly returns -1 for
-// `-0.0` and +1 for `+0.0`. CUDA uses `_sign(a)`. This test pins the
-// behaviour so a future refactor doesn't silently regress.
-
-#[cfg(feature = "gpu-wgpu")]
-#[test]
-fn m26_wgpu_abs_at_positive_zero_gives_positive_gradient() {
-    let ctx = match WgpuContext::new() {
-        Some(c) => c,
-        None => return,
-    };
-    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].abs(), &[1.0_f64]);
-    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
-    let gpu_tape = ctx.upload_tape(&gpu_data);
-    // +0.0: the subgradient is the Clarke set [-1, 1]; any WGSL
-    // implementation that's sign-bit-driven should return +1 here.
-    let (_, g) = ctx.gradient_batch(&gpu_tape, &[0.0_f32], 1).unwrap();
-    assert_eq!(
-        g[0], 1.0,
-        "WGSL abs at +0 should give +1 (sign bit not set)"
-    );
-}
-
-#[cfg(feature = "gpu-wgpu")]
-#[test]
-fn m26_wgpu_abs_at_negative_zero_gives_negative_gradient() {
-    let ctx = match WgpuContext::new() {
-        Some(c) => c,
-        None => return,
-    };
-    let (tape, _) = record(|v: &[BReverse<f64>]| v[0].abs(), &[1.0_f64]);
-    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
-    let gpu_tape = ctx.upload_tape(&gpu_data);
-    // -0.0 via bit-pattern construction (literal `-0.0_f32` would be
-    // optimised away by the shader compiler in some drivers).
-    let neg_zero = f32::from_bits(0x8000_0000);
-    let (_, g) = ctx.gradient_batch(&gpu_tape, &[neg_zero], 1).unwrap();
-    // WGSL bit-inspect returns -1 for sign-bit-set. This matches CPU's
-    // `a.signum()` for -0.0 (also -0, which maps to -1 after the branch
-    // in opcode.rs's Abs arm after the Phase 8 L15 fix).
-    assert!(
-        g[0] == -1.0 || g[0] == 0.0,
-        "WGSL abs at -0 should give -1 (bit-inspect) or 0 (symmetric \
-         subgradient). Got {}",
-        g[0]
-    );
-}
+// ABS at ±0.0 is now covered by tests/abs_kink_convention.rs (unified 0-at-the-kink
+// convention, generic over backend, across the reverse / tangent-forward / HVP
+// sweeps) — which supersedes the former wgpu-only M26 pair here.
 
 // ── M28: CUDA REM primal and tangent are internally consistent ──
 // Investigation finding: CUDA REM primal uses `fmod(a, b)` and reverse

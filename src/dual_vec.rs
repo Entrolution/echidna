@@ -351,7 +351,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Absolute value.
     #[inline]
     pub fn abs(self) -> Self {
-        self.chain(self.re.abs(), self.re.signum())
+        self.chain(self.re.abs(), kernels::abs_deriv(self.re))
     }
 
     /// Sign function (zero derivative).

@@ -333,12 +333,14 @@ impl<F: Float> Dual<F> {
 
     /// Absolute value.
     ///
-    /// Derivative uses `signum(x)`: returns 1 at x=+0 and -1 at x=-0
-    /// (matching Rust's `f64::signum`). Both are valid subgradients of |x| at 0.
-    /// Consistent across all AD modes and GPU backends.
+    /// The derivative delegates to [`kernels::abs_deriv`]: `0` at the kink `x = 0`
+    /// (the minimal-norm subgradient, value-based so `+0` and `-0` agree), `sign(x)`
+    /// elsewhere, `NaN` at `NaN`. This convention is unified across every AD mode
+    /// and both GPU backends; sharp/limiting subgradients still force `±1` via the
+    /// nonsmooth machinery.
     #[inline]
     pub fn abs(self) -> Self {
-        self.chain(self.re.abs(), self.re.signum())
+        self.chain(self.re.abs(), kernels::abs_deriv(self.re))
     }
 
     /// Sign function (zero derivative).

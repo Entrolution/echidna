@@ -80,6 +80,16 @@ struct TapeMeta {
 
 // ── Main kernel ──
 
+fn abs_deriv_f32(x: f32) -> f32 {
+    // Unified abs' convention (matches kernels::abs_deriv): 0 at the kink
+    // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
+    // test inspects the bits — `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if (x == 0.0) { return 0.0; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let batch_id = gid.x;
@@ -278,16 +288,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 35u /* ATANH */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
 
             // Misc
-            case 36u /* ABS */: {
-                // `a >= 0.0` maps -0.0 to +1; to mirror Rust's `f32::signum`
-                // (which uses the sign bit), inspect bit 31 of the bitcast.
-                if a != a {
-                    da = a; // NaN
-                } else {
-                    let bits = bitcast<u32>(a);
-                    da = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
-                }
-            }
+            case 36u /* ABS */: { da = abs_deriv_f32(a); }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: { da = 0.0; }
             case 42u /* FRACT */: { da = 1.0; }
 
