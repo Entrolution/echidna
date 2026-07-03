@@ -88,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `expm1`/`log1p` device intrinsics on CUDA and guard-free series polyfills on
   wgpu (the naive `exp(x) − 1` / `log(1 + x)` lost most of their significance
   for small arguments).
+- The GPU 2nd-order Taylor kernels (wgpu + CUDA) now return an all-NaN jet for
+  `ln`/`log2`/`log10`/`ln_1p`/`atanh`/`acosh` when the leading coefficient is
+  strictly outside the real domain, matching the CPU series kernels and the
+  scalar AD modes. Previously they emitted a NaN primal beside finite
+  higher-order coefficients. Branch-point boundaries (`ln` at 0, `acosh` at 1,
+  `atanh` at ±1) keep their IEEE singular value.
 
 ### Added (echidna)
 

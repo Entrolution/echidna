@@ -529,6 +529,72 @@ macro_rules! opcode_tests_for_backend {
                 check_primal_rel(&ctx, f_exp_m1, 87.0, |x| x.exp_m1(), 1e-3, "expm1@87");
             }
 
+            // Series domain-NaN jets: strictly outside the real domain the GPU jet
+            // must be all-NaN (mirroring the CPU taylor_ln/taylor_atanh/taylor_acosh
+            // guards), not a NaN primal beside finite higher coefficients.
+            #[test]
+            fn op_series_out_of_domain() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                use CoeffClass::NaN;
+                // Genuine red-first: pre-guard these divide by a finite quantity out
+                // of domain (jet_ln 1/a0; jet_atanh recip(1-a0^2); jet_acosh at a<=-1
+                // where (a-1)(a+1)>0), leaving finite c1/c2 beside a NaN primal.
+                check_series_domain_jet(&ctx, f_ln, -2.0, NaN, NaN, NaN, "ln@-2");
+                check_series_domain_jet(&ctx, f_log2, -2.0, NaN, NaN, NaN, "log2@-2");
+                check_series_domain_jet(&ctx, f_log10, -2.0, NaN, NaN, NaN, "log10@-2");
+                check_series_domain_jet(&ctx, f_ln_1p, -2.0, NaN, NaN, NaN, "ln1p@-2");
+                check_series_domain_jet(&ctx, f_acosh, -2.0, NaN, NaN, NaN, "acosh@-2");
+                check_series_domain_jet(&ctx, f_atanh, 1.5, NaN, NaN, NaN, "atanh@1.5");
+                // Green anchors: already all-NaN pre-guard — asin/acos self-NaN via
+                // jet_sqrt(negative-leading) for c1/c2, with c0 from the native
+                // asin/acos builtin (NaN out of [-1,1] on both Metal and CUDA);
+                // acosh(0.5) via (0.5-1)(0.5+1)<0.
+                check_series_domain_jet(&ctx, f_asin, 1.5, NaN, NaN, NaN, "asin@1.5");
+                check_series_domain_jet(&ctx, f_acos, 1.5, NaN, NaN, NaN, "acos@1.5");
+                check_series_domain_jet(&ctx, f_acosh, 0.5, NaN, NaN, NaN, "acosh@0.5");
+            }
+
+            // The strict `<` domain guards must NOT clobber the in-domain boundary
+            // to NaN (over-guard tripwire): acosh(1)=0, atanh(1)=+Inf, ln1p(-1)=-Inf,
+            // ln(0)=-Inf all keep their branch-point value.
+            #[test]
+            fn op_series_domain_boundary_stays_singular() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                assert_eq!(
+                    series_jet_primal(&ctx, f_acosh, 1.0),
+                    0.0,
+                    "acosh(1) primal must be 0, not NaN"
+                );
+                let atanh1 = series_jet_primal(&ctx, f_atanh, 1.0);
+                assert!(
+                    atanh1.is_infinite() && atanh1 > 0.0,
+                    "atanh(1) primal must be +Inf, got {atanh1}"
+                );
+                // Both directions of the compound atanh guard (`< -1 || > 1`): the
+                // `-1` boundary must also stay singular, not be clobbered to NaN.
+                let atanh_neg1 = series_jet_primal(&ctx, f_atanh, -1.0);
+                assert!(
+                    atanh_neg1.is_infinite() && atanh_neg1 < 0.0,
+                    "atanh(-1) primal must be -Inf, got {atanh_neg1}"
+                );
+                let ln1p_neg1 = series_jet_primal(&ctx, f_ln_1p, -1.0);
+                assert!(
+                    ln1p_neg1.is_infinite() && ln1p_neg1 < 0.0,
+                    "ln1p(-1) primal must be -Inf, got {ln1p_neg1}"
+                );
+                let ln0 = series_jet_primal(&ctx, f_ln, 0.0);
+                assert!(
+                    ln0.is_infinite() && ln0 < 0.0,
+                    "ln(0) primal must be -Inf, got {ln0}"
+                );
+            }
+
             // M9: ln1p(-1) is the domain singularity -Inf. x=-1 is above the series
             // threshold, so log1p_f returns the naive `log(1.0 + (-1)) = log(0) = -Inf`
             // (NOT -1). Pins that the small-|x| series branch never clamps x=-1.
@@ -1434,6 +1500,54 @@ fn check_hypot_jet_non_finite_higher(
     check(gpu_result.values[0], primal_class, "c0");
     check(gpu_result.c1s[0], c1_class, "c1");
     check(gpu_result.c2s[0], c2_class, "c2");
+}
+
+/// Single-input analogue of `check_hypot_jet_non_finite_higher`: classify the
+/// primal / c1 / c2 of a unary op's GPU jet. Used for the series domain-NaN
+/// guards (`jet_ln`/`jet_atanh`/`jet_acosh` must return an all-NaN jet strictly
+/// outside the real domain, mirroring the CPU `taylor_*` kernels).
+#[cfg(feature = "stde")]
+fn check_series_domain_jet(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+    primal_class: CoeffClass,
+    c1_class: CoeffClass,
+    c2_class: CoeffClass,
+    label: &str,
+) {
+    let x = [x0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap();
+    let check = |v: f32, cls: CoeffClass, slot: &str| match cls {
+        CoeffClass::Zero => assert!(v == 0.0, "{label} {slot}: expected 0, got {v}"),
+        CoeffClass::Inf => assert!(v.is_infinite(), "{label} {slot}: expected Inf, got {v}"),
+        CoeffClass::NaN => assert!(v.is_nan(), "{label} {slot}: expected NaN, got {v}"),
+    };
+    check(gpu_result.values[0], primal_class, "c0");
+    check(gpu_result.c1s[0], c1_class, "c1");
+    check(gpu_result.c2s[0], c2_class, "c2");
+}
+
+/// Read only the GPU jet primal (`values[0]`) of a unary op — for the domain
+/// boundary anchors (strict `<` guards must not clobber the in-domain boundary
+/// to NaN).
+#[cfg(feature = "stde")]
+fn series_jet_primal(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+) -> f32 {
+    let (tape, _) = record(f, &[x0]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    ctx.taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap()
+        .values[0]
 }
 
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]

@@ -213,6 +213,32 @@ fn log1p_f(x: f32) -> f32 {{
     .unwrap();
 }
 
+/// Emit a WGSL domain guard at the top of a jet fn: if `cond` holds (leading
+/// coeff strictly outside the real domain), return an all-NaN jet — mirroring the
+/// CPU `taylor_*` guards, which short-circuit the whole jet rather than leave a
+/// NaN primal beside finite higher coefficients.
+fn write_wgsl_jet_nan_guard(s: &mut String, k: usize, cond: &str) {
+    writeln!(s, "    if ({cond}) {{").unwrap();
+    writeln!(s, "        var n: JetK;").unwrap();
+    for i in 0..k {
+        writeln!(s, "        n.v[{i}] = bitcast<f32>(0x7fc00000u);").unwrap();
+    }
+    writeln!(s, "        return n;").unwrap();
+    writeln!(s, "    }}").unwrap();
+}
+
+/// CUDA counterpart of [`write_wgsl_jet_nan_guard`]; uses the emitter's `F(0.0/0.0)`
+/// NaN idiom.
+fn write_cuda_jet_nan_guard(s: &mut String, k: usize, cond: &str) {
+    writeln!(s, "    if ({cond}) {{").unwrap();
+    writeln!(s, "        JetK n;").unwrap();
+    for i in 0..k {
+        writeln!(s, "        n.v[{i}] = F(0.0/0.0);").unwrap();
+    }
+    writeln!(s, "        return n;").unwrap();
+    writeln!(s, "    }}").unwrap();
+}
+
 fn write_wgsl_jet_type(s: &mut String, k: usize) {
     writeln!(s, "struct JetK {{ v: array<f32, {k}>, }}\n").unwrap();
 
@@ -338,6 +364,11 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
 
     // Ln: c[0] = ln(a[0]), c[i] = (a[i] - (1/i)*Σ_{j=1}^{i-1} j*c[j]*a[i-j]) / a[0]
     writeln!(s, "fn jet_ln(a: JetK) -> JetK {{").unwrap();
+    // Domain guard: ln(a0<0) is NaN, but the higher coeffs (built from 1/a0) stay
+    // finite — short-circuit to an all-NaN jet (mirrors CPU taylor_ln). Strict
+    // `< 0` keeps a0==0 as the IEEE -Inf singularity. log2/log10/ln1p delegate to
+    // jet_ln, so this one guard covers them too.
+    write_wgsl_jet_nan_guard(s, k, "a.v[0] < 0.0");
     writeln!(s, "    var c: JetK;").unwrap();
     writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
@@ -597,6 +628,11 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     // of (a-1)·(a+1) and a²-1 are mathematically identical (both
     // equal 2·a.v[0]·a.v[i] + Σ_{j+k=i, j,k≥1} a.v[j]·a.v[k]).
     writeln!(s, "fn jet_acosh(a: JetK) -> JetK {{").unwrap();
+    // Domain guard: acosh(a0<1) is NaN. For a0<=-1 the factored (a0-1)(a0+1)>0
+    // leaves a finite sqrt/recip → finite higher coeffs beside a NaN primal, so
+    // guard explicitly (mirrors CPU taylor_acosh). Strict `< 1` keeps a0==1 as the
+    // +Inf branch-point derivative.
+    write_wgsl_jet_nan_guard(s, k, "a.v[0] < 1.0");
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
     write!(
         s,
@@ -621,6 +657,10 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
 
     // atanh: c' = a' / (1 - a²)
     writeln!(s, "fn jet_atanh(a: JetK) -> JetK {{").unwrap();
+    // Domain guard: atanh(|a0|>1) is NaN, but recip(1-a0^2) stays finite there →
+    // finite higher coeffs beside a NaN primal, so guard explicitly (mirrors CPU
+    // taylor_atanh). Strict keeps |a0|==1 as the ±Inf branch-point derivative.
+    write_wgsl_jet_nan_guard(s, k, "a.v[0] < -1.0 || a.v[0] > 1.0");
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
     // Factored leading denom coeff (same as jet_asin — avoids cancellation near |a0|=1).
     write!(
@@ -1463,6 +1503,8 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
 
     // Ln
     writeln!(s, "__device__ JetK jet_ln(JetK a) {{").unwrap();
+    // Domain guard (mirrors CPU taylor_ln; covers log2/log10/ln1p by delegation).
+    write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)0");
     writeln!(s, "    JetK c;").unwrap();
     writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
@@ -1635,6 +1677,15 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
 
     for (name, d_expr, use_sqrt, c0_expr, negate) in &inv_trig_fns {
         writeln!(s, "__device__ JetK jet_{name}(JetK a) {{").unwrap();
+        // Series domain-NaN guard for the domain-restricted inverse fns (mirrors CPU
+        // taylor_acosh/taylor_atanh). asin/acos self-NaN via jet_sqrt(negative), and
+        // atan/asinh/acosh(via factoring)... only acosh (a0<1) and atanh (|a0|>1)
+        // leave finite higher coeffs out of domain, so only they need an explicit guard.
+        match *name {
+            "acosh" => write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)1"),
+            "atanh" => write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)-1 || a.v[0] > (F)1"),
+            _ => {}
+        }
         writeln!(s, "    JetK asq = jet_mul(a, a);").unwrap();
         writeln!(s, "    JetK d;").unwrap();
 
@@ -2409,5 +2460,37 @@ mod tests {
         assert!(cuda.contains("r.v[0] = log1p(a.v[0]);"));
         assert!(!cuda.contains("r.v[0] = exp(a.v[0]) - (F)1;"));
         assert!(!cuda.contains("r.v[0] = log((F)1 + a.v[0]);"));
+    }
+
+    // Series domain-NaN guards: jet_ln (covers ln/log2/log10/ln1p by delegation),
+    // jet_acosh, and jet_atanh emit an all-NaN jet strictly outside the real domain,
+    // mirroring the CPU taylor_ln/taylor_acosh/taylor_atanh guards. Strict `<`
+    // comparisons keep the branch-point boundary (ln@0, acosh@1, atanh@±1) singular.
+    #[test]
+    fn m_series_domain_nan_guards_present() {
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(wgsl.contains("if (a.v[0] < 0.0) {"), "jet_ln domain guard");
+        assert!(
+            wgsl.contains("if (a.v[0] < 1.0) {"),
+            "jet_acosh domain guard"
+        );
+        assert!(
+            wgsl.contains("if (a.v[0] < -1.0 || a.v[0] > 1.0) {"),
+            "jet_atanh domain guard"
+        );
+
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("if (a.v[0] < (F)0) {"),
+            "CUDA jet_ln domain guard"
+        );
+        assert!(
+            cuda.contains("if (a.v[0] < (F)1) {"),
+            "CUDA jet_acosh domain guard"
+        );
+        assert!(
+            cuda.contains("if (a.v[0] < (F)-1 || a.v[0] > (F)1) {"),
+            "CUDA jet_atanh domain guard"
+        );
     }
 }
