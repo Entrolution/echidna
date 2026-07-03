@@ -314,9 +314,14 @@ extern "C" __global__ void reverse_sweep(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (before the 1e8 branch): acosh domain is a >= 1;
+                // a < 1 is out of domain (a <= -1 leaves a*a-1 >= 0 → finite garbage,
+                // as does the large-|a| branch). Matches kernels::acosh_deriv.
+                if (a < F(1)) { da = domain_nan(); break; }
                 F aa = fabs(a);
                 if (aa > F(1e8)) { F inv = F(1)/a; da = fabs(inv)/sqrt(F(1)-inv*inv); }
-                else              { da = F(1)/sqrt(a*a-F(1)); }
+                // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
+                else              { da = F(1)/sqrt((a-F(1))*(a+F(1))); }
                 break;
             }
             case OP_ATANH:  da = (a >= -F(1) && a <= F(1)) ? F(1)/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
@@ -462,6 +467,8 @@ extern "C" __global__ void tangent_forward(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (acosh domain a >= 1): matches kernels::acosh_deriv.
+                if (a < F(1)) { r = domain_nan(); rt = domain_nan(); break; }
                 r = acosh(a);
                 if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
                 // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
@@ -610,6 +617,8 @@ extern "C" __global__ void tangent_reverse(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (acosh domain a >= 1): matches kernels::acosh_deriv.
+                if (a < F(1)) { r = domain_nan(); rt = domain_nan(); break; }
                 r = acosh(a);
                 if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
                 // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
@@ -812,6 +821,9 @@ extern "C" __global__ void tangent_reverse(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (acosh domain a >= 1): both HVP terms NaN out of
+                // domain. Matches kernels::acosh_deriv; strict `< 1` keeps a==1 singular.
+                if (a < F(1)) { da_re = domain_nan(); da_eps = domain_nan(); break; }
                 if (fabs(a) > F(1e8)) {
                     F inv = F(1)/a;
                     F denom = sqrt(F(1) - inv*inv);

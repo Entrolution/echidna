@@ -55,6 +55,7 @@ out_of_domain_is_nan!(log2_out_of_domain_is_nan, log2, -2.0);
 out_of_domain_is_nan!(log10_out_of_domain_is_nan, log10, -2.0);
 out_of_domain_is_nan!(ln_1p_out_of_domain_is_nan, ln_1p, -2.0);
 out_of_domain_is_nan!(atanh_out_of_domain_is_nan, atanh, 1.5);
+out_of_domain_is_nan!(acosh_out_of_domain_is_nan, acosh, -2.0);
 
 // Boundary + in-domain: the guard must NOT clobber the finite/±Inf values
 // inside the domain (guards against over-correction that returns NaN there).
@@ -94,6 +95,26 @@ fn atanh_boundary_preserves_inf() {
     );
 }
 
+// acosh's domain is `a >= 1` (one-sided, unlike ln@0 / atanh@±1): the boundary
+// a=1 keeps its +Inf one-sided derivative limit (1/sqrt(0)) and must not be
+// clobbered to NaN by the `a < 1` guard.
+#[test]
+fn acosh_boundary_preserves_inf() {
+    let g = grad(|x: &[Reverse<f64>]| x[0].acosh(), &[1.0]);
+    assert!(
+        g[0].is_infinite() && g[0] > 0.0,
+        "acosh reverse grad at x=1 must be +Inf, got {}",
+        g[0]
+    );
+    // In-domain sanity: d/dx acosh(2) = 1/sqrt(3).
+    let g2 = grad(|x: &[Reverse<f64>]| x[0].acosh(), &[2.0]);
+    assert!(
+        (g2[0] - 1.0 / 3.0_f64.sqrt()).abs() < 1e-15,
+        "acosh reverse grad at x=2 must be 1/sqrt(3), got {}",
+        g2[0]
+    );
+}
+
 // Cross-mode anchor: the bytecode forward-over-reverse path (gradient AND
 // Hessian-vector product) already routes through the `OpCode` convention, so it
 // is the canonical reference the scalar modes above must match. Green before and
@@ -105,12 +126,13 @@ fn bytecode_hvp_out_of_domain_is_nan() {
     use echidna::{hvp, BReverse};
 
     type UnaryOp = fn(&[BReverse<f64>]) -> BReverse<f64>;
-    let cases: [(&str, UnaryOp, f64); 5] = [
+    let cases: [(&str, UnaryOp, f64); 6] = [
         ("ln", |x| x[0].ln(), -2.0),
         ("log2", |x| x[0].log2(), -2.0),
         ("log10", |x| x[0].log10(), -2.0),
         ("ln_1p", |x| x[0].ln_1p(), -2.0),
         ("atanh", |x| x[0].atanh(), 1.5),
+        ("acosh", |x| x[0].acosh(), -2.0),
     ];
     for (label, f, p) in cases {
         let (g, h) = hvp(f, &[p], &[1.0]);
@@ -150,7 +172,7 @@ mod gpu {
 
     // f64-recorded tapes (uploaded lossy to f32) for the reverse / HVP paths, one
     // per op at an out-of-domain input.
-    fn out_of_domain_cases() -> [(&'static str, BytecodeTape<f64>, f32); 5] {
+    fn out_of_domain_cases() -> [(&'static str, BytecodeTape<f64>, f32); 7] {
         [
             (
                 "ln",
@@ -177,6 +199,20 @@ mod gpu {
                 record(|v: &[BReverse<f64>]| v[0].atanh(), &[1.5_f64]).0,
                 1.5,
             ),
+            // acosh domain is a >= 1. `-2` hits the a <= -1 leg (factored
+            // (a-1)(a+1) > 0 → finite garbage); `-1e9` hits the large-|a| overflow
+            // branch — both must be caught by the `a < 1` guard placed *before* that
+            // branch, so both are NaN.
+            (
+                "acosh",
+                record(|v: &[BReverse<f64>]| v[0].acosh(), &[-2.0_f64]).0,
+                -2.0,
+            ),
+            (
+                "acosh_large",
+                record(|v: &[BReverse<f64>]| v[0].acosh(), &[-2.0_f64]).0,
+                -1e9,
+            ),
         ]
     }
 
@@ -197,7 +233,7 @@ mod gpu {
     // tangent_forward.wgsl / tangent_forward: forward-tangent Jacobian is NaN out
     // of domain (reached only via sparse_jacobian).
     fn check_domain_nan_jvp<B: GpuBackend>(ctx: &B) {
-        let cases: [(&str, BytecodeTape<f32>, f32); 5] = [
+        let cases: [(&str, BytecodeTape<f32>, f32); 7] = [
             (
                 "ln",
                 record_multi(|v: &[BReverse<f32>]| vec![v[0].ln()], &[-2.0_f32]).0,
@@ -222,6 +258,18 @@ mod gpu {
                 "atanh",
                 record_multi(|v: &[BReverse<f32>]| vec![v[0].atanh()], &[1.5_f32]).0,
                 1.5,
+            ),
+            (
+                "acosh",
+                record_multi(|v: &[BReverse<f32>]| vec![v[0].acosh()], &[-2.0_f32]).0,
+                -2.0,
+            ),
+            // -1e9 hits the large-|a| overflow branch on the tangent-forward kernel
+            // too — pins the guard-before-1e8-branch ordering on this sweep.
+            (
+                "acosh_large",
+                record_multi(|v: &[BReverse<f32>]| vec![v[0].acosh()], &[-2.0_f32]).0,
+                -1e9,
             ),
         ];
         for (label, mut tape, p) in cases {
@@ -262,7 +310,7 @@ mod gpu {
     // just reverse.
     fn check_domain_boundary<B: GpuBackend>(ctx: &B) {
         // Each op's boundary input → +Inf one-sided limit on the reverse path.
-        let boundary: [(&str, BytecodeTape<f64>, f32); 5] = [
+        let boundary: [(&str, BytecodeTape<f64>, f32); 6] = [
             (
                 "ln",
                 record(|v: &[BReverse<f64>]| v[0].ln(), &[0.0_f64]).0,
@@ -286,6 +334,12 @@ mod gpu {
             (
                 "atanh",
                 record(|v: &[BReverse<f64>]| v[0].atanh(), &[1.0_f64]).0,
+                1.0,
+            ),
+            // acosh's domain boundary is a=1 (one-sided) → +Inf, not NaN.
+            (
+                "acosh",
+                record(|v: &[BReverse<f64>]| v[0].acosh(), &[1.0_f64]).0,
                 1.0,
             ),
         ];
@@ -325,6 +379,33 @@ mod gpu {
             (hv[0] as f64 + 0.25).abs() < 1e-5,
             "ln GPU HVP (H·v) at in-domain x=2 must be -0.25, got {}",
             hv[0]
+        );
+
+        // acosh at its a=1 boundary through the tangent (sparse_jacobian) and HVP
+        // (hvp_batch) kernels → +Inf (1/sqrt(0)), NOT NaN. Otherwise a `<` vs `<=`
+        // slip in the acosh guard on those two sweeps (each has its own copy) would
+        // go uncaught — the reverse path's acosh@1 boundary check above only covers
+        // reverse.wgsl / reverse_sweep.
+        let (mut ac_jac_tape, _) =
+            record_multi(|v: &[BReverse<f32>]| vec![v[0].acosh()], &[1.0_f32]);
+        let ac_jac_gpu = ctx.upload_tape(&GpuTapeData::from_tape(&ac_jac_tape).unwrap());
+        let (_, _pattern, ac_jac) = ctx
+            .sparse_jacobian(&ac_jac_gpu, &mut ac_jac_tape, &[1.0_f32])
+            .unwrap();
+        assert!(
+            !ac_jac.is_empty() && ac_jac[0].is_infinite() && ac_jac[0] > 0.0,
+            "acosh GPU sparse-Jacobian at boundary a=1 must be +Inf, got {ac_jac:?}"
+        );
+
+        let (ac_hvp_tape, _) = record(|v: &[BReverse<f64>]| v[0].acosh(), &[1.0_f64]);
+        let ac_hvp_gpu = ctx.upload_tape(&GpuTapeData::from_tape_f64_lossy(&ac_hvp_tape).unwrap());
+        let (ac_g, _ac_hv) = ctx
+            .hvp_batch(&ac_hvp_gpu, &[1.0_f32], &[1.0_f32], 1)
+            .unwrap();
+        assert!(
+            ac_g[0].is_infinite() && ac_g[0] > 0.0,
+            "acosh GPU HVP gradient at boundary a=1 must be +Inf, got {}",
+            ac_g[0]
         );
     }
 

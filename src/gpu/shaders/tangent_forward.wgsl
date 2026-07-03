@@ -311,15 +311,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 34u /* ACOSH */: {
-                // Factored form under sqrt for both primal and derivative
-                // — retains the ε² term near a=1; matches forward.wgsl
-                // acosh_f32 helper and kernels::acosh_deriv.
-                r = log(a + sqrt((a - 1.0) * (a + 1.0)));
-                if abs(a) > 1e8 {
-                    let inv = 1.0 / a;
-                    rt = at * abs(inv) / sqrt(1.0 - inv * inv);
+                if a < 1.0 {
+                    // Out of domain (acosh domain a >= 1): both primal and
+                    // derivative NaN. Matches kernels::acosh_deriv; strict `< 1`
+                    // keeps a==1 → primal 0, derivative +Inf.
+                    let nan = bitcast<f32>(0x7fc00000u);
+                    r = nan;
+                    rt = nan;
                 } else {
-                    rt = at / sqrt((a - 1.0) * (a + 1.0));
+                    // Factored form under sqrt for both primal and derivative
+                    // — retains the ε² term near a=1; matches forward.wgsl
+                    // acosh_f32 helper and kernels::acosh_deriv.
+                    r = log(a + sqrt((a - 1.0) * (a + 1.0)));
+                    if abs(a) > 1e8 {
+                        let inv = 1.0 / a;
+                        rt = at * abs(inv) / sqrt(1.0 - inv * inv);
+                    } else {
+                        rt = at / sqrt((a - 1.0) * (a + 1.0));
+                    }
                 }
             }
             case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = select(bitcast<f32>(0x7fc00000u), at / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }

@@ -94,6 +94,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scalar AD modes. Previously they emitted a NaN primal beside finite
   higher-order coefficients. Branch-point boundaries (`ln` at 0, `acosh` at 1,
   `atanh` at ±1) keep their IEEE singular value.
+- `acosh`'s derivative now returns NaN when the input is strictly outside the
+  real domain (`a < 1`) across every AD mode — the scalar forward and reverse
+  types (`Dual`, `DualVec`, `Reverse`), the bytecode tape, and the wgpu and CUDA
+  GPU kernels (reverse, forward-tangent, and both Hessian-vector-product sweeps) —
+  matching the convention already applied to `ln`/`atanh`. Previously it returned
+  a finite but meaningless value for `a ≤ -1` (where the `sqrt` argument stays
+  positive). The boundary `a = 1` keeps its `+Inf` one-sided limit. Two GPU sites
+  that still evaluated `a² - 1` directly under the square root (the CUDA
+  reverse-gradient sweep and the wgpu Hessian-vector-product first phase) now use
+  the cancellation-safe factored `(a-1)(a+1)`, matching every other site and the
+  CPU kernel.
 
 ### Added (echidna)
 

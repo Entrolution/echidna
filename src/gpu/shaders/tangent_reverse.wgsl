@@ -190,7 +190,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 31u: { r=cosh_f(a); rt=sinh_f(a)*at; }
             case 32u: { r=tanh(a); let c=cosh_f(a); rt=at/(c*c); }
             case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); if ax>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {rt=at/sqrt(a*a+1.0);} }
-            case 34u: { r=log(a+sqrt(a*a-1.0)); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt(a*a-1.0);} }
+            case 34u: { if a < 1.0 { let n=bitcast<f32>(0x7fc00000u); r=n; rt=n; } else { r=log(a+sqrt((a-1.0)*(a+1.0))); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt((a-1.0)*(a+1.0));} } }
             case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(0x7fc00000u), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
             case 36u: { r=abs(a); if a!=a {rt=0.0;} else {let bits=bitcast<u32>(a); let s=select(1.0, -1.0, (bits&0x80000000u)!=0u); rt=s*at;} }
             case 37u: { if a!=a {r=a;} else if a>=0.0 {r=1.0;} else {r=-1.0;} rt=0.0; }
@@ -398,7 +398,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 34u /* ACOSH */: {
-                if abs(a) > 1e8 {
+                if a < 1.0 {
+                    // Out of domain (acosh domain a >= 1): both HVP terms NaN.
+                    // Matches kernels::acosh_deriv; strict `< 1` keeps a==1 singular.
+                    let n = bitcast<f32>(0x7fc00000u);
+                    da_re = n;
+                    da_eps = n;
+                } else if abs(a) > 1e8 {
                     let inv = 1.0 / a;
                     let denom = sqrt(1.0 - inv * inv);
                     da_re = abs(inv) / denom;

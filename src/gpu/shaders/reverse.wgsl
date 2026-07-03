@@ -260,7 +260,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 34u /* ACOSH */: {
-                if abs(a) > 1e8 {
+                if a < 1.0 {
+                    // acosh domain is a >= 1. Out of domain → NaN (the factored
+                    // form self-guards only for -1 < a < 1; a <= -1 and the
+                    // large-|a| branch stay finite). Matches kernels::acosh_deriv;
+                    // strict `< 1` keeps a==1 → +Inf.
+                    da = bitcast<f32>(0x7fc00000u);
+                } else if abs(a) > 1e8 {
                     let inv = 1.0 / a;
                     da = abs(inv) / sqrt(1.0 - inv * inv);
                 } else {

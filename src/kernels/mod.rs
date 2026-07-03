@@ -93,28 +93,39 @@ pub fn asinh_deriv<T: Float>(a: T) -> T {
     }
 }
 
-/// Derivative of `acosh(a) = ln(a + sqrt(a²-1))` with a large-|a|
-/// overflow-safe path.
+/// Derivative of `acosh(a) = ln(a + sqrt(a²-1))`, guarded to the domain `a >= 1`
+/// with a large-`a` overflow-safe path.
 ///
-/// For `|a| ≤ 1e8`, returns `1/sqrt((a-1)·(a+1))`. The factored form
-/// (vs naive `a*a - 1`) avoids catastrophic cancellation near `a = 1`:
-/// at `a = 1 + ε`, `a*a` rounds to `1 + 2ε` and `a*a - 1 = 2ε` loses
-/// the `ε²` contribution, while `(a-1)·(a+1) = ε·(2 + ε)` retains it.
-/// For `|a| > 1e8`, uses `u = 1/a` and `|u|/sqrt(1-u²)`.
+/// Strictly outside the domain (`a < 1`) returns NaN, matching [`ln_deriv`] /
+/// [`atanh_deriv`]: the factored `(a-1)·(a+1)` self-guards only for `-1 < a < 1`
+/// (sqrt of a negative), but `a <= -1` leaves it `>= 0` → a finite but meaningless
+/// value (and `-Inf` at `a = -1` via `1/sqrt(-0.0)`), as does the overflow branch,
+/// so the guard is explicit. The boundary `a = 1` keeps the IEEE `1/sqrt(0) = +Inf`
+/// one-sided limit.
 ///
-/// The WGSL shaders (`reverse.wgsl`, `tangent_forward.wgsl`,
-/// `tangent_reverse.wgsl`, plus the `acosh_f32` primal helper in
-/// `forward.wgsl`), the CUDA kernel (`tape_eval.cu` at three derivative
-/// sites), and the Taylor jet codegen (`taylor_codegen.rs` for both
-/// WGSL and CUDA emitters, including the `acosh_f` primal helper) all
-/// use the same factored form so CPU and GPU stay in lockstep. The
-/// regression test `acosh_deriv_factored_form_keeps_precision_near_one`
-/// below pins the f64 behaviour — any swap back to `a*a - 1` will
-/// trip it.
+/// For `1 <= a <= 1e8`, returns `1/sqrt((a-1)·(a+1))`. The factored form (vs naive
+/// `a*a - 1`) avoids catastrophic cancellation near `a = 1`: at `a = 1 + ε`, `a*a`
+/// rounds to `1 + 2ε` and `a*a - 1 = 2ε` loses the `ε²` contribution, while
+/// `(a-1)·(a+1) = ε·(2 + ε)` retains it. For `a > 1e8`, uses `u = 1/a` and
+/// `|u|/sqrt(1-u²)`.
+///
+/// Every CPU AD mode (`Dual`, `DualVec`, `Reverse`) and the bytecode `OpCode`
+/// dispatcher delegate here, so the factored form and the domain guard share a
+/// single source of truth. The GPU kernels carry the same factored form and guard
+/// in their own languages: the wgpu shaders (`reverse.wgsl`, `tangent_forward.wgsl`,
+/// `tangent_reverse.wgsl` — both HVP phases) and the CUDA `tape_eval.cu` at all four
+/// derivative sweeps (reverse, tangent-forward, and both HVP phases). Pinned by
+/// `acosh_deriv_factored_form_keeps_precision_near_one` (factoring) and
+/// `tests/domain_nan_convention.rs` (the guard, cross-mode + GPU).
 #[inline]
 pub fn acosh_deriv<T: Float>(a: T) -> T {
     let one = T::one();
-    if a.abs() > T::from(1e8).unwrap() {
+    // Domain guard first (see doc): a < 1 is strictly out of domain. After it,
+    // `a >= 1`, so the large-|a| test can use `a` directly instead of `a.abs()`.
+    if a < one {
+        return T::nan();
+    }
+    if a > T::from(1e8).unwrap() {
         let inv = one / a;
         inv.abs() / (one - inv * inv).sqrt()
     } else {
@@ -216,6 +227,20 @@ mod tests {
         assert!((log10_deriv(2.0_f64) - 1.0 / (2.0 * 10.0_f64.ln())).abs() < 1e-15);
         assert!((ln_1p_deriv(3.0_f64) - 0.25).abs() < 1e-15);
         assert!((atanh_deriv(0.5_f64) - 1.0 / (0.75)).abs() < 1e-15);
+
+        // acosh: domain is a >= 1. Strictly outside → NaN. The factored form
+        // self-guards for -1 < a < 1 (sqrt of a negative), but a <= -1 leaves
+        // (a-1)(a+1) >= 0 → finite garbage (and -Inf at a=-1 via 1/sqrt(-0.0)),
+        // and the large-|a| overflow branch stays finite for a <= -1e8, so an
+        // explicit guard is required for those legs.
+        assert!(acosh_deriv(-1.5_f64).is_nan());
+        assert!(acosh_deriv(-2.0_f64).is_nan());
+        assert!(acosh_deriv(0.5_f64).is_nan());
+        assert!(acosh_deriv(-1.0_f64).is_nan());
+        assert!(acosh_deriv(-1e9_f64).is_nan()); // overflow-branch leg
+                                                 // Boundary a=1 → +Inf (1/sqrt(0)); in domain a=2 → 1/sqrt(3).
+        assert!(acosh_deriv(1.0_f64).is_infinite() && acosh_deriv(1.0_f64) > 0.0);
+        assert!((acosh_deriv(2.0_f64) - 1.0 / 3.0_f64.sqrt()).abs() < 1e-15);
     }
 
     /// Pin the factored-form precision near `a = 1`. The factored form
