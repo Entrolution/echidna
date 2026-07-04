@@ -382,23 +382,27 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
     // jet_ln, so this one guard covers them too.
     write_wgsl_jet_nan_guard(s, k, "a.v[0] < 0.0");
     writeln!(s, "    var c: JetK;").unwrap();
-    writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
-    for i in 1..k {
-        if i == 1 {
-            writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
-        } else {
-            let inv_i = 1.0 / i as f64;
-            let mut terms = Vec::new();
-            for j in 1..i {
-                terms.push(format!("{:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+    // `inv_a0` and the recurrence only exist for K > 1; emitting the `let` at
+    // K=1 (where the loop below is empty) leaves an unused binding in the shader.
+    if k > 1 {
+        writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
+        for i in 1..k {
+            if i == 1 {
+                writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
+            } else {
+                let inv_i = 1.0 / i as f64;
+                let mut terms = Vec::new();
+                for j in 1..i {
+                    terms.push(format!("{:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+                }
+                writeln!(
+                    s,
+                    "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
+                    terms.join(" + ")
+                )
+                .unwrap();
             }
-            writeln!(
-                s,
-                "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
-                terms.join(" + ")
-            )
-            .unwrap();
         }
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
@@ -1553,23 +1557,27 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
     // Domain guard (mirrors CPU taylor_ln; covers log2/log10/ln1p by delegation).
     write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)0");
     writeln!(s, "    JetK c;").unwrap();
-    writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
-    for i in 1..k {
-        if i == 1 {
-            writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
-        } else {
-            let inv_i = 1.0 / i as f64;
-            let mut terms = Vec::new();
-            for j in 1..i {
-                terms.push(format!("(F){:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+    // `inv_a0` and the recurrence only exist for K > 1; emitting the
+    // declaration at K=1 (empty loop) leaves an unused variable in the kernel.
+    if k > 1 {
+        writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
+        for i in 1..k {
+            if i == 1 {
+                writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
+            } else {
+                let inv_i = 1.0 / i as f64;
+                let mut terms = Vec::new();
+                for j in 1..i {
+                    terms.push(format!("(F){:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+                }
+                writeln!(
+                    s,
+                    "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
+                    terms.join(" + ")
+                )
+                .unwrap();
             }
-            writeln!(
-                s,
-                "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
-                terms.join(" + ")
-            )
-            .unwrap();
         }
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
@@ -2584,6 +2592,28 @@ mod tests {
         assert!(
             cuda.contains("} else if (a.v[0] < F(0)) {"),
             "CUDA powf neg-base all-NaN branch"
+        );
+    }
+
+    #[test]
+    fn jet_ln_omits_inv_a0_at_k1() {
+        // At K=1 the ln recurrence loop is empty, so `inv_a0` must not be
+        // emitted — an unused binding is a shader-compile warning.
+        assert!(
+            !generate_taylor_wgsl(1).contains("inv_a0"),
+            "K=1 WGSL jet_ln must not emit inv_a0"
+        );
+        assert!(
+            generate_taylor_wgsl(3).contains("inv_a0"),
+            "K=3 WGSL jet_ln must emit inv_a0"
+        );
+        assert!(
+            !generate_taylor_cuda(1).contains("inv_a0"),
+            "K=1 CUDA jet_ln must not emit inv_a0"
+        );
+        assert!(
+            generate_taylor_cuda(3).contains("inv_a0"),
+            "K=3 CUDA jet_ln must emit inv_a0"
         );
     }
 

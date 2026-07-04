@@ -33,6 +33,7 @@ pub struct WgpuContext {
     reverse_io_bind_group_layout: wgpu::BindGroupLayout,
     tangent_fwd_io_bind_group_layout: wgpu::BindGroupLayout,
     tangent_rev_io_bind_group_layout: wgpu::BindGroupLayout,
+    #[cfg(feature = "stde")]
     taylor_fwd_2nd_io_bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -253,7 +254,8 @@ impl WgpuContext {
                 cache: None,
             });
 
-        // Taylor forward 2nd-order pipeline (for STDE)
+        // Taylor forward 2nd-order pipeline (STDE only)
+        #[cfg(feature = "stde")]
         let taylor_fwd_2nd_io_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("echidna_taylor2_io_bgl"),
@@ -265,6 +267,7 @@ impl WgpuContext {
                 ],
             });
 
+        #[cfg(feature = "stde")]
         let taylor2_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_taylor_fwd_2nd_pl"),
             bind_group_layouts: &[
@@ -311,6 +314,7 @@ impl WgpuContext {
             reverse_io_bind_group_layout,
             tangent_fwd_io_bind_group_layout,
             tangent_rev_io_bind_group_layout,
+            #[cfg(feature = "stde")]
             taylor_fwd_2nd_io_bind_group_layout,
         })
     }

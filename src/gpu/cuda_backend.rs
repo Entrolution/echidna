@@ -539,16 +539,17 @@ impl CudaContext {
 impl GpuBackend for CudaContext {
     type TapeBuffers = CudaTapeBuffers;
 
-    /// # Panics
-    ///
-    /// Panics if CUDA device memory allocation fails (e.g., OOM). The
-    /// `GpuBackend` trait returns `Self::TapeBuffers` (not `Result`),
+    /// Number of outputs the tape produces.
     fn num_outputs(&self, tape: &CudaTapeBuffers) -> u32 {
         tape.num_outputs
     }
 
-    /// preventing graceful error handling. Use `upload_tape_f64` for
-    /// the `Result`-returning f64 variant.
+    /// # Panics
+    ///
+    /// Panics if `data` fails validation, or if CUDA device memory allocation
+    /// fails (e.g. OOM). The `GpuBackend` trait returns `Self::TapeBuffers`
+    /// (not `Result`), preventing graceful error handling — use
+    /// `upload_tape_f64` for the `Result`-returning f64 variant.
     fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
         if let Err(e) = data.validate() {
             panic!("refusing to upload invalid GpuTapeData: {e}");
