@@ -14,6 +14,23 @@ use crate::Float;
 ///
 /// Paper reference: Eq 13, Section 4.3.
 ///
+/// # Sampling precondition (unbiasedness)
+///
+/// The returned mean is an **unbiased** estimate of `Lu(x)` only when
+/// `sampled_indices` are drawn from `dist` with probability proportional to
+/// `|C_α|` — i.e. via [`SparseSamplingDistribution::sample_index`], which
+/// importance-samples on the cumulative `|C_α|` weights. The per-sample
+/// factor `Z = Σ|C_α|` cancels the `|C_α|/Z` draw probability so that
+/// `E[sample] = Σ_α C_α · raw_α = Lu(x)`.
+///
+/// Passing indices any other way biases the estimate. In particular a
+/// uniform enumeration `(0..dist.len())` is unbiased **only when every
+/// `|C_α|` is equal** (e.g. a Laplacian or `DiffOp::diagonal` operator); for
+/// mixed-coefficient operators it converges to `(Z/M)·Σ_α sign(C_α)·raw_α`,
+/// which does not equal `Lu(x)`.
+///
+/// [`SparseSamplingDistribution::sample_index`]: crate::diffop::SparseSamplingDistribution::sample_index
+///
 /// # Panics
 ///
 /// Panics if `sampled_indices` is empty or any index is out of bounds.
