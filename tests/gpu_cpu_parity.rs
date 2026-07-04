@@ -70,6 +70,11 @@ fn build_cbrt() -> (BytecodeTape<f64>, f64) {
 fn build_recip() -> (BytecodeTape<f64>, f64) {
     record(|v: &[BReverse<f64>]| BReverse::constant(1.0) / v[0], &[1.0])
 }
+fn build_recip_native() -> (BytecodeTape<f64>, f64) {
+    // `powi(-1)` lowers to the native `OpCode::Recip` (bytecode_tape push_powi),
+    // a distinct kernel path from the `constant(1.0) / v[0]` Div above.
+    record(|v: &[BReverse<f64>]| v[0].powi(-1), &[2.0])
+}
 fn build_neg() -> (BytecodeTape<f64>, f64) {
     record(|v: &[BReverse<f64>]| -v[0], &[1.0])
 }
@@ -236,7 +241,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "sqrt",
         n_inputs: 1,
         build: build_sqrt,
-        points: &[&[1.0], &[4.0], &[0.25], &[1e6]],
+        // 0.0: value 0, derivative 0.5/sqrt(0) = +Inf (boundary singularity).
+        points: &[&[1.0], &[4.0], &[0.25], &[1e6], &[0.0]],
         f32_ulp: 4,
         f64_ulp: 4,
     },
@@ -244,15 +250,28 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "cbrt",
         n_inputs: 1,
         build: build_cbrt,
-        points: &[&[1.0], &[8.0], &[-27.0]],
+        // 0.0: value 0, derivative +Inf (cbrt'(0) singularity, analogous to sqrt).
+        points: &[&[1.0], &[8.0], &[-27.0], &[0.0]],
         f32_ulp: 8,
         f64_ulp: 8,
     },
     ParityCase {
-        name: "recip",
+        // `constant(1.0) / v[0]` records a Div, not the native Recip opcode —
+        // named accordingly. The native Recip path is covered by "recip" below.
+        name: "one_div_x",
         n_inputs: 1,
         build: build_recip,
         points: &[&[1.0], &[2.0], &[-0.5]],
+        f32_ulp: 4,
+        f64_ulp: 4,
+    },
+    ParityCase {
+        // Native OpCode::Recip (via powi(-1)). 0.0: value 1/0 = +Inf,
+        // derivative -1/0² = -Inf (boundary singularity).
+        name: "recip",
+        n_inputs: 1,
+        build: build_recip_native,
+        points: &[&[2.0], &[-0.5], &[0.0]],
         f32_ulp: 4,
         f64_ulp: 4,
     },
@@ -268,7 +287,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "abs",
         n_inputs: 1,
         build: build_abs,
-        points: &[&[1.0], &[-3.5], &[2.0]],
+        // 0.0: the kink. Unified convention abs'(0) = 0 across CPU/WGSL/CUDA.
+        points: &[&[1.0], &[-3.5], &[2.0], &[0.0]],
         f32_ulp: 0,
         f64_ulp: 0,
     },
@@ -277,7 +297,10 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "exp",
         n_inputs: 1,
         build: build_exp,
-        points: &[&[0.0], &[1.0], &[-1.0], &[5.0]],
+        // 1000.0: exp overflows to +Inf (value AND derivative, since exp'=exp).
+        // Must exceed the f64 overflow threshold (~709.78) so the cuda_f64
+        // runner also exercises the +Inf path, not just f32.
+        points: &[&[0.0], &[1.0], &[-1.0], &[5.0], &[1000.0]],
         f32_ulp: 8,
         f64_ulp: 8,
     },
@@ -293,7 +316,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "ln",
         n_inputs: 1,
         build: build_ln,
-        points: &[&[1.0], &[2.0], &[10.0], &[0.5]],
+        // 0.0: value -Inf, derivative 1/0 = +Inf (in-domain boundary singularity).
+        points: &[&[1.0], &[2.0], &[10.0], &[0.5], &[0.0]],
         f32_ulp: 8,
         f64_ulp: 8,
     },
@@ -301,7 +325,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "ln1p",
         n_inputs: 1,
         build: build_ln1p,
-        points: &[&[0.0], &[1e-6], &[1.0], &[-0.5]],
+        // -1.0: value ln(0) = -Inf, derivative 1/(1+a) = 1/0 = +Inf (boundary).
+        points: &[&[0.0], &[1e-6], &[1.0], &[-0.5], &[-1.0]],
         f32_ulp: 16,
         f64_ulp: 8,
     },
@@ -346,7 +371,15 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "atan2",
         n_inputs: 2,
         build: build_atan2,
-        points: &[&[1.0, 1.0], &[-1.0, 1.0], &[3.0, 4.0], &[1e10, 1e10]],
+        // (0,0): origin convention — value and both partials are 0 (matched
+        // across CPU/WGSL/CUDA).
+        points: &[
+            &[1.0, 1.0],
+            &[-1.0, 1.0],
+            &[3.0, 4.0],
+            &[1e10, 1e10],
+            &[0.0, 0.0],
+        ],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -355,7 +388,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "sinh",
         n_inputs: 1,
         build: build_sinh,
-        points: &[&[0.0], &[1.0], &[-2.0]],
+        // 1000.0: sinh overflows to +Inf; derivative cosh also +Inf.
+        points: &[&[0.0], &[1.0], &[-2.0], &[1000.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -363,7 +397,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "cosh",
         n_inputs: 1,
         build: build_cosh,
-        points: &[&[0.0], &[1.0], &[-2.0]],
+        // 1000.0: cosh overflows to +Inf; derivative sinh also +Inf.
+        points: &[&[0.0], &[1.0], &[-2.0], &[1000.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -394,7 +429,12 @@ const PARITY_CASES: &[ParityCase] = &[
         // unfactored `a*a - 1` recovers precision at that floor in f32.
         // The factored-form regression test for `kernels::acosh_deriv`
         // lives in `src/kernels/mod.rs` (unit test, f64-only).
-        points: &[&[1.5], &[2.0], &[10.0]],
+        //
+        // 1.0 IS included: at the exact branch point acosh(1) = 0 and the
+        // derivative is 1/sqrt((1-1)(1+1)) = +Inf — a special value both
+        // backends produce identically (distinct from the excluded finite
+        // near-1 probes, which suffer f32 input quantization).
+        points: &[&[1.5], &[2.0], &[10.0], &[1.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -402,8 +442,9 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "atanh",
         n_inputs: 1,
         build: build_atanh,
-        // atanh domain is |a| < 1.
-        points: &[&[0.0], &[0.25], &[-0.5], &[0.9]],
+        // atanh domain is |a| < 1. The exact endpoints ±1 are the boundary
+        // singularities: value ±Inf, derivative 1/((1-a)(1+a)) = +Inf.
+        points: &[&[0.0], &[0.25], &[-0.5], &[0.9], &[1.0], &[-1.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -411,7 +452,9 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "asin",
         n_inputs: 1,
         build: build_asin,
-        points: &[&[0.0], &[0.5], &[-0.25]],
+        // ±1: value ±π/2 (finite), derivative 1/sqrt((1-a)(1+a)) = +Inf at
+        // BOTH endpoints. Exact inputs, unlike the excluded near-±1 probes.
+        points: &[&[0.0], &[0.5], &[-0.25], &[1.0], &[-1.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -419,7 +462,9 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "acos",
         n_inputs: 1,
         build: build_acos,
-        points: &[&[0.0], &[0.5], &[-0.25]],
+        // ±1: value 0/π (finite), derivative -1/sqrt((1-a)(1+a)) = -Inf at
+        // BOTH endpoints.
+        points: &[&[0.0], &[0.5], &[-0.25], &[1.0], &[-1.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -436,7 +481,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "log2",
         n_inputs: 1,
         build: build_log2,
-        points: &[&[1.0], &[2.0], &[8.0]],
+        // 0.0: value -Inf, derivative 1/(a·ln2) = +Inf (boundary singularity).
+        points: &[&[1.0], &[2.0], &[8.0], &[0.0]],
         f32_ulp: 8,
         f64_ulp: 8,
     },
@@ -444,7 +490,8 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "log10",
         n_inputs: 1,
         build: build_log10,
-        points: &[&[1.0], &[10.0], &[100.0]],
+        // 0.0: value -Inf, derivative 1/(a·ln10) = +Inf (boundary singularity).
+        points: &[&[1.0], &[10.0], &[100.0], &[0.0]],
         f32_ulp: 8,
         f64_ulp: 8,
     },
@@ -481,7 +528,10 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "rem",
         n_inputs: 2,
         build: build_rem,
-        points: &[&[5.0, 2.0], &[7.5, 2.5], &[-3.0, 2.0]],
+        // (5,0): divisor zero — value is NaN (fmod(5,0)); the reverse partial
+        // w.r.t. the divisor is -trunc(5/0) = -Inf. Exercises the NaN-aware
+        // comparison (both backends must produce NaN, not the same bits).
+        points: &[&[5.0, 2.0], &[7.5, 2.5], &[-3.0, 2.0], &[5.0, 0.0]],
         f32_ulp: 4,
         f64_ulp: 4,
     },
@@ -490,7 +540,14 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "hypot",
         n_inputs: 2,
         build: build_hypot,
-        points: &[&[3.0, 4.0], &[1e10, 1e10], &[1.0, 0.0], &[0.0, 1e-6]],
+        // (0,0): origin convention — value 0, both partials 0.
+        points: &[
+            &[3.0, 4.0],
+            &[1e10, 1e10],
+            &[1.0, 0.0],
+            &[0.0, 1e-6],
+            &[0.0, 0.0],
+        ],
         f32_ulp: 8,
         f64_ulp: 8,
     },
@@ -539,6 +596,13 @@ const PARITY_CASES: &[ParityCase] = &[
 
 fn ulp_diff_f32(a: f32, b: f32) -> u32 {
     if !a.is_finite() || !b.is_finite() {
+        // Two NaNs are a parity match regardless of payload: CPU `F::nan()`,
+        // WGSL `bitcast(0x7fc00000)`, and CUDA `nan("")` carry different bit
+        // patterns, but the convention only asserts "both NaN". A raw bit
+        // compare still guards ±Inf (sign-exact) and Inf-vs-finite mismatches.
+        if a.is_nan() && b.is_nan() {
+            return 0;
+        }
         return if a.to_bits() == b.to_bits() {
             0
         } else {
@@ -558,9 +622,12 @@ fn ulp_diff_f32(a: f32, b: f32) -> u32 {
     }
 }
 
-#[cfg_attr(not(feature = "gpu-cuda"), allow(dead_code))]
 fn ulp_diff_f64(a: f64, b: f64) -> u64 {
     if !a.is_finite() || !b.is_finite() {
+        // Both NaN → match (payload-agnostic); see `ulp_diff_f32`.
+        if a.is_nan() && b.is_nan() {
+            return 0;
+        }
         return if a.to_bits() == b.to_bits() {
             0
         } else {
@@ -576,6 +643,29 @@ fn ulp_diff_f64(a: f64, b: f64) -> u64 {
         let abs_b = b_bits & 0x7FFF_FFFF_FFFF_FFFF;
         abs_a.saturating_add(abs_b)
     }
+}
+
+#[test]
+fn ulp_diff_non_finite_semantics() {
+    // Both NaN → match regardless of the (differing) payloads CPU/WGSL/CUDA emit.
+    assert_eq!(ulp_diff_f32(f32::NAN, f32::from_bits(0x7fc0_0001)), 0);
+    assert_eq!(
+        ulp_diff_f64(f64::NAN, f64::from_bits(0x7ff8_0000_0000_0001)),
+        0
+    );
+    // Same-signed Inf matches; opposite-signed Inf does not.
+    assert_eq!(ulp_diff_f32(f32::INFINITY, f32::INFINITY), 0);
+    assert_eq!(ulp_diff_f32(f32::INFINITY, f32::NEG_INFINITY), u32::MAX);
+    assert_eq!(ulp_diff_f64(f64::NEG_INFINITY, f64::NEG_INFINITY), 0);
+    assert_eq!(ulp_diff_f64(f64::INFINITY, f64::NEG_INFINITY), u64::MAX);
+    // A non-finite against a finite value is always a mismatch.
+    assert_eq!(ulp_diff_f32(f32::NAN, 1.0), u32::MAX);
+    assert_eq!(ulp_diff_f32(f32::INFINITY, 1.0), u32::MAX);
+    assert_eq!(ulp_diff_f64(f64::NAN, 1.0), u64::MAX);
+    // Finite comparisons are unaffected.
+    assert_eq!(ulp_diff_f32(1.0, 1.0), 0);
+    assert_eq!(ulp_diff_f64(1.0, 1.0), 0);
+    assert_eq!(ulp_diff_f32(1.0, f32::from_bits(1.0_f32.to_bits() + 3)), 3);
 }
 
 // ── wgpu f32 parity runner ─────────────────────────────────────────
