@@ -873,6 +873,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                let b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "                if b_is_int {{").unwrap();
     write_wgsl_powi_jet(s, k, "b.v[0]", "i32(b.v[0])");
+    // Negative base with a non-constant-integer exponent: `a(t)^b(t)` is
+    // complex for a varying exponent → all-NaN jet (matches CPU `taylor_powf`).
+    // naga's `pow(neg, .)` is already NaN, but making it explicit keeps this in
+    // lockstep with the CUDA emit, where C `pow(-2,3) = -8` would otherwise
+    // leave a finite primal beside NaN derivative coefficients (a mixed jet).
+    writeln!(s, "                }} else if a.v[0] < 0.0 {{").unwrap();
+    for i in 0..k {
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+        )
+        .unwrap();
+    }
     writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
@@ -1981,6 +1994,14 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            bool b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "            if (b_is_int) {{").unwrap();
     write_cuda_powi_jet(s, k, "b.v[0]", "(int)b.v[0]");
+    // Negative base with a non-constant-integer exponent → all-NaN jet (matches
+    // CPU `taylor_powf` and the WGSL twin). C `pow(-2,3) = -8` is finite, so
+    // force NaN here — otherwise the primal would be finite beside NaN
+    // derivative coefficients (a mixed jet), diverging from CPU.
+    writeln!(s, "            }} else if (a.v[0] < F(0)) {{").unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
+    }
     writeln!(s, "            }} else if (a.v[0] <= F(0)) {{").unwrap();
     writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
@@ -2545,6 +2566,24 @@ mod tests {
         assert!(
             cuda.contains("if (a.v[0] < (F)-1 || a.v[0] > (F)1) {"),
             "CUDA jet_atanh domain guard"
+        );
+    }
+
+    #[test]
+    fn m_powf_neg_base_all_nan_in_both_backends() {
+        // taylor_powf convention (Option A): a negative base with a
+        // non-constant-integer exponent gives an all-NaN jet on both backends.
+        // CUDA's C `pow(-2,3) = -8` is forced to NaN to match CPU + WGSL,
+        // avoiding a mixed (finite primal / NaN derivative) jet.
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(
+            wgsl.contains("} else if a.v[0] < 0.0 {"),
+            "WGSL powf neg-base all-NaN branch"
+        );
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("} else if (a.v[0] < F(0)) {"),
+            "CUDA powf neg-base all-NaN branch"
         );
     }
 

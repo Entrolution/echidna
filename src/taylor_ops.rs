@@ -501,14 +501,22 @@ pub fn taylor_powf<F: Float>(
     // But we can't use scratch1 anymore since taylor_exp needs its own output...
     // Actually taylor_exp writes to c, so we just need scratch2 as input.
     taylor_exp(scratch2, c);
-    // Fix c[0] for better primal accuracy (use direct powf instead of exp(b*ln(a))).
-    // Higher coefficients c[1..] were computed using the exp-ln path's c[0], which
-    // may differ from the patched value by sub-ULP rounding. This is a deliberate
-    // Intentional precision tradeoff: patching c[0] with direct powf is more accurate
-    // than the exp-ln roundtrip, but c[1..K] were computed using the exp-ln c[0] value.
-    // The inconsistency is O(ULP) for well-conditioned inputs and does not affect
-    // derivative correctness beyond rounding.
-    c[0] = a[0].powf(b[0]);
+    if a[0] < F::zero() {
+        // Negative base with a LIVE exponent (the constant-integer fast path
+        // above already returned). `a(t)^b(t)` for a varying — hence, for
+        // t != 0, non-integer — exponent is complex, so the whole jet is
+        // undefined: `taylor_ln(a)` already produced an all-NaN `c[1..]`.
+        // Return a consistent all-NaN jet rather than a finite primal
+        // (`a[0].powf(b[0])`, finite only when `b[0]` is an integer) beside
+        // NaN derivative coefficients. Matches `taylor_ln`/`taylor_sqrt`.
+        c[0] = F::nan();
+    } else {
+        // Fix c[0] for better primal accuracy (direct powf vs exp(b*ln(a))).
+        // Higher coefficients c[1..] used the exp-ln path's c[0], which may
+        // differ from the patched value by sub-ULP rounding — an intentional
+        // precision tradeoff that does not affect derivative correctness.
+        c[0] = a[0].powf(b[0]);
+    }
 }
 
 /// `c = a^n` (powi) — integer power.
