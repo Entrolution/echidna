@@ -502,7 +502,14 @@ pub fn implicit_tangent_sparse(
     let rhs = Col::<f64>::from_fn(m, |i| -fx_xdot[i]);
     let sol = lu.solve(&rhs);
 
-    Ok(col_to_vec(&sol, m))
+    // Non-finite output guard, mirroring the dense `implicit_tangent`: an LU
+    // that factors cleanly can still back-solve to NaN/Inf when the RHS is
+    // non-finite (e.g. a NaN in `x_dot`) — the F_z probe checks don't touch it.
+    let z_dot = col_to_vec(&sol, m);
+    if z_dot.iter().any(|v| !v.is_finite()) {
+        return Err(SparseImplicitError::NumericSingular);
+    }
+    Ok(z_dot)
 }
 
 /// Compute the implicit adjoint `(dz*/dx)^T · z̄` using sparse Jacobian evaluation and sparse LU.
@@ -567,6 +574,12 @@ pub fn implicit_adjoint_sparse(
     let fx_t_lambda = fx_transpose_matvec(ctx, &jac_values, &lambda_vec);
     let x_bar: Vec<f64> = fx_t_lambda.iter().map(|&v| -v).collect();
 
+    // Non-finite output guard, mirroring the dense `implicit_adjoint`: a
+    // non-finite `z̄` makes the transpose-solve RHS non-finite and the LU
+    // back-solve propagates it into `x̄`.
+    if x_bar.iter().any(|v| !v.is_finite()) {
+        return Err(SparseImplicitError::NumericSingular);
+    }
     Ok(x_bar)
 }
 
@@ -635,5 +648,11 @@ pub fn implicit_jacobian_sparse(
         }
     }
 
+    // Non-finite output guard, mirroring the dense `implicit_jacobian`: catches a
+    // column whose solve went non-finite (e.g. `F_x` non-finite while `F_z` is
+    // not) rather than returning an `Ok` matrix with NaN entries.
+    if result.iter().any(|col| col.iter().any(|v| !v.is_finite())) {
+        return Err(SparseImplicitError::NumericSingular);
+    }
     Ok(result)
 }

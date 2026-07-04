@@ -152,8 +152,11 @@ impl<F: Float> Dual<F> {
         } else {
             n.re * val / self.re * self.eps
         };
-        let dy = if val == F::zero() {
-            // lim_{x→0+} x^y * ln(x) = 0 for y > 0
+        let dy = if val == F::zero() || self.re <= F::zero() {
+            // `lim_{x→0+} x^y·ln(x) = 0` for y > 0; and for a negative base
+            // `ln(x)` is undefined (complex), so the exponent direction is
+            // treated as locally constant — matching `Reverse`/`opcode`. The
+            // base-direction `dx` term above stays finite for integer exponents.
             F::zero()
         } else {
             val * self.re.ln() * n.eps
@@ -189,25 +192,25 @@ impl<F: Float> Dual<F> {
     /// Natural logarithm.
     #[inline]
     pub fn ln(self) -> Self {
-        self.chain(self.re.ln(), F::one() / self.re)
+        self.chain(self.re.ln(), kernels::ln_deriv(self.re))
     }
 
     /// Base-2 logarithm.
     #[inline]
     pub fn log2(self) -> Self {
-        self.chain(self.re.log2(), F::one() / (self.re * F::LN_2()))
+        self.chain(self.re.log2(), kernels::log2_deriv(self.re))
     }
 
     /// Base-10 logarithm.
     #[inline]
     pub fn log10(self) -> Self {
-        self.chain(self.re.log10(), F::one() / (self.re * F::LN_10()))
+        self.chain(self.re.log10(), kernels::log10_deriv(self.re))
     }
 
     /// ln(1+x), accurate near zero.
     #[inline]
     pub fn ln_1p(self) -> Self {
-        self.chain(self.re.ln_1p(), F::one() / (F::one() + self.re))
+        self.chain(self.re.ln_1p(), kernels::ln_1p_deriv(self.re))
     }
 
     /// Logarithm with given base.
@@ -323,22 +326,21 @@ impl<F: Float> Dual<F> {
     /// Inverse hyperbolic tangent.
     #[inline]
     pub fn atanh(self) -> Self {
-        self.chain(
-            self.re.atanh(),
-            F::one() / ((F::one() - self.re) * (F::one() + self.re)),
-        )
+        self.chain(self.re.atanh(), kernels::atanh_deriv(self.re))
     }
 
     // ── Misc ──
 
     /// Absolute value.
     ///
-    /// Derivative uses `signum(x)`: returns 1 at x=+0 and -1 at x=-0
-    /// (matching Rust's `f64::signum`). Both are valid subgradients of |x| at 0.
-    /// Consistent across all AD modes and GPU backends.
+    /// The derivative delegates to [`kernels::abs_deriv`]: `0` at the kink `x = 0`
+    /// (the minimal-norm subgradient, value-based so `+0` and `-0` agree), `sign(x)`
+    /// elsewhere, `NaN` at `NaN`. This convention is unified across every AD mode
+    /// and both GPU backends; sharp/limiting subgradients still force `±1` via the
+    /// nonsmooth machinery.
     #[inline]
     pub fn abs(self) -> Self {
-        self.chain(self.re.abs(), self.re.signum())
+        self.chain(self.re.abs(), kernels::abs_deriv(self.re))
     }
 
     /// Sign function (zero derivative).

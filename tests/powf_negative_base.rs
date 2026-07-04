@@ -176,3 +176,46 @@ fn dual_powf_out_of_i32_range_falls_through() {
     let y = x.powf(Dual::constant((i32::MAX as f64) + 2.0));
     assert!(y.re.is_finite() || y.re.is_infinite()); // 2^2e9 overflows to +inf, that's fine
 }
+
+// ── Negative base with a LIVE exponent tangent ──
+//
+// With a live exponent (`n.eps != 0`) the general path runs (no integer
+// fast-path). The exponent-direction term `x^n · ln(x) · n.eps` has `ln(x)=NaN`
+// for `x < 0`, which poisoned the whole tangent. `Reverse`/`opcode` guard the
+// exponent term to 0 for `a <= 0`; forward mode must match. The base-direction
+// term `n · x^(n-1) · x.eps` stays finite and is preserved.
+
+#[test]
+fn dual_powf_negative_base_live_exponent_finite_tangent() {
+    let x = Dual::new(-2.0_f64, 1.0);
+    let n = Dual::new(3.0_f64, 1.0); // live exponent
+    let y = x.powf(n);
+    assert!((y.re - (-8.0)).abs() < 1e-12, "re = {}", y.re);
+    // eps = base-direction (3·x²·1 = 12) + exponent-direction (guarded to 0).
+    assert!(y.eps.is_finite(), "eps must be finite, got {}", y.eps);
+    assert!((y.eps - 12.0).abs() < 1e-12, "eps = {}", y.eps);
+}
+
+#[test]
+fn dual_vec_powf_negative_base_live_exponent_finite_tangent() {
+    let x = DualVec::<f64, 1>::new(-2.0, [1.0]);
+    let n = DualVec::<f64, 1>::new(3.0, [1.0]); // live exponent
+    let y = x.powf(n);
+    assert!((y.re - (-8.0)).abs() < 1e-12, "re = {}", y.re);
+    assert!(y.eps[0].is_finite(), "eps must be finite, got {}", y.eps[0]);
+    assert!((y.eps[0] - 12.0).abs() < 1e-12, "eps = {}", y.eps[0]);
+}
+
+// Anchor: positive base with a live exponent keeps the exact x^n·ln(x) term.
+#[test]
+fn dual_powf_positive_base_live_exponent_exact() {
+    let x = Dual::new(2.0_f64, 0.0);
+    let n = Dual::new(3.0_f64, 1.0); // only the exponent moves
+    let y = x.powf(n);
+    // d/dn 2^n = 2^n·ln(2) = 8·ln(2).
+    assert!(
+        (y.eps - 8.0 * 2.0_f64.ln()).abs() < 1e-12,
+        "eps = {}",
+        y.eps
+    );
+}

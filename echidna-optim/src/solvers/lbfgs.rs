@@ -146,18 +146,17 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
         grad = ls.gradient;
         grad_norm = norm(&grad);
 
-        // Update history. Filter out pairs with near-zero curvature. The
-        // original guard `sy > eps * yy` has units `[s]·[y]` on the LHS and
-        // `[y]²` on the RHS — dimensionally inconsistent, so it behaves
-        // differently for "tall" vs "short" `y` vectors. Use a Cauchy-Schwarz
-        // normalized filter `sy > eps * sqrt(ss * yy)` which is dimensionally
-        // consistent (`cos θ > eps`) and reliably selects pairs with
-        // non-trivial curvature regardless of vector magnitudes.
+        // Update history. Filter out pairs with near-zero curvature via
+        // `curvature_ok`. The original guard `sy > eps * yy` was dimensionally
+        // inconsistent (`[s]·[y]` LHS vs `[y]²` RHS), so it behaved differently
+        // for "tall" vs "short" `y`; the Cauchy-Schwarz-normalized `cos θ` form
+        // is magnitude-independent, and the `sqrt(eps)` threshold (vs the looser
+        // `eps`) rejects near-orthogonal pairs whose `rho = 1/sy` would blow up
+        // and corrupt the two-loop recursion.
         let sy = dot(&s, &y);
         let ss = dot(&s, &s);
         let yy = dot(&y, &y);
-        let cs_scale = (ss * yy).sqrt();
-        if sy > F::epsilon() * cs_scale {
+        if curvature_ok(sy, ss, yy) {
             if s_hist.len() == m {
                 s_hist.remove(0);
                 y_hist.remove(0);
@@ -335,9 +334,28 @@ fn norm_step<F: Float>(alpha: F, d: &[F]) -> F {
     s.sqrt()
 }
 
+/// Cauchy-Schwarz-normalized curvature filter for L-BFGS `(s, y)` pairs: accept a
+/// pair only when `cos θ = sy / sqrt(ss·yy)` exceeds the threshold. Rejecting
+/// near-orthogonal pairs keeps `ρ = 1/sy` bounded so the two-loop recursion cannot
+/// be corrupted into a garbage search direction.
+#[inline]
+fn curvature_ok<F: Float>(sy: F, ss: F, yy: F) -> bool {
+    sy > F::epsilon().sqrt() * (ss * yy).sqrt()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curvature_ok_rejects_near_orthogonal() {
+        // A near-orthogonal (s, y) pair (cos θ ≈ 1e-10) gives ρ = 1/sy ≈ 1e10,
+        // which corrupts the two-loop recursion. The tightened threshold must
+        // reject it; the loose `eps` threshold (~2.2e-16) wrongly admits it.
+        assert!(!curvature_ok(1e-10_f64, 1.0, 1.0));
+        // A genuine curvature pair stays accepted.
+        assert!(curvature_ok(0.5_f64, 1.0, 1.0));
+    }
 
     struct Rosenbrock;
 

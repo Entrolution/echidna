@@ -37,9 +37,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gradients or panics. Checkpoint files are also registered with the
   cleanup guard before being written, so a panic mid-write cannot leak
   them.
+- Derivatives of the domain-restricted logarithms and `atanh` (`ln`,
+  `log2`, `log10`, `ln_1p`, `atanh`) now return NaN when the input is
+  strictly outside the real domain across every AD mode — the scalar
+  forward and reverse types (`Dual`, `DualVec`, `Reverse`), the bytecode
+  tape, and the wgpu and CUDA GPU kernels (reverse, forward-tangent, and
+  Hessian-vector-product sweeps). Previously these returned a finite but
+  meaningless partial — e.g. `grad(|x| x[0].ln(), &[-2.0])` gave `[-0.5]`
+  instead of `[NaN]`, and the GPU backends disagreed with the CPU. Boundary
+  values (`x = 0` for `ln`, `x = -1` for `ln_1p`, `|x| = 1` for `atanh`)
+  keep the IEEE `1/0 = ±Inf` one-sided limit.
+- The sparse-Hessian family (`sparse_hessian`, `sparse_hessian_vec`,
+  `sparse_hessian_with_pattern`, `sparse_hessian_par`) and `hessian_par`
+  now require a scalar-output tape, matching the dense `hessian` / `hvp` /
+  `hessian_vec`. On a multi-output tape they previously returned, without
+  warning, the Hessian of a single output.
+- `third_order_hvvp` now requires a scalar-output tape and rejects tapes
+  containing custom ops (which its nested-dual sweep can only linearize to
+  first order), matching `hessian_vec`.
+- `hessian_diagonal_gpu` now returns an error for multi-output tapes
+  instead of silently interleaving outputs, matching `laplacian_gpu`.
+- `Taylor % scalar` and `scalar % Taylor` now flag the whole series NaN
+  when the divisor is zero, matching `Taylor % Taylor`. Previously they
+  left a NaN constant term beside finite (or `Inf`) higher-order
+  coefficients — an internally inconsistent series.
+- `jacobian_forward` now computes the Jacobian through custom ops exactly
+  (via `CustomOp::eval_dual`) instead of panicking. Forward-mode dense
+  Jacobians previously rejected custom ops and directed callers to
+  reverse-mode `jacobian`; they now match the sparse Jacobian paths, which
+  already handled custom ops.
+- `Taylor::hypot` / `Laurent::hypot` now return the correct series when both
+  leading coefficients are zero and the lowest non-zero term is at order ≥ 2
+  (e.g. `hypot(t², 0) = t²`). Previously only an order-1 leading zero was
+  handled and higher-order cases returned `[0, Inf, …]`.
+- `Dual::powf` / `DualVec::powf` no longer produce a NaN tangent for a negative
+  base with a live (differentiated) exponent. The exponent-direction term
+  `xⁿ·ln(x)` is guarded to zero for a base ≤ 0 (matching reverse mode); the
+  primal and base-direction tangent were already finite for integer exponents.
+- The `Taylor`/`TaylorDyn` series kernels for `ln`/`log2`/`log10`/`ln_1p`/
+  `atanh`/`acosh` (and `Laurent::atanh`/`ln_1p`) now return an all-NaN jet when
+  the leading coefficient is strictly outside the real domain, matching the
+  scalar AD modes. Previously they emitted a NaN primal beside finite
+  higher-order coefficients. Branch-point boundaries (e.g. `ln` at 0) keep
+  their IEEE singularity.
+- The GPU 2nd-order Taylor kernels (wgpu + CUDA) now match the CPU series
+  accuracy for `asin`/`acos`/`atanh` near `|x| = 1` and for `exp_m1`/`ln_1p`
+  at small arguments. The inverse-trig jet denominators use the
+  cancellation-safe factored form `(1 − x)(1 + x)` (as `acosh` already did),
+  and the `exp_m1`/`ln_1p` primals are computed accurately — via the native
+  `expm1`/`log1p` device intrinsics on CUDA and guard-free series polyfills on
+  wgpu (the naive `exp(x) − 1` / `log(1 + x)` lost most of their significance
+  for small arguments).
+- The GPU 2nd-order Taylor kernels (wgpu + CUDA) now return an all-NaN jet for
+  `ln`/`log2`/`log10`/`ln_1p`/`atanh`/`acosh` when the leading coefficient is
+  strictly outside the real domain, matching the CPU series kernels and the
+  scalar AD modes. Previously they emitted a NaN primal beside finite
+  higher-order coefficients. Branch-point boundaries (`ln` at 0, `acosh` at 1,
+  `atanh` at ±1) keep their IEEE singular value.
+- `acosh`'s derivative now returns NaN when the input is strictly outside the
+  real domain (`a < 1`) across every AD mode — the scalar forward and reverse
+  types (`Dual`, `DualVec`, `Reverse`), the bytecode tape, and the wgpu and CUDA
+  GPU kernels (reverse, forward-tangent, and both Hessian-vector-product sweeps) —
+  matching the convention already applied to `ln`/`atanh`. Previously it returned
+  a finite but meaningless value for `a ≤ -1` (where the `sqrt` argument stays
+  positive). The boundary `a = 1` keeps its `+Inf` one-sided limit. Two GPU sites
+  that still evaluated `a² - 1` directly under the square root (the CUDA
+  reverse-gradient sweep and the wgpu Hessian-vector-product first phase) now use
+  the cancellation-safe factored `(a-1)(a+1)`, matching every other site and the
+  CPU kernel.
+- The GPU 2nd-order Taylor kernels (wgpu + CUDA) now match the CPU on three edge
+  cases: `max(x, NaN)` / `min(x, NaN)` return the finite operand (the NaN
+  tie-break was previously dropped, so the GPU returned `NaN`); `sqrt` at a zero
+  primal produces a uniform `+Inf` higher-coefficient jet (the vertical tangent)
+  instead of a sign-dependent `±Inf`/`NaN` mix; and `x % y` with a zero-leading
+  divisor returns an all-NaN jet instead of an `Inf`/`NaN` mix.
+- The wgpu GPU kernels now match the CPU on two piecewise ops: `signum(-0.0)`
+  returns `-1` (it previously returned `+1` from an `a >= 0.0` test that ignores the
+  sign bit), and `round` uses ties-away-from-zero — WGSL's built-in `round` is
+  ties-to-even, so `round(2.5)` gave `2` instead of `3`. Both now agree with Rust
+  `f32::round` / `f32::signum` and the CUDA backend.
+
+### Added (echidna)
+
+- Guarded per-op derivative helpers `kernels::ln_deriv`, `log2_deriv`,
+  `log10_deriv`, `ln_1p_deriv`, and `atanh_deriv` — the single source of
+  truth for the out-of-domain (NaN) derivative convention shared by the
+  AD types and the bytecode `OpCode` dispatcher.
+
+### Changed (echidna)
+
+- The derivative of `abs` at the kink `x = 0` is now `0` (the minimal-norm
+  subgradient) across every AD mode (`Dual`, `DualVec`, `Reverse`, the bytecode
+  tape) and both GPU backends, via the new single-source `kernels::abs_deriv`.
+  Previously most modes returned `±1` (from `signum`, which leaks the sign bit of
+  a zero — `signum(-0.0) = -1`), so algebraically identical points could report
+  different subgradients depending on how the zero was produced. `0` is value-based
+  (`+0` and `-0` agree) and matches PyTorch / JAX / TensorFlow. `sign(x)` off the
+  kink and `NaN` at `NaN` are unchanged, and the wgpu tangent shaders now propagate
+  `NaN` at a NaN input (they previously zeroed the derivative there). Sharp /
+  limiting subgradients still force `±1` via the nonsmooth machinery.
+- `<Laurent as num_traits::Zero>::is_zero` is now value-based — it returns
+  true when the series evaluates to `0` at the expansion point — instead of
+  structural (all coefficients zero). This aligns `is_zero` with the
+  `is_zero() ⟺ == Self::zero()` contract (`Laurent`'s `==`/`PartialOrd` are
+  value-based) and with the other AD types. A positive-pole series such as `t`
+  now reports `is_zero() == true`. `Laurent`'s own arithmetic uses a structural
+  check internally, so pole formation (e.g. `1/t`) is unaffected.
 
 ### Fixed (echidna-optim)
 
+- The trust-region solver rejects a `TrustRegionConfig` with `eta` outside
+  `[0, 1/4)` at entry (`NumericalError`). An `eta >= 1/4` could reject a step
+  without shrinking the radius, silently stalling to `MaxIterations`; `[0, 1/4)`
+  is the range required for the standard convergence guarantee.
+- The trust-region radius-expansion boundary test now uses a `sqrt(eps)` relative
+  tolerance instead of ~1 ULP, so the expansion branch actually fires on genuine
+  boundary steps (faster convergence on large-step problems; results unchanged).
+- The L-BFGS curvature filter tightened from `cos θ > eps` to `cos θ > sqrt(eps)`,
+  rejecting near-orthogonal `(s, y)` pairs whose `ρ = 1/(s·y)` would otherwise
+  blow up and corrupt the two-loop recursion into a garbage search direction.
+- The backtracking Armijo line search validates its parameters (`rho` in `(0, 1)`,
+  `alpha_min > 0`): a misconfigured `rho >= 1` previously never shrank the step
+  length and spun forever, and `alpha_min <= 0` returned a degenerate zero-step;
+  both now fail cleanly as `LineSearchFailed`.
 - `piggyback_tangent_solve` now requires both the primal and the tangent
   iterates to converge before returning. The tangent starts at zero and
   converges on its own schedule, so a warm-started primal previously
@@ -48,6 +168,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `(I − G_z)⁻¹·G_x·ẋ`). Reaching `max_iter` with a converged primal but
   unconverged tangent now reports `IterationsExhaustedTangent` (whose
   `z_norm` can therefore be at or below `tol`; see its documentation).
+- `implicit_tangent_sparse`, `implicit_adjoint_sparse`, and
+  `implicit_jacobian_sparse` now return `NumericSingular` when the solve
+  produces a non-finite result (e.g. a NaN reaching the right-hand side via
+  `x_dot` / `z̄`), matching the dense implicit functions. Previously they
+  could return `Ok` with NaN entries.
 
 ## [0.11.0] - 2026-05-20
 

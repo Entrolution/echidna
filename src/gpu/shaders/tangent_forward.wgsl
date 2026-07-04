@@ -130,6 +130,25 @@ fn hypot_f32(a: f32, b: f32) -> f32 {
     return mx * sqrt(1.0 + r * r);
 }
 
+fn abs_deriv_f32(x: f32) -> f32 {
+    // Unified abs' convention (matches kernels::abs_deriv): 0 at the kink
+    // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
+    // test inspects the bits — `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if (x == 0.0) { return 0.0; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
+fn signum_f32(x: f32) -> f32 {
+    // Rust f32::signum: -1 for -0.0 (sign bit), +1 for +0.0/positive, NaN at NaN.
+    // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit. Bitcast NaN test
+    // since `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -281,10 +300,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u /* EXP */: { r = exp(a); rt = r * at; }
             case 18u /* EXP2 */: { r = exp2(a); rt = r * log(2.0) * at; }
             case 19u /* EXPM1 */: { r = expm1_f32(a); rt = (r + 1.0) * at; }
-            case 20u /* LN */: { r = log(a); rt = at / a; }
-            case 21u /* LOG2 */: { r = log2(a); rt = at / (a * log(2.0)); }
-            case 22u /* LOG10 */: { r = log(a) / log(10.0); rt = at / (a * log(10.0)); }
-            case 23u /* LN1P */: { r = ln1p_f32(a); rt = at / (1.0 + a); }
+            case 20u /* LN */: { r = log(a); rt = select(bitcast<f32>(0x7fc00000u), at / a, a >= 0.0); }
+            case 21u /* LOG2 */: { r = log2(a); rt = select(bitcast<f32>(0x7fc00000u), at / (a * log(2.0)), a >= 0.0); }
+            case 22u /* LOG10 */: { r = log(a) / log(10.0); rt = select(bitcast<f32>(0x7fc00000u), at / (a * log(10.0)), a >= 0.0); }
+            case 23u /* LN1P */: { r = ln1p_f32(a); rt = select(bitcast<f32>(0x7fc00000u), at / (1.0 + a), a >= -1.0); }
             case 24u /* SIN */: { r = sin(a); rt = cos(a) * at; }
             case 25u /* COS */: { r = cos(a); rt = -sin(a) * at; }
             case 26u /* TAN */: { r = tan(a); let c = cos(a); rt = at / (c * c); }
@@ -311,37 +330,35 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 34u /* ACOSH */: {
-                // Factored form under sqrt for both primal and derivative
-                // — retains the ε² term near a=1; matches forward.wgsl
-                // acosh_f32 helper and kernels::acosh_deriv.
-                r = log(a + sqrt((a - 1.0) * (a + 1.0)));
-                if abs(a) > 1e8 {
-                    let inv = 1.0 / a;
-                    rt = at * abs(inv) / sqrt(1.0 - inv * inv);
+                if a < 1.0 {
+                    // Out of domain (acosh domain a >= 1): both primal and
+                    // derivative NaN. Matches kernels::acosh_deriv; strict `< 1`
+                    // keeps a==1 → primal 0, derivative +Inf.
+                    let nan = bitcast<f32>(0x7fc00000u);
+                    r = nan;
+                    rt = nan;
                 } else {
-                    rt = at / sqrt((a - 1.0) * (a + 1.0));
+                    // Factored form under sqrt for both primal and derivative
+                    // — retains the ε² term near a=1; matches forward.wgsl
+                    // acosh_f32 helper and kernels::acosh_deriv.
+                    r = log(a + sqrt((a - 1.0) * (a + 1.0)));
+                    if abs(a) > 1e8 {
+                        let inv = 1.0 / a;
+                        rt = at * abs(inv) / sqrt(1.0 - inv * inv);
+                    } else {
+                        rt = at / sqrt((a - 1.0) * (a + 1.0));
+                    }
                 }
             }
-            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = at / ((1.0 - a) * (1.0 + a)); }
-            case 36u /* ABS */: {
-                r = abs(a);
-                // Match Rust's `signum` via sign-bit inspection so that
-                // -0.0 produces -1 (not +1 as `a >= 0.0` would yield).
-                if a != a {
-                    rt = 0.0;
-                } else {
-                    let bits = bitcast<u32>(a);
-                    let s = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
-                    rt = s * at;
-                }
-            }
+            case 35u /* ATANH */: { r = 0.5 * log((1.0 + a) / (1.0 - a)); rt = select(bitcast<f32>(0x7fc00000u), at / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
+            case 36u /* ABS */: { r = abs(a); rt = abs_deriv_f32(a) * at; }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: {
                 // Zero derivative ops
                 switch op {
-                    case 37u: { if a != a { r = a; } else if a >= 0.0 { r = 1.0; } else { r = -1.0; } }
+                    case 37u: { r = signum_f32(a); }
                     case 38u: { r = floor(a); }
                     case 39u: { r = ceil(a); }
-                    case 40u: { r = round(a); }
+                    case 40u: { let t = trunc(a); r = select(t, t + select(-1.0, 1.0, a >= 0.0), abs(a - t) >= 0.5); }
                     case 41u: { r = trunc(a); }
                     default: {}
                 }

@@ -249,22 +249,27 @@ mod sparse_stde_tests {
         assert_relative_eq!(result.estimate, 48.0, epsilon = 1e-4);
     }
 
-    /// f(x,y) = sin(x)*cos(y)
-    fn sin_cos_2d<T: Scalar>(x: &[T]) -> T {
-        x[0].sin() * x[1].cos()
+    /// f(x,y) = exp(x) + sin(y): pure second partials genuinely differ
+    /// (∂²/∂x² = exp(x) vs ∂²/∂y² = -sin(y)), so a mixed-coefficient
+    /// operator cannot be estimated without importance sampling.
+    fn exp_plus_sin<T: Scalar>(x: &[T]) -> T {
+        x[0].exp() + x[1].sin()
     }
 
     #[test]
     fn stde_sparse_mixed_second_order() {
-        // Test with an operator that has mixed second-order terms:
-        // L = ∂²/∂x² + 2∂²/∂y² on sin(x)cos(y) at (1, 2)
-        // ∂²(sin(x)cos(y))/∂x² = -sin(x)cos(y) = -sin(1)cos(2)
-        // ∂²(sin(x)cos(y))/∂y² = -sin(x)cos(y) = -sin(1)cos(2)
-        // L = -sin(1)cos(2) + 2*(-sin(1)cos(2)) = -3*sin(1)cos(2)
-        let tape = record_fn(sin_cos_2d, &[1.0, 2.0]);
-        let x = [1.0, 2.0];
+        // Mixed-coefficient operator L = ∂²/∂x² + 2∂²/∂y² on exp(x)+sin(y)
+        // at (0.5, 1.0). Crucially the two pure second partials DIFFER
+        // (∂²/∂x² = exp(0.5) ≈ 1.649, ∂²/∂y² = -sin(1) ≈ -0.841), so this is
+        // a genuinely non-vacuous fixture: unlike a symmetric operand where
+        // the partials coincide, the |C_α|-weighted true value cannot be
+        // recovered by a uniform average over the sparse entries. `stde_sparse`
+        // is unbiased only when indices are drawn ∝|C_α| (importance sampling).
+        let x = [0.5, 1.0];
+        let tape = record_fn(exp_plus_sin, &x);
 
-        let expected = -3.0 * 1.0_f64.sin() * 2.0_f64.cos();
+        // True value: L(exp(x)+sin(y)) = exp(x) + 2·(-sin(y)).
+        let expected = 0.5_f64.exp() - 2.0 * 1.0_f64.sin();
 
         let op = DiffOp::from_orders(
             2,
@@ -277,9 +282,44 @@ mod sparse_stde_tests {
         assert_relative_eq!(exact, expected, epsilon = 1e-6);
 
         let dist = op.sparse_distribution();
+
+        // Non-vacuity guard: a uniform enumeration of the sparse entries is
+        // biased here (unequal |C_α| = 1 vs 2 AND unequal partials), landing
+        // far from the truth. This pins the ∝|C_α| precondition — if the
+        // fixture ever regressed to equal partials the bias would vanish and
+        // this assertion would fail, exposing the vacuity.
         let all_indices: Vec<usize> = (0..dist.len()).collect();
-        let result = echidna::stde::stde_sparse(&tape, &x, &dist, &all_indices);
-        assert_relative_eq!(result.estimate, expected, epsilon = 1e-6);
+        let uniform = echidna::stde::stde_sparse(&tape, &x, &dist, &all_indices);
+        assert!(
+            (uniform.estimate - exact).abs() > 1.0,
+            "fixture must be non-vacuous: uniform enumeration {} should be far \
+             from exact {} (importance sampling ∝|C_α| is required)",
+            uniform.estimate,
+            exact,
+        );
+
+        // Correct usage: draw indices ∝|C_α| via `sample_index`. The Monte
+        // Carlo mean converges to the true operator value. Deterministic
+        // quasi-random `u` sequence keeps the test reproducible across runs.
+        let num_samples = 50_000;
+        let indices: Vec<usize> = (0..num_samples)
+            .map(|i| {
+                let u = ((i as u64).wrapping_mul(2654435761) % 100_000) as f64 / 100_000.0;
+                dist.sample_index(u)
+            })
+            .collect();
+        let result = echidna::stde::stde_sparse(&tape, &x, &dist, &indices);
+
+        let error = (result.estimate - exact).abs();
+        let bound = 3.0 * result.standard_error;
+        assert!(
+            error < bound,
+            "importance-sampled estimate {} too far from exact {}: error = {}, 3*SE = {}",
+            result.estimate,
+            exact,
+            error,
+            bound,
+        );
     }
 }
 

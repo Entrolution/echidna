@@ -37,6 +37,13 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Returns `(value, gradient, hessian)`.
     pub fn hessian_par(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "hessian_par is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -89,6 +96,13 @@ impl<F: Float> super::BytecodeTape<F> {
         &self,
         x: &[F],
     ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "sparse_hessian_par is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 

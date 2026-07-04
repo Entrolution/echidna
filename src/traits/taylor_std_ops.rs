@@ -227,6 +227,13 @@ macro_rules! impl_taylor_scalar_ops {
             type Output = Taylor<$f, K>;
             #[inline]
             fn rem(self, rhs: $f) -> Taylor<$f, K> {
+                // Zero divisor: flag the whole series NaN (mirrors `Taylor::rem`)
+                // rather than leaving a NaN k=0 slot beside finite higher coeffs.
+                if rhs == 0.0 {
+                    return Taylor {
+                        coeffs: std::array::from_fn(|_| <$f>::NAN),
+                    };
+                }
                 let mut coeffs = self.coeffs;
                 coeffs[0] %= rhs;
                 Taylor { coeffs }
@@ -238,6 +245,13 @@ macro_rules! impl_taylor_scalar_ops {
             #[inline]
             #[allow(clippy::suspicious_arithmetic_impl)]
             fn rem(self, rhs: Taylor<$f, K>) -> Taylor<$f, K> {
+                // Zero divisor constant term: flag the whole series NaN
+                // (mirrors `Taylor::rem`) rather than emitting an Inf/NaN mix.
+                if rhs.coeffs[0] == 0.0 {
+                    return Taylor {
+                        coeffs: std::array::from_fn(|_| <$f>::NAN),
+                    };
+                }
                 // scalar % b(t) = scalar - trunc(scalar/b[0]) * b(t)
                 let q = (self / rhs.coeffs[0]).trunc();
                 Taylor {

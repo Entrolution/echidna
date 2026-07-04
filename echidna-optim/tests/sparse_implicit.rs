@@ -498,3 +498,49 @@ fn dimension_mismatch_returns_err() {
         "expected DimensionMismatch for z_star, got {err:?}"
     );
 }
+
+// ── Non-finite output guards (mirror the dense implicit fns) ──
+//
+// A well-conditioned F_z (identity here) factors and passes the probe, but a
+// non-finite RHS — e.g. a NaN in `x_dot` / `z_bar` — makes the back-solve
+// non-finite. The sparse fns must reject that with `NumericSingular` rather than
+// returning `Ok(vec![NaN, …])`, matching `implicit_tangent`/`implicit_adjoint`.
+
+/// F(z, x) = [z0 - x0, z1 - x1]: F_z = I (well-conditioned), F_x = -I.
+fn identity_system() -> (echidna::BytecodeTape<f64>, [f64; 2], [f64; 2]) {
+    let (tape, _) = record_multi(
+        |v| {
+            let z0 = v[0];
+            let z1 = v[1];
+            let x0 = v[2];
+            let x1 = v[3];
+            vec![z0 - x0, z1 - x1]
+        },
+        &[1.0_f64, 2.0, 1.0, 2.0],
+    );
+    (tape, [1.0, 2.0], [1.0, 2.0])
+}
+
+#[test]
+fn implicit_tangent_sparse_rejects_nonfinite_output() {
+    let (mut tape, z_star, x) = identity_system();
+    let ctx = SparseImplicitContext::new(&tape, 2);
+    let err = implicit_tangent_sparse(&mut tape, &z_star, &x, &[f64::NAN, 1.0], &ctx)
+        .expect_err("non-finite tangent output must be rejected");
+    assert!(
+        matches!(err, SparseImplicitError::NumericSingular),
+        "expected NumericSingular for NaN x_dot, got {err:?}"
+    );
+}
+
+#[test]
+fn implicit_adjoint_sparse_rejects_nonfinite_output() {
+    let (mut tape, z_star, x) = identity_system();
+    let ctx = SparseImplicitContext::new(&tape, 2);
+    let err = implicit_adjoint_sparse(&mut tape, &z_star, &x, &[f64::NAN, 1.0], &ctx)
+        .expect_err("non-finite adjoint output must be rejected");
+    assert!(
+        matches!(err, SparseImplicitError::NumericSingular),
+        "expected NumericSingular for NaN z_bar, got {err:?}"
+    );
+}

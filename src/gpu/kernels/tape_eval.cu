@@ -15,6 +15,13 @@
 
 typedef FLOAT_TYPE F;
 
+// IEEE quiet NaN in the kernel's float type — the out-of-domain partial for the
+// domain-restricted ops (Ln/Log2/Log10/Ln1p/Atanh) so a derivative signals
+// "outside the real domain" instead of a finite but meaningless value, matching
+// the CPU OpCode convention. `nan("")` is a device built-in; the F() narrows a
+// double NaN to float NaN-preservingly when FLOAT_TYPE is float.
+static __device__ __forceinline__ F domain_nan() { return F(nan("")); }
+
 // OpCode constants (must match OpCode #[repr(u8)] discriminants)
 #define OP_INPUT  0u
 #define OP_CONST  1u
@@ -65,6 +72,9 @@ typedef FLOAT_TYPE F;
 // Math helpers — use the right precision
 // Match Rust's f64::signum: +1 for +0, -1 for -0, NaN for NaN.
 __device__ F _sign(F x) { return (x != x) ? x : copysign(F(1), x); }
+// abs' convention (matches kernels::abs_deriv): 0 at the kink (value-based, so
+// +/-0 agree), sign(x) elsewhere, NaN at NaN (via _sign).
+__device__ F _abs_deriv(F x) { return (x == F(0)) ? F(0) : _sign(x); }
 __device__ F _cbrt(F x) { return copysign(pow(fabs(x), F(1.0/3.0)), x); }
 // Match Rust's `f32::fract() = x - trunc(x)` (truncation), not WGSL/C's
 // floor-based `x - floor(x)` convention — they disagree for negative x.
@@ -277,10 +287,10 @@ extern "C" __global__ void reverse_sweep(
             case OP_EXP:    da = r; break;
             case OP_EXP2:   da = r * log(F(2)); break;
             case OP_EXPM1:  da = r + F(1); break;
-            case OP_LN:     da = F(1)/a; break;
-            case OP_LOG2:   da = F(1)/(a*log(F(2))); break;
-            case OP_LOG10:  da = F(1)/(a*log(F(10))); break;
-            case OP_LN1P:   da = F(1)/(F(1)+a); break;
+            case OP_LN:     da = (a >= F(0)) ? F(1)/a : domain_nan(); break;
+            case OP_LOG2:   da = (a >= F(0)) ? F(1)/(a*log(F(2))) : domain_nan(); break;
+            case OP_LOG10:  da = (a >= F(0)) ? F(1)/(a*log(F(10))) : domain_nan(); break;
+            case OP_LN1P:   da = (a >= -F(1)) ? F(1)/(F(1)+a) : domain_nan(); break;
             case OP_SIN:    da = cos(a); break;
             case OP_COS:    da = -sin(a); break;
             case OP_TAN:    { F c = cos(a); da = F(1)/(c*c); break; }
@@ -307,13 +317,18 @@ extern "C" __global__ void reverse_sweep(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (before the 1e8 branch): acosh domain is a >= 1;
+                // a < 1 is out of domain (a <= -1 leaves a*a-1 >= 0 → finite garbage,
+                // as does the large-|a| branch). Matches kernels::acosh_deriv.
+                if (a < F(1)) { da = domain_nan(); break; }
                 F aa = fabs(a);
                 if (aa > F(1e8)) { F inv = F(1)/a; da = fabs(inv)/sqrt(F(1)-inv*inv); }
-                else              { da = F(1)/sqrt(a*a-F(1)); }
+                // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
+                else              { da = F(1)/sqrt((a-F(1))*(a+F(1))); }
                 break;
             }
-            case OP_ATANH:  da = F(1)/((F(1)-a)*(F(1)+a)); break;
-            case OP_ABS:    da = _sign(a); break;
+            case OP_ATANH:  da = (a >= -F(1) && a <= F(1)) ? F(1)/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
+            case OP_ABS:    da = _abs_deriv(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
             case OP_ROUND:  case OP_TRUNC: da = F(0); break;
             case OP_FRACT:  da = F(1); break;
@@ -429,10 +444,10 @@ extern "C" __global__ void tangent_forward(
             case OP_EXP:   r=exp(a); rt=r*at; break;
             case OP_EXP2:  r=exp2(a); rt=r*log(F(2))*at; break;
             case OP_EXPM1: r=expm1(a); rt=(r+F(1))*at; break;
-            case OP_LN:    r=log(a); rt=at/a; break;
-            case OP_LOG2:  r=log2(a); rt=at/(a*log(F(2))); break;
-            case OP_LOG10: r=log10(a); rt=at/(a*log(F(10))); break;
-            case OP_LN1P:  r=log1p(a); rt=at/(F(1)+a); break;
+            case OP_LN:    r=log(a); rt=(a >= F(0)) ? at/a : domain_nan(); break;
+            case OP_LOG2:  r=log2(a); rt=(a >= F(0)) ? at/(a*log(F(2))) : domain_nan(); break;
+            case OP_LOG10: r=log10(a); rt=(a >= F(0)) ? at/(a*log(F(10))) : domain_nan(); break;
+            case OP_LN1P:  r=log1p(a); rt=(a >= -F(1)) ? at/(F(1)+a) : domain_nan(); break;
             case OP_SIN:   r=sin(a); rt=cos(a)*at; break;
             case OP_COS:   r=cos(a); rt=-sin(a)*at; break;
             case OP_TAN:   r=tan(a); { F c=cos(a); rt=at/(c*c); } break;
@@ -455,14 +470,16 @@ extern "C" __global__ void tangent_forward(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (acosh domain a >= 1): matches kernels::acosh_deriv.
+                if (a < F(1)) { r = domain_nan(); rt = domain_nan(); break; }
                 r = acosh(a);
                 if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
                 // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
                 else                  { rt = at / sqrt((a - F(1)) * (a + F(1))); }
                 break;
             }
-            case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
-            case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
+            case OP_ATANH: r=atanh(a); rt=(a >= -F(1) && a <= F(1)) ? at/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
+            case OP_ABS:   r=fabs(a); rt=_abs_deriv(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
             case OP_FLOOR:  r=floor(a); rt=F(0); break;
             case OP_CEIL:   r=ceil(a); rt=F(0); break;
@@ -577,10 +594,10 @@ extern "C" __global__ void tangent_reverse(
             case OP_EXP:   r=exp(a); rt=r*at; break;
             case OP_EXP2:  r=exp2(a); rt=r*log(F(2))*at; break;
             case OP_EXPM1: r=expm1(a); rt=(r+F(1))*at; break;
-            case OP_LN:    r=log(a); rt=at/a; break;
-            case OP_LOG2:  r=log2(a); rt=at/(a*log(F(2))); break;
-            case OP_LOG10: r=log10(a); rt=at/(a*log(F(10))); break;
-            case OP_LN1P:  r=log1p(a); rt=at/(F(1)+a); break;
+            case OP_LN:    r=log(a); rt=(a >= F(0)) ? at/a : domain_nan(); break;
+            case OP_LOG2:  r=log2(a); rt=(a >= F(0)) ? at/(a*log(F(2))) : domain_nan(); break;
+            case OP_LOG10: r=log10(a); rt=(a >= F(0)) ? at/(a*log(F(10))) : domain_nan(); break;
+            case OP_LN1P:  r=log1p(a); rt=(a >= -F(1)) ? at/(F(1)+a) : domain_nan(); break;
             case OP_SIN:   r=sin(a); rt=cos(a)*at; break;
             case OP_COS:   r=cos(a); rt=-sin(a)*at; break;
             case OP_TAN:   r=tan(a); { F c=cos(a); rt=at/(c*c); } break;
@@ -603,14 +620,16 @@ extern "C" __global__ void tangent_reverse(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (acosh domain a >= 1): matches kernels::acosh_deriv.
+                if (a < F(1)) { r = domain_nan(); rt = domain_nan(); break; }
                 r = acosh(a);
                 if (fabs(a) > F(1e8)) { F inv = F(1)/a; rt = at * fabs(inv) / sqrt(F(1) - inv*inv); }
                 // Factored (a-1)(a+1) avoids cancellation near a=1; matches kernels::acosh_deriv.
                 else                  { rt = at / sqrt((a - F(1)) * (a + F(1))); }
                 break;
             }
-            case OP_ATANH: r=atanh(a); rt=at/((F(1)-a)*(F(1)+a)); break;
-            case OP_ABS:   r=fabs(a); rt=_sign(a)*at; break;
+            case OP_ATANH: r=atanh(a); rt=(a >= -F(1) && a <= F(1)) ? at/((F(1)-a)*(F(1)+a)) : domain_nan(); break;
+            case OP_ABS:   r=fabs(a); rt=_abs_deriv(a)*at; break;
             case OP_SIGNUM: r=_sign(a); rt=F(0); break;
             case OP_FLOOR:  r=floor(a); rt=F(0); break;
             case OP_CEIL:   r=ceil(a); rt=F(0); break;
@@ -757,10 +776,10 @@ extern "C" __global__ void tangent_reverse(
             case OP_EXP:    da_re=r; da_eps=r*at; break;
             case OP_EXP2:   { F l2=log(F(2)); da_re=r*l2; da_eps=r*l2*l2*at; break; }
             case OP_EXPM1:  da_re=r+F(1); da_eps=(r+F(1))*at; break;
-            case OP_LN:     da_re=F(1)/a; da_eps=-at/(a*a); break;
-            case OP_LOG2:   { F l2=log(F(2)); da_re=F(1)/(a*l2); da_eps=-at/(a*a*l2); break; }
-            case OP_LOG10:  { F l10=log(F(10)); da_re=F(1)/(a*l10); da_eps=-at/(a*a*l10); break; }
-            case OP_LN1P:   { F t=F(1)+a; da_re=F(1)/t; da_eps=-at/(t*t); break; }
+            case OP_LN:     if (a >= F(0)) { da_re=F(1)/a; da_eps=-at/(a*a); } else { da_re=domain_nan(); da_eps=domain_nan(); } break;
+            case OP_LOG2:   if (a >= F(0)) { F l2=log(F(2)); da_re=F(1)/(a*l2); da_eps=-at/(a*a*l2); } else { da_re=domain_nan(); da_eps=domain_nan(); } break;
+            case OP_LOG10:  if (a >= F(0)) { F l10=log(F(10)); da_re=F(1)/(a*l10); da_eps=-at/(a*a*l10); } else { da_re=domain_nan(); da_eps=domain_nan(); } break;
+            case OP_LN1P:   if (a >= -F(1)) { F t=F(1)+a; da_re=F(1)/t; da_eps=-at/(t*t); } else { da_re=domain_nan(); da_eps=domain_nan(); } break;
             case OP_SIN:    da_re=cos(a); da_eps=-sin(a)*at; break;
             case OP_COS:    da_re=-sin(a); da_eps=-cos(a)*at; break;
             case OP_TAN:    { F c=cos(a); F s=F(1)/(c*c); da_re=s; da_eps=F(2)*tan(a)*s*at; break; }
@@ -805,6 +824,9 @@ extern "C" __global__ void tangent_reverse(
                 break;
             }
             case OP_ACOSH: {
+                // Domain guard first (acosh domain a >= 1): both HVP terms NaN out of
+                // domain. Matches kernels::acosh_deriv; strict `< 1` keeps a==1 singular.
+                if (a < F(1)) { da_re = domain_nan(); da_eps = domain_nan(); break; }
                 if (fabs(a) > F(1e8)) {
                     F inv = F(1)/a;
                     F denom = sqrt(F(1) - inv*inv);
@@ -820,8 +842,8 @@ extern "C" __global__ void tangent_reverse(
                 }
                 break;
             }
-            case OP_ATANH:  { F t=(F(1)-a)*(F(1)+a); da_re=F(1)/t; da_eps=F(2)*a*at/(t*t); break; }
-            case OP_ABS:    da_re=_sign(a); break;
+            case OP_ATANH:  if (a >= -F(1) && a <= F(1)) { F t=(F(1)-a)*(F(1)+a); da_re=F(1)/t; da_eps=F(2)*a*at/(t*t); } else { da_re=domain_nan(); da_eps=domain_nan(); } break;
+            case OP_ABS:    da_re=_abs_deriv(a); break;
             case OP_SIGNUM: case OP_FLOOR: case OP_CEIL:
             case OP_ROUND:  case OP_TRUNC: break;
             case OP_FRACT:  da_re=F(1); break;
