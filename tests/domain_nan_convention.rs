@@ -162,7 +162,7 @@ fn bytecode_hvp_out_of_domain_is_nan() {
 #[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
 mod gpu {
     use echidna::gpu::{GpuBackend, GpuTapeData};
-    use echidna::{record, record_multi, BReverse, BytecodeTape};
+    use echidna::{hvp, record, record_multi, BReverse, BytecodeTape};
     use num_traits::Float;
 
     #[cfg(feature = "gpu-cuda")]
@@ -409,6 +409,54 @@ mod gpu {
         );
     }
 
+    // POWF with a live exponent at base a=0 (measure-zero corner). The
+    // second-order ∂²/∂a² at (a=0, b=2) is `b(b-1)·a^(b-2) = 2` (finite);
+    // the pre-fix GPU HVP form `b·a^(b-1)·(b-1)/a` evaluated `0·Inf = NaN`.
+    // H·(1,0) must equal CPU's — and the 0^0 primal/first-order corners must
+    // be finite too (the reverse gradient path).
+    fn check_powf_zero_hvp<B: GpuBackend>(ctx: &B) {
+        let f = |v: &[BReverse<f64>]| v[0].powf(v[1]);
+        let (tape, _) = record(f, &[2.0_f64, 2.0]);
+        let (_cpu_g, cpu_hv) = hvp(f, &[0.0_f64, 2.0], &[1.0, 0.0]);
+        let gpu = ctx.upload_tape(&GpuTapeData::from_tape_f64_lossy(&tape).unwrap());
+        let (g, hv) = ctx
+            .hvp_batch(&gpu, &[0.0_f32, 2.0], &[1.0_f32, 0.0], 1)
+            .unwrap();
+        assert!(
+            hv[0].is_finite() && (hv[0] as f64 - cpu_hv[0]).abs() < 1e-4,
+            "powf(0,2) H·(1,0)[a] must be {} = b(b-1)a^(b-2), got {}",
+            cpu_hv[0],
+            hv[0]
+        );
+        assert!(
+            hv[1].is_finite() && (hv[1] as f64 - cpu_hv[1]).abs() < 1e-4,
+            "powf(0,2) H·(1,0)[b] must be {}, got {}",
+            cpu_hv[1],
+            hv[1]
+        );
+        assert!(
+            g[0].is_finite() && g[1].is_finite(),
+            "powf(0,2) gradient must be finite, got {g:?}"
+        );
+
+        // b==0 corner: x^0 = 1 is constant in x, so the mixed ∂²/∂a∂b = 0
+        // (CPU `reverse_partials` returns da = 0 at b==0). Pre-fix the GPU
+        // left `da_eps` unguarded → `1/a`. Perturb the exponent, tangent
+        // (0,1), at (a=2, b=0): H·(0,1)[a] must be 0, not 0.5.
+        let (tape0, _) = record(f, &[2.0_f64, 0.0]);
+        let (_cg0, cpu_hv0) = hvp(f, &[2.0_f64, 0.0], &[0.0, 1.0]);
+        let gpu0 = ctx.upload_tape(&GpuTapeData::from_tape_f64_lossy(&tape0).unwrap());
+        let (_g0, hv0) = ctx
+            .hvp_batch(&gpu0, &[2.0_f32, 0.0], &[0.0_f32, 1.0], 1)
+            .unwrap();
+        assert!(
+            hv0[0].is_finite() && (hv0[0] as f64 - cpu_hv0[0]).abs() < 1e-4,
+            "powf(2,0) H·(0,1)[a] (=∂²/∂a∂b) must be {} not the pre-fix 1/a, got {}",
+            cpu_hv0[0],
+            hv0[0]
+        );
+    }
+
     macro_rules! backend_tests {
         ($check:ident, $wgpu_name:ident, $cuda_name:ident) => {
             #[cfg(feature = "gpu-wgpu")]
@@ -448,4 +496,5 @@ mod gpu {
         wgpu_domain_boundary,
         cuda_domain_boundary
     );
+    backend_tests!(check_powf_zero_hvp, wgpu_powf_zero_hvp, cuda_powf_zero_hvp);
 }

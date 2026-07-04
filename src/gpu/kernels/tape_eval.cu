@@ -246,7 +246,9 @@ extern "C" __global__ void reverse_sweep(
             case OP_REM: { F b = values[v_base+bi]; da = F(1); db = -trunc(a/b); break; }
             case OP_POWF: {
                 F b = values[v_base+bi];
-                da = b * pow(a, b-F(1));
+                // At b==0 the base-direction derivative is 0 (matches CPU); the
+                // raw form gives 0*a^(-1) = 0*Inf = NaN at a==0.
+                da = (b == F(0)) ? F(0) : b * pow(a, b-F(1));
                 // For a<=0, log(a) is NaN; finite r at a<0 means b was integer,
                 // convention is db=0 (matches CPU OpCode::Powf safety net).
                 db = (r == F(0) || a <= F(0)) ? F(0) : r * log(a); break;
@@ -409,7 +411,8 @@ extern "C" __global__ void tangent_forward(
                 r=pow(a,b);
                 // Guard: at a=0, b/a and log(a) are -inf/inf; split dx/dy.
                 // At a<=0, log(a) is NaN; set dy=0 (matches CPU convention).
-                F dx = (a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at;
+                // b==0: base-direction derivative is 0 (avoids 0*Inf at a==0).
+                F dx = (b == F(0)) ? F(0) : ((a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at);
                 F dy = (r == F(0) || a <= F(0)) ? F(0) : r*log(a)*bt;
                 rt = dx + dy; break;
             }
@@ -559,7 +562,8 @@ extern "C" __global__ void tangent_reverse(
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 r=pow(a,b);
-                F dx = (a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at;
+                // b==0: base-direction derivative is 0 (avoids 0*Inf at a==0).
+                F dx = (b == F(0)) ? F(0) : ((a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at);
                 F dy = (r == F(0) || a <= F(0)) ? F(0) : r*log(a)*bt;
                 rt = dx + dy; break;
             }
@@ -694,15 +698,26 @@ extern "C" __global__ void tangent_reverse(
             case OP_POWF: {
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 F ab1 = pow(a, b-F(1));
-                da_re = b * ab1;
-                // For a <= 0, only the exponent-direction sub-term log(a)*bt
-                // is NaN (log of a negative). Drop just that term — the
-                // second-order d²/da² contribution b*(b-1)*a^(b-2)*at is
-                // finite (a < 0 is reachable only at integer b, where C pow
-                // is defined) and must be kept; zeroing all of da_eps
-                // silently drops the Hessian.
-                if (a <= F(0)) { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at); }
-                else { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt); }
+                if (b == F(0)) {
+                    // a^0 = 1 is constant in a → every base-direction derivative
+                    // is 0, in both the value and eps parts (matches CPU
+                    // reverse_partials, which returns da = 0 at b==0).
+                    da_re = F(0); da_eps = F(0);
+                } else {
+                    da_re = b * ab1;
+                    // Second-order d²/da² = b(b-1)*a^(b-2). For a<=0 the closed
+                    // form b*a^(b-1)*(b-1)/a evaluates 0*Inf at a==0; use the
+                    // division-free equivalent (finite for b>=2, identical for
+                    // a<0 integer b). It is 0 for b==1 (linear in a) — short-
+                    // circuit so it doesn't hit 0*Inf. (a==0 with b==1 is doubly
+                    // degenerate; the mixed d²/dadb term carries log(0),
+                    // non-finite on CPU and GPU alike, so it is not asserted.)
+                    if (a <= F(0)) {
+                        F daa = (b == F(1)) ? F(0) : b*(b-F(1))*pow(a, b-F(2))*at;
+                        da_eps = bt*ab1 + daa;
+                    }
+                    else { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt); }
+                }
                 F rr = primals[base+i];
                 if (rr == F(0) || a <= F(0)) {
                     db_re = F(0); db_eps = F(0);

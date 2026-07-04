@@ -94,6 +94,9 @@ fn powf_real(base: f32, b: f32) -> f32 {
     // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
     // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
     // non-integer exponent at a negative base is NaN — the same as on CPU.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly.
+    if base == 0.0 && b == 0.0 { return 1.0; }
     if base >= 0.0 { return pow(base, b); }
     let rb = round(b);
     if rb != b { return bitcast<f32>(0x7fc00000u); }
@@ -231,8 +234,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
                 r = powf_real(a, b);
-                // Guard: at a=0, b/a and log(a) are undefined; split dx/dy
-                let dx = select(b * r / a * at, b * powf_real(a, b - 1.0) * at, a == 0.0);
+                // Guard: at a=0, b/a and log(a) are undefined; split dx/dy.
+                // At b=0 the base-direction derivative is 0 (matches CPU), which
+                // also avoids `0 * a^(-1) = 0*Inf = NaN` at a=0.
+                let dx = select(
+                    select(b * r / a * at, b * powf_real(a, b - 1.0) * at, a == 0.0),
+                    0.0,
+                    b == 0.0,
+                );
                 // db = a^b * ln(a). For a <= 0, ln(a) is NaN and `NaN * 0 = NaN`
                 // would poison rt even when bt = 0; the convention (matching the
                 // CPU `OpCode::Powf`) is db = 0 for a <= 0.

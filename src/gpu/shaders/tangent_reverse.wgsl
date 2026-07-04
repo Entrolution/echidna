@@ -100,6 +100,9 @@ fn powf_real(base: f32, b: f32) -> f32 {
     // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
     // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
     // non-integer exponent at a negative base is NaN — the same as on CPU.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly.
+    if base == 0.0 && b == 0.0 { return 1.0; }
     if base >= 0.0 { return pow(base, b); }
     let rb = round(b);
     if rb != b { return bitcast<f32>(0x7fc00000u); }
@@ -178,7 +181,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 4u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a*b; rt=b*at+a*bt; }
             case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-a*inv*inv*bt; }
             case 6u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=a-trunc(a/b)*b; rt=at-trunc(a/b)*bt; }
-            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0); rt=dx+dy; }
+            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0), 0.0, b==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0); rt=dx+dy; }
             case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let mx=max(abs(a),abs(b)); if mx==0.0 {rt=0.0;} else {let au=a/mx; let bu=b/mx; let d=mx*(au*au+bu*bu); rt=(bu*at-au*bt)/d;} }
             case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=sqrt(a*a+b*b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
             case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a>=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
@@ -284,16 +287,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 7u /* POWF */: {
                 let b=primals[base+bi]; let bt=tans[base+bi];
                 let ab1 = powf_real(a, b-1.0);
-                da_re = b * ab1;
-                // For a <= 0, only the exponent-direction sub-term `log(a)*bt`
-                // is NaN (log of a negative). Drop just that term — the
-                // second-order ∂²/∂a² contribution `b*(b-1)*a^(b-2)*at` is
-                // finite (a < 0 is reachable only at integer b) and must be
-                // kept; hard-zeroing all of da_eps silently drops the Hessian.
-                if a <= 0.0 {
-                    da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at);
+                if b == 0.0 {
+                    // a^0 = 1 is constant in a → every base-direction derivative
+                    // is 0, in BOTH the value and eps parts. Matches CPU
+                    // `reverse_partials`, which returns da = 0 at b==0.
+                    da_re = 0.0;
+                    da_eps = 0.0;
                 } else {
-                    da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at + log(a)*bt);
+                    da_re = b * ab1;
+                    // Second-order ∂²/∂a² = b(b-1)*a^(b-2). For a <= 0 the closed
+                    // form `b*a^(b-1)*(b-1)/a` evaluates 0*Inf at a=0; use the
+                    // division-free equivalent, finite for b >= 2 (and
+                    // algebraically identical for a < 0 integer b). It is 0 for
+                    // b == 1 (linear in a) — short-circuit so it doesn't hit
+                    // 0*Inf. (a=0 ∧ b==1 is doubly degenerate: the mixed
+                    // ∂²/∂a∂b term carries ln(0), non-finite on CPU and GPU
+                    // alike, so it is not asserted.) The a>0 branch is unchanged.
+                    if a <= 0.0 {
+                        let daa = select(b*(b-1.0)*powf_real(a, b-2.0)*at, 0.0, b == 1.0);
+                        da_eps = bt*ab1 + daa;
+                    } else {
+                        da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at + log(a)*bt);
+                    }
                 }
                 let rr = primals[base+i]; // r = a^b from forward pass
                 if rr == 0.0 || a <= 0.0 {

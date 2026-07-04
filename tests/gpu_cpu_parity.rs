@@ -164,6 +164,12 @@ fn build_powf_int() -> (BytecodeTape<f64>, f64) {
         &[2.0],
     )
 }
+fn build_powf_var() -> (BytecodeTape<f64>, f64) {
+    // `powf` with a LIVE (differentiated) exponent — records `Powf(v0, v1)`
+    // with both operands as tape inputs, so the base AND exponent directions
+    // are exercised. Used for the a=0 corner cases (0^0, 0^b).
+    record(|v: &[BReverse<f64>]| v[0].powf(v[1]), &[2.0, 2.0])
+}
 fn build_hypot() -> (BytecodeTape<f64>, f64) {
     record(|v: &[BReverse<f64>]| v[0].hypot(v[1]), &[3.0, 4.0])
 }
@@ -520,6 +526,16 @@ const PARITY_CASES: &[ParityCase] = &[
         // 0^3 = 0. Value and gradient must be finite and match CPU.
         build: build_powf_int,
         points: &[&[2.0], &[-2.0], &[-3.0], &[0.0]],
+        f32_ulp: 16,
+        f64_ulp: 16,
+    },
+    ParityCase {
+        name: "powf_var",
+        n_inputs: 2,
+        build: build_powf_var,
+        // Live exponent. The a=0 corners: 0^0 (value 1, both partials 0 per
+        // CPU convention), 0^2 (value 0, HVP finite), 0^3. CPU never NaN here.
+        points: &[&[2.0, 3.0], &[0.0, 0.0], &[0.0, 2.0], &[0.0, 3.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
