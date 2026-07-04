@@ -555,7 +555,22 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "max",
         n_inputs: 2,
         build: build_max,
-        points: &[&[1.0, 2.0], &[-1.0, -2.0], &[3.0, 3.0]],
+        // NaN operand, both orders: CPU `f64::max`/`min` return the non-NaN
+        // operand (value 1.0; the gradient flows entirely to the non-NaN
+        // input). The convention is asymmetric, hence both orders. CUDA
+        // `fmax`/`fmin` are IEEE non-NaN by construction; `forward.wgsl`'s raw
+        // `max`/`min` builtin resolves the same way on both tested backends
+        // (Metal + CUDA). This point is the tripwire if any backend's builtin
+        // ever diverges from that convention (the Taylor codegen path guards
+        // it explicitly via `is_nan_f32`; the reverse-family shaders rely on
+        // the builtin).
+        points: &[
+            &[1.0, 2.0],
+            &[-1.0, -2.0],
+            &[3.0, 3.0],
+            &[f64::NAN, 1.0],
+            &[1.0, f64::NAN],
+        ],
         f32_ulp: 0,
         f64_ulp: 0,
     },
@@ -563,7 +578,14 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "min",
         n_inputs: 2,
         build: build_min,
-        points: &[&[1.0, 2.0], &[-1.0, -2.0], &[3.0, 3.0]],
+        // See `max` above: NaN operand, both orders, non-NaN operand wins.
+        points: &[
+            &[1.0, 2.0],
+            &[-1.0, -2.0],
+            &[3.0, 3.0],
+            &[f64::NAN, 1.0],
+            &[1.0, f64::NAN],
+        ],
         f32_ulp: 0,
         f64_ulp: 0,
     },
