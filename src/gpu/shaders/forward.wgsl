@@ -164,6 +164,12 @@ fn signum_f32(x: f32) -> f32 {
     return 1.0;
 }
 
+fn is_nan_f32(x: f32) -> bool {
+    // NaN iff exponent is all-ones and mantissa is non-zero. Inspect the bits
+    // directly — `x != x` can be folded away by Metal's fast-math.
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}
+
 fn powf_real(base: f32, b: f32) -> f32 {
     // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
     // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
@@ -240,8 +246,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 7u /* POWF */: { r = powf_real(a, b); }
             case 8u /* ATAN2 */: { r = atan2(a, b); }
             case 9u /* HYPOT */: { r = hypot_f32(a, b); }
-            case 10u /* MAX */: { r = max(a, b); }
-            case 11u /* MIN */: { r = min(a, b); }
+            // Hand-roll the NaN tie-break to return the non-NaN operand,
+            // matching CPU `f32::max`/`min` and the tangent/Taylor kernels.
+            // The raw `max`/`min` builtin's NaN behaviour is backend-defined.
+            case 10u /* MAX */: { if (a >= b || is_nan_f32(b)) { r = a; } else { r = b; } }
+            case 11u /* MIN */: { if (a <= b || is_nan_f32(b)) { r = a; } else { r = b; } }
             case 12u /* NEG */: { r = -a; }
             case 13u /* RECIP */: { r = recip_f32(a); }
             case 14u /* SQRT */: { r = sqrt(a); }

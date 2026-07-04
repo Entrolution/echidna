@@ -557,13 +557,11 @@ const PARITY_CASES: &[ParityCase] = &[
         build: build_max,
         // NaN operand, both orders: CPU `f64::max`/`min` return the non-NaN
         // operand (value 1.0; the gradient flows entirely to the non-NaN
-        // input). The convention is asymmetric, hence both orders. CUDA
-        // `fmax`/`fmin` are IEEE non-NaN by construction; `forward.wgsl`'s raw
-        // `max`/`min` builtin resolves the same way on both tested backends
-        // (Metal + CUDA). This point is the tripwire if any backend's builtin
-        // ever diverges from that convention (the Taylor codegen path guards
-        // it explicitly via `is_nan_f32`; the reverse-family shaders rely on
-        // the builtin).
+        // input). The convention is asymmetric, hence both orders. All GPU
+        // max/min sites hand-roll this non-NaN-wins tie-break (forward.wgsl,
+        // the tangent kernels, and the Taylor codegen, all via an `is_nan_f32`
+        // bit test), and CUDA `fmax`/`fmin` are IEEE non-NaN by construction.
+        // This point is the regression tripwire if any path ever diverges.
         points: &[
             &[1.0, 2.0],
             &[-1.0, -2.0],
