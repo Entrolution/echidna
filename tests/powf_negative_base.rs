@@ -106,6 +106,24 @@ fn taylor_powf_negative_base() {
     assert!((y.coeffs[3] - 1.0).abs() < 1e-12);
 }
 
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_powf_negative_base_live_exponent_is_all_nan() {
+    use echidna::Taylor;
+    // Negative base with a LIVE (differentiated) exponent: `a(t)^b(t)` for a
+    // varying — hence non-integer for t != 0 — exponent is complex, so the
+    // whole jet is undefined. The result is an all-NaN jet, not a finite
+    // primal `(-2)^3 = -8` beside NaN derivative coefficients.
+    let x: Taylor<f64, 4> = Taylor::new([-2.0, 1.0, 0.0, 0.0]);
+    let n: Taylor<f64, 4> = Taylor::new([3.0, 1.0, 0.0, 0.0]);
+    let y = x.powf(n);
+    assert!(
+        y.coeffs.iter().all(|c| c.is_nan()),
+        "negative base + live exponent must give an all-NaN jet, got {:?}",
+        y.coeffs
+    );
+}
+
 // ── Laurent ─────────────────────────────────────────────────────────
 
 #[cfg(feature = "laurent")]

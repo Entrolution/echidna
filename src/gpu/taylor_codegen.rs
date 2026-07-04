@@ -168,8 +168,8 @@ fn write_wgsl_helpers(s: &mut String) {
         s,
         "fn sinh_f(x: f32) -> f32 {{ return (exp(x) - exp(-x)) * 0.5; }}
 fn cosh_f(x: f32) -> f32 {{ return (exp(x) + exp(-x)) * 0.5; }}
-fn asinh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x + 1.0)); }}
-fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
+fn asinh_f(x: f32) -> f32 {{ let a = abs(x); if a > 1e9 {{ let r = log(a) + log(1.0 + sqrt(1.0 + 1.0 / (a * a))); return select(-r, r, x >= 0.0); }} let r = log(a + sqrt(a * a + 1.0)); return select(-r, r, x >= 0.0); }}
+fn acosh_f(x: f32) -> f32 {{ if x > 1e9 {{ return log(x) + log(1.0 + sqrt(1.0 - 1.0 / (x * x))); }} return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
 fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
 fn powf_real(base: f32, b: f32) -> f32 {{
     // WGSL `pow(x, y)` is undefined for x < 0. Rust/C `powf` define x^y for
@@ -382,23 +382,27 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
     // jet_ln, so this one guard covers them too.
     write_wgsl_jet_nan_guard(s, k, "a.v[0] < 0.0");
     writeln!(s, "    var c: JetK;").unwrap();
-    writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
-    for i in 1..k {
-        if i == 1 {
-            writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
-        } else {
-            let inv_i = 1.0 / i as f64;
-            let mut terms = Vec::new();
-            for j in 1..i {
-                terms.push(format!("{:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+    // `inv_a0` and the recurrence only exist for K > 1; emitting the `let` at
+    // K=1 (where the loop below is empty) leaves an unused binding in the shader.
+    if k > 1 {
+        writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
+        for i in 1..k {
+            if i == 1 {
+                writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
+            } else {
+                let inv_i = 1.0 / i as f64;
+                let mut terms = Vec::new();
+                for j in 1..i {
+                    terms.push(format!("{:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+                }
+                writeln!(
+                    s,
+                    "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
+                    terms.join(" + ")
+                )
+                .unwrap();
             }
-            writeln!(
-                s,
-                "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
-                terms.join(" + ")
-            )
-            .unwrap();
         }
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
@@ -873,6 +877,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                let b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "                if b_is_int {{").unwrap();
     write_wgsl_powi_jet(s, k, "b.v[0]", "i32(b.v[0])");
+    // Negative base with a non-constant-integer exponent: `a(t)^b(t)` is
+    // complex for a varying exponent → all-NaN jet (matches CPU `taylor_powf`).
+    // naga's `pow(neg, .)` is already NaN, but making it explicit keeps this in
+    // lockstep with the CUDA emit, where C `pow(-2,3) = -8` would otherwise
+    // leave a finite primal beside NaN derivative coefficients (a mixed jet).
+    writeln!(s, "                }} else if a.v[0] < 0.0 {{").unwrap();
+    for i in 0..k {
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+        )
+        .unwrap();
+    }
     writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
@@ -1540,23 +1557,27 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
     // Domain guard (mirrors CPU taylor_ln; covers log2/log10/ln1p by delegation).
     write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)0");
     writeln!(s, "    JetK c;").unwrap();
-    writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
-    for i in 1..k {
-        if i == 1 {
-            writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
-        } else {
-            let inv_i = 1.0 / i as f64;
-            let mut terms = Vec::new();
-            for j in 1..i {
-                terms.push(format!("(F){:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+    // `inv_a0` and the recurrence only exist for K > 1; emitting the
+    // declaration at K=1 (empty loop) leaves an unused variable in the kernel.
+    if k > 1 {
+        writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
+        for i in 1..k {
+            if i == 1 {
+                writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
+            } else {
+                let inv_i = 1.0 / i as f64;
+                let mut terms = Vec::new();
+                for j in 1..i {
+                    terms.push(format!("(F){:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+                }
+                writeln!(
+                    s,
+                    "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
+                    terms.join(" + ")
+                )
+                .unwrap();
             }
-            writeln!(
-                s,
-                "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
-                terms.join(" + ")
-            )
-            .unwrap();
         }
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
@@ -1981,6 +2002,14 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            bool b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "            if (b_is_int) {{").unwrap();
     write_cuda_powi_jet(s, k, "b.v[0]", "(int)b.v[0]");
+    // Negative base with a non-constant-integer exponent → all-NaN jet (matches
+    // CPU `taylor_powf` and the WGSL twin). C `pow(-2,3) = -8` is finite, so
+    // force NaN here — otherwise the primal would be finite beside NaN
+    // derivative coefficients (a mixed jet), diverging from CPU.
+    writeln!(s, "            }} else if (a.v[0] < F(0)) {{").unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
+    }
     writeln!(s, "            }} else if (a.v[0] <= F(0)) {{").unwrap();
     writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
@@ -2545,6 +2574,46 @@ mod tests {
         assert!(
             cuda.contains("if (a.v[0] < (F)-1 || a.v[0] > (F)1) {"),
             "CUDA jet_atanh domain guard"
+        );
+    }
+
+    #[test]
+    fn m_powf_neg_base_all_nan_in_both_backends() {
+        // taylor_powf convention (Option A): a negative base with a
+        // non-constant-integer exponent gives an all-NaN jet on both backends.
+        // CUDA's C `pow(-2,3) = -8` is forced to NaN to match CPU + WGSL,
+        // avoiding a mixed (finite primal / NaN derivative) jet.
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(
+            wgsl.contains("} else if a.v[0] < 0.0 {"),
+            "WGSL powf neg-base all-NaN branch"
+        );
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("} else if (a.v[0] < F(0)) {"),
+            "CUDA powf neg-base all-NaN branch"
+        );
+    }
+
+    #[test]
+    fn jet_ln_omits_inv_a0_at_k1() {
+        // At K=1 the ln recurrence loop is empty, so `inv_a0` must not be
+        // emitted — an unused binding is a shader-compile warning.
+        assert!(
+            !generate_taylor_wgsl(1).contains("inv_a0"),
+            "K=1 WGSL jet_ln must not emit inv_a0"
+        );
+        assert!(
+            generate_taylor_wgsl(3).contains("inv_a0"),
+            "K=3 WGSL jet_ln must emit inv_a0"
+        );
+        assert!(
+            !generate_taylor_cuda(1).contains("inv_a0"),
+            "K=1 CUDA jet_ln must not emit inv_a0"
+        );
+        assert!(
+            generate_taylor_cuda(3).contains("inv_a0"),
+            "K=3 CUDA jet_ln must emit inv_a0"
         );
     }
 

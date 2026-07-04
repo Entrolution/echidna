@@ -167,7 +167,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 7u /* POWF */: {
                 let b = values[v_base + b_idx];
-                da = b * powf_real(a, b - 1.0);
+                // At b == 0 the base-direction derivative is 0 (matches CPU
+                // `OpCode::Powf`); the raw form gives `0 * a^(-1) = 0*Inf = NaN`
+                // at a == 0. `select` discards the NaN false-branch.
+                da = select(b * powf_real(a, b - 1.0), 0.0, b == 0.0);
                 // For a <= 0, `log(a)` is NaN. A finite `r` at a < 0 means b
                 // was integer; the classical derivative w.r.t. b at integer b
                 // is undefined, and the convention here is 0 — matches the
@@ -315,6 +318,9 @@ fn powf_real(base: f32, b: f32) -> f32 {
     // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
     // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
     // non-integer exponent at a negative base is NaN — the same as on CPU.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly.
+    if base == 0.0 && b == 0.0 { return 1.0; }
     if base >= 0.0 { return pow(base, b); }
     let rb = round(b);
     if rb != b { return bitcast<f32>(0x7fc00000u); }

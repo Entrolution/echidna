@@ -164,6 +164,12 @@ fn build_powf_int() -> (BytecodeTape<f64>, f64) {
         &[2.0],
     )
 }
+fn build_powf_var() -> (BytecodeTape<f64>, f64) {
+    // `powf` with a LIVE (differentiated) exponent — records `Powf(v0, v1)`
+    // with both operands as tape inputs, so the base AND exponent directions
+    // are exercised. Used for the a=0 corner cases (0^0, 0^b).
+    record(|v: &[BReverse<f64>]| v[0].powf(v[1]), &[2.0, 2.0])
+}
 fn build_hypot() -> (BytecodeTape<f64>, f64) {
     record(|v: &[BReverse<f64>]| v[0].hypot(v[1]), &[3.0, 4.0])
 }
@@ -414,7 +420,9 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "asinh",
         n_inputs: 1,
         build: build_asinh,
-        points: &[&[0.0], &[1.0], &[-3.0], &[1e6]],
+        // 1e20 (and -1e20): x²+1 overflows f32 (|x| > ~1.8e19), so the naive
+        // primal log(|x|+sqrt(x²+1)) is +Inf where asinh is finite (~46.7).
+        points: &[&[0.0], &[1.0], &[-3.0], &[1e6], &[1e20], &[-1e20]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -434,7 +442,9 @@ const PARITY_CASES: &[ParityCase] = &[
         // derivative is 1/sqrt((1-1)(1+1)) = +Inf — a special value both
         // backends produce identically (distinct from the excluded finite
         // near-1 probes, which suffer f32 input quantization).
-        points: &[&[1.5], &[2.0], &[10.0], &[1.0]],
+        // 1e20: (x-1)(x+1) overflows f32, so the naive primal is +Inf where
+        // acosh is finite (~46.7).
+        points: &[&[1.5], &[2.0], &[10.0], &[1.0], &[1e20]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -520,6 +530,16 @@ const PARITY_CASES: &[ParityCase] = &[
         // 0^3 = 0. Value and gradient must be finite and match CPU.
         build: build_powf_int,
         points: &[&[2.0], &[-2.0], &[-3.0], &[0.0]],
+        f32_ulp: 16,
+        f64_ulp: 16,
+    },
+    ParityCase {
+        name: "powf_var",
+        n_inputs: 2,
+        build: build_powf_var,
+        // Live exponent. The a=0 corners: 0^0 (value 1, both partials 0 per
+        // CPU convention), 0^2 (value 0, HVP finite), 0^3. CPU never NaN here.
+        points: &[&[2.0, 3.0], &[0.0, 0.0], &[0.0, 2.0], &[0.0, 3.0]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
