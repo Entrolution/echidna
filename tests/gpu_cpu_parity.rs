@@ -420,7 +420,9 @@ const PARITY_CASES: &[ParityCase] = &[
         name: "asinh",
         n_inputs: 1,
         build: build_asinh,
-        points: &[&[0.0], &[1.0], &[-3.0], &[1e6]],
+        // 1e20 (and -1e20): x²+1 overflows f32 (|x| > ~1.8e19), so the naive
+        // primal log(|x|+sqrt(x²+1)) is +Inf where asinh is finite (~46.7).
+        points: &[&[0.0], &[1.0], &[-3.0], &[1e6], &[1e20], &[-1e20]],
         f32_ulp: 16,
         f64_ulp: 16,
     },
@@ -440,7 +442,9 @@ const PARITY_CASES: &[ParityCase] = &[
         // derivative is 1/sqrt((1-1)(1+1)) = +Inf — a special value both
         // backends produce identically (distinct from the excluded finite
         // near-1 probes, which suffer f32 input quantization).
-        points: &[&[1.5], &[2.0], &[10.0], &[1.0]],
+        // 1e20: (x-1)(x+1) overflows f32, so the naive primal is +Inf where
+        // acosh is finite (~46.7).
+        points: &[&[1.5], &[2.0], &[10.0], &[1.0], &[1e20]],
         f32_ulp: 16,
         f64_ulp: 16,
     },

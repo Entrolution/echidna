@@ -211,8 +211,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 30u: { r=sinh_f(a); rt=cosh_f(a)*at; }
             case 31u: { r=cosh_f(a); rt=sinh_f(a)*at; }
             case 32u: { r=tanh(a); let c=cosh_f(a); rt=at/(c*c); }
-            case 33u: { let ax=abs(a); r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); if ax>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {rt=at/sqrt(a*a+1.0);} }
-            case 34u: { if a < 1.0 { let n=bitcast<f32>(0x7fc00000u); r=n; rt=n; } else { r=log(a+sqrt((a-1.0)*(a+1.0))); if abs(a)>1e8 {let inv=1.0/a; rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {rt=at/sqrt((a-1.0)*(a+1.0));} } }
+            case 33u: { let ax=abs(a); if ax>1e8 {let inv=1.0/a; let rr=log(ax)+log(1.0+sqrt(1.0+inv*inv)); r=select(-rr,rr,a>=0.0); rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt=at/sqrt(a*a+1.0);} }
+            case 34u: { if a < 1.0 { let n=bitcast<f32>(0x7fc00000u); r=n; rt=n; } else if abs(a)>1e8 {let inv=1.0/a; r=log(a)+log(1.0+sqrt(1.0-inv*inv)); rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {r=log(a+sqrt((a-1.0)*(a+1.0))); rt=at/sqrt((a-1.0)*(a+1.0));} }
             case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(0x7fc00000u), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
             case 36u: { r=abs(a); rt=abs_deriv_f32(a)*at; }
             case 37u: { r = signum_f32(a); rt=0.0; }

@@ -110,6 +110,15 @@ fn asinh_f32(x: f32) -> f32 {
     // Use |x| to avoid catastrophic cancellation for large negative x:
     // log(x + sqrt(x²+1)) ≈ log(0) when x << 0, but log(|x| + sqrt(x²+1)) is stable.
     let a = abs(x);
+    // Large |x|: x² overflows f32 (|x| > ~1.8e19) → sqrt(Inf)=Inf → log(Inf)=Inf,
+    // whereas the true value is finite. Use the asymptotic form that never
+    // forms x²: asinh(x) = sign(x)·(log|x| + log(1 + sqrt(1 + 1/x²))). 1/x² → 0
+    // as x² overflows, so the result stays finite. (Accurate only for large a;
+    // small a keeps the direct form to avoid log|x| cancellation.)
+    if a > 1e9 {
+        let r = log(a) + log(1.0 + sqrt(1.0 + 1.0 / (a * a)));
+        return select(-r, r, x >= 0.0);
+    }
     let r = log(a + sqrt(a * a + 1.0));
     return select(-r, r, x >= 0.0);
 }
@@ -118,6 +127,10 @@ fn acosh_f32(x: f32) -> f32 {
     // acosh(x) = ln(x + sqrt(x² - 1)). Use factored (x-1)(x+1) under the
     // sqrt to retain precision near x=1 (`x*x - 1` rounds away the ε²
     // term in f32 for x = 1+ε). Matches kernels::acosh_deriv convention.
+    // Large x: (x-1)(x+1) overflows f32; use acosh(x) = log(x)+log(1+sqrt(1-1/x²)).
+    if x > 1e9 {
+        return log(x) + log(1.0 + sqrt(1.0 - 1.0 / (x * x)));
+    }
     return log(x + sqrt((x - 1.0) * (x + 1.0)));
 }
 

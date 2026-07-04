@@ -168,8 +168,8 @@ fn write_wgsl_helpers(s: &mut String) {
         s,
         "fn sinh_f(x: f32) -> f32 {{ return (exp(x) - exp(-x)) * 0.5; }}
 fn cosh_f(x: f32) -> f32 {{ return (exp(x) + exp(-x)) * 0.5; }}
-fn asinh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x + 1.0)); }}
-fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
+fn asinh_f(x: f32) -> f32 {{ let a = abs(x); if a > 1e9 {{ let r = log(a) + log(1.0 + sqrt(1.0 + 1.0 / (a * a))); return select(-r, r, x >= 0.0); }} let r = log(a + sqrt(a * a + 1.0)); return select(-r, r, x >= 0.0); }}
+fn acosh_f(x: f32) -> f32 {{ if x > 1e9 {{ return log(x) + log(1.0 + sqrt(1.0 - 1.0 / (x * x))); }} return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
 fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
 fn powf_real(base: f32, b: f32) -> f32 {{
     // WGSL `pow(x, y)` is undefined for x < 0. Rust/C `powf` define x^y for
