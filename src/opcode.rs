@@ -255,8 +255,21 @@ pub fn eval_forward<T: Float>(op: OpCode, a: T, b: T) -> T {
         OpCode::Sqrt => a.sqrt(),
         OpCode::Cbrt => a.cbrt(),
         OpCode::Powi => {
-            let exp = powi_exp_decode_raw(b.to_u32().unwrap_or(0));
-            a.powi(exp)
+            // `b` carries the exponent's u32 encoding as a float (see
+            // `powi_exp_encode`). `to_u32()` recovers it exactly for f64, but
+            // for f32 a negative exponent's encoding exceeds 2^24 and cannot
+            // round-trip. Tape sweeps decode from the raw u32 arg via
+            // `powi_exp_decode_raw` and never reach here for Powi; this generic
+            // path is used by direct callers, where the assert flags an f32
+            // misuse loudly instead of silently computing x^0.
+            let raw = b.to_u32();
+            debug_assert!(
+                raw.is_some(),
+                "Powi exponent did not round-trip to u32 (f32 tape with a \
+                 negative exponent?) — decode from the raw u32 arg via \
+                 powi_exp_decode_raw"
+            );
+            a.powi(powi_exp_decode_raw(raw.unwrap_or(0)))
         }
 
         // Exp/Log
@@ -396,7 +409,17 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
             (one / (three * r * r), zero)
         }
         OpCode::Powi => {
-            let exp = powi_exp_decode_raw(b.to_u32().unwrap_or(0));
+            // See the `Powi` arm in `eval_forward`: `b` is the exponent's u32
+            // encoding as a float; the raw-u32 decode is exact for f64 but
+            // lossy for f32 negative exponents, which the tape sweeps avoid.
+            let raw = b.to_u32();
+            debug_assert!(
+                raw.is_some(),
+                "Powi exponent did not round-trip to u32 (f32 tape with a \
+                 negative exponent?) — decode from the raw u32 arg via \
+                 powi_exp_decode_raw"
+            );
+            let exp = powi_exp_decode_raw(raw.unwrap_or(0));
             if exp == 0 {
                 (zero, zero) // d/dx(x^0) = 0
             } else if exp == i32::MIN {
