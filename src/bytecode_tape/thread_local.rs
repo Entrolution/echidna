@@ -126,8 +126,14 @@ pub fn with_active_btape<F: BtapeThreadLocal, R>(f: impl FnOnce(&mut BytecodeTap
 /// } // tape dropped, but guard would survive — rejected by the borrow checker.
 /// drop(guard);
 /// ```
+/// Guards must be dropped in LIFO order (last activated, first deactivated).
+/// `record()` and the borrow checker enforce this for nested recording scopes;
+/// direct `BtapeGuard` users must uphold it too — dropping out of order would
+/// restore a stale pointer into the thread-local cell. A debug assertion in
+/// `Drop` catches violations.
 pub struct BtapeGuard<'a, F: BtapeThreadLocal> {
     prev: *mut BytecodeTape<F>,
+    current: *mut BytecodeTape<F>,
     _borrow: PhantomData<&'a mut BytecodeTape<F>>,
 }
 
@@ -135,13 +141,15 @@ impl<'a, F: BtapeThreadLocal> BtapeGuard<'a, F> {
     /// Activate `tape` as the thread-local bytecode tape.
     #[must_use = "dropping the guard immediately deactivates the tape; bind it to extend the recording scope"]
     pub fn new(tape: &'a mut BytecodeTape<F>) -> Self {
+        let current: *mut BytecodeTape<F> = tape;
         let prev = F::btape_cell().with(|cell| {
             let prev = cell.get();
-            cell.set(tape as *mut BytecodeTape<F>);
+            cell.set(current);
             prev
         });
         BtapeGuard {
             prev,
+            current,
             _borrow: PhantomData,
         }
     }
@@ -150,6 +158,13 @@ impl<'a, F: BtapeThreadLocal> BtapeGuard<'a, F> {
 impl<'a, F: BtapeThreadLocal> Drop for BtapeGuard<'a, F> {
     fn drop(&mut self) {
         F::btape_cell().with(|cell| {
+            // LIFO contract: this guard must be the active tape when it drops.
+            // Out-of-order drops (only reachable via direct `BtapeGuard` misuse)
+            // would install a stale pointer.
+            debug_assert!(
+                cell.get() == self.current,
+                "BtapeGuard dropped out of LIFO order — the active tape is not this guard's"
+            );
             cell.set(self.prev);
         });
     }

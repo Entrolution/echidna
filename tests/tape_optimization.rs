@@ -898,3 +898,12 @@ fn all_optimizations_combined() {
         assert_relative_eq!(g[0], fd, max_relative = 1e-5);
     }
 }
+
+// G2: an out-of-range index in `active_outputs` must fail with a clear message,
+// not an opaque out-of-bounds panic from the internal remap.
+#[test]
+#[should_panic(expected = "active_outputs contains an index out of range")]
+fn dce_for_outputs_rejects_out_of_range_index() {
+    let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0] * x[0], &[3.0_f64]);
+    tape.dead_code_elimination_for_outputs(&[9999]);
+}
