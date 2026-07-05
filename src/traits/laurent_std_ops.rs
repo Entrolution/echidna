@@ -39,14 +39,19 @@ impl<F: Float, const K: usize> Add for Laurent<F, K> {
         let p2 = rhs.pole_order();
         let p_out = p1.min(p2);
         // Align both to p_out by shifting
-        let shift1 = (p1 - p_out) as usize;
-        let shift2 = (p2 - p_out) as usize;
+        // Widen to i64 so the shift can't overflow i32 for extreme pole orders
+        // (p1 large positive, p2 large negative) — a wrapped shift could pass
+        // the gap check below and silently truncate coefficients.
+        let gap1 = i64::from(p1) - i64::from(p_out);
+        let gap2 = i64::from(p2) - i64::from(p_out);
         assert!(
-            shift1 < K && shift2 < K,
+            gap1 < K as i64 && gap2 < K as i64,
             "Laurent Add: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
-            shift1.max(shift2),
+            gap1.max(gap2),
             K - 1,
         );
+        let shift1 = gap1 as usize;
+        let shift2 = gap2 as usize;
 
         let a: [F; K] = std::array::from_fn(|i| {
             if i >= shift1 && i - shift1 < K {
@@ -83,14 +88,17 @@ impl<F: Float, const K: usize> Sub for Laurent<F, K> {
         let p1 = self.pole_order();
         let p2 = rhs.pole_order();
         let p_out = p1.min(p2);
-        let shift1 = (p1 - p_out) as usize;
-        let shift2 = (p2 - p_out) as usize;
+        // Widen to i64 so the shift can't overflow i32 (see the `Add` impl).
+        let gap1 = i64::from(p1) - i64::from(p_out);
+        let gap2 = i64::from(p2) - i64::from(p_out);
         assert!(
-            shift1 < K && shift2 < K,
+            gap1 < K as i64 && gap2 < K as i64,
             "Laurent Sub: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
-            shift1.max(shift2),
+            gap1.max(gap2),
             K - 1,
         );
+        let shift1 = gap1 as usize;
+        let shift2 = gap2 as usize;
 
         let a: [F; K] = std::array::from_fn(|i| {
             if i >= shift1 && i - shift1 < K {

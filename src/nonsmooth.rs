@@ -43,6 +43,8 @@ pub struct KinkEntry<F: Float> {
     /// - `Max`: `+1` if `a >= b` (first wins), `-1` if `b > a`
     /// - `Min`: `+1` if `a <= b` (first wins), `-1` if `b < a`
     /// - `Floor`, `Ceil`, `Round`, `Trunc`: `+1` if `fract(x) < 0.5`, `-1` otherwise
+    /// - `Fract`: `+1` if `fract(x) >= 0`, `-1` otherwise — nominal, since
+    ///   `fract'` is side-independent (a value jump, not a derivative kink)
     pub branch: i8,
 }
 

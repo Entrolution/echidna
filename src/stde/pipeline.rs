@@ -79,12 +79,14 @@ pub fn estimate_weighted<F: Float>(
     for (k, v) in directions.iter().enumerate() {
         let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
-        let s = estimator.sample(c0, c1, c2);
-        assert!(s.is_finite(), "weighted estimator sample must be finite");
+        // Skip zero-weight directions before the finiteness check: a direction
+        // that contributes nothing shouldn't be able to panic the estimate.
         let w = weights[k];
         if w == F::zero() {
             continue;
         }
+        let s = estimator.sample(c0, c1, c2);
+        assert!(s.is_finite(), "weighted estimator sample must be finite");
 
         w_sum = w_sum + w;
         w_sum2 = w_sum2 + w * w;

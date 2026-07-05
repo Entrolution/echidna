@@ -153,7 +153,11 @@ impl<F: Float> super::BytecodeTape<F> {
                     });
                 }
                 OpCode::Fract => {
-                    // Kink at integer values, same as Floor/Ceil/Trunc.
+                    // Value jump at integers. Unlike Floor/Ceil/Trunc (which
+                    // record which half of the unit interval x falls in), the
+                    // branch here is the sign of the fractional part. It is
+                    // nominal: fract' = 1 on both sides, so this marks a value
+                    // discontinuity, not a derivative kink.
                     kinks.push(crate::nonsmooth::KinkEntry {
                         tape_index: i as u32,
                         opcode: op,

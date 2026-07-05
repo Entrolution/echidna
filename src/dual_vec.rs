@@ -163,13 +163,16 @@ impl<F: Float, const N: usize> DualVec<F, N> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx_factor = if self.re == F::zero() || val == F::zero() {
-            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
-            // underflow when x^n underflows to 0 but x != 0
-            n.re * self.re.powf(n.re - F::one())
-        } else {
-            n.re * val / self.re
-        };
+        let dx_factor =
+            if self.re == F::zero() || val == F::zero() || !self.re.is_finite() || !val.is_finite()
+            {
+                // Use n*x^(n-1) form to avoid 0/0 when x=0, to handle underflow
+                // when x^n underflows to 0 but x != 0, and to avoid Inf/Inf = NaN
+                // at an infinite base (matches `Reverse`/`opcode`).
+                n.re * self.re.powf(n.re - F::one())
+            } else {
+                n.re * val / self.re
+            };
         let dy_factor = if val == F::zero() || self.re <= F::zero() {
             // Negative/zero base: `ln(x)` is undefined for x <= 0, so the
             // exponent direction is treated as locally constant (matches

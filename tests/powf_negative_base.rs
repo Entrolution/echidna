@@ -237,3 +237,32 @@ fn dual_powf_positive_base_live_exponent_exact() {
         y.eps
     );
 }
+
+// ── Infinite base (X1) ──────────────────────────────────────────────
+
+// At an infinite base the base-direction derivative of x^n is Inf, not NaN.
+// The old `n·val/self.re = n·Inf/Inf = NaN` form is now guarded, matching the
+// `Reverse`/`opcode` convention.
+#[test]
+fn dual_powf_infinite_base_derivative_is_not_nan() {
+    use echidna::Dual;
+    let x = Dual::new(f64::INFINITY, 1.0);
+    let y = x.powf(Dual::constant(2.0));
+    assert!(
+        y.eps.is_infinite() && y.eps > 0.0,
+        "d/dx (Inf^2) must be +Inf, not NaN, got {}",
+        y.eps
+    );
+}
+
+#[test]
+fn dual_vec_powf_infinite_base_derivative_is_not_nan() {
+    use echidna::DualVec;
+    let x = DualVec::<f64, 1>::new(f64::INFINITY, [1.0]);
+    let y = x.powf(DualVec::constant(2.0));
+    assert!(
+        y.eps[0].is_infinite() && y.eps[0] > 0.0,
+        "d/dx (Inf^2) must be +Inf, not NaN, got {}",
+        y.eps[0]
+    );
+}
