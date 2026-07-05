@@ -145,13 +145,17 @@ impl<F: Float> Dual<F> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx = if self.re == F::zero() || val == F::zero() {
-            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
-            // underflow when x^n underflows to 0 but x != 0
-            n.re * self.re.powf(n.re - F::one()) * self.eps
-        } else {
-            n.re * val / self.re * self.eps
-        };
+        let dx =
+            if self.re == F::zero() || val == F::zero() || !self.re.is_finite() || !val.is_finite()
+            {
+                // Use n*x^(n-1) form to avoid 0/0 when x=0, to handle underflow
+                // when x^n underflows to 0 but x != 0, and to avoid Inf/Inf = NaN
+                // at an infinite base (e.g. Inf^2 has derivative Inf, not NaN) —
+                // matching `Reverse`/`opcode`.
+                n.re * self.re.powf(n.re - F::one()) * self.eps
+            } else {
+                n.re * val / self.re * self.eps
+            };
         let dy = if val == F::zero() || self.re <= F::zero() {
             // `lim_{x→0+} x^y·ln(x) = 0` for y > 0; and for a negative base
             // `ln(x)` is undefined (complex), so the exponent direction is
