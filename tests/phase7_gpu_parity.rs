@@ -26,6 +26,9 @@ use echidna::{record, BReverse};
 
 #[cfg(feature = "gpu-cuda")]
 #[test]
+// The a/b/c literals are deliberately full-precision — the exact bit patterns
+// are what produce the FMA-vs-separate-rounding divergence this test pins.
+#[allow(clippy::excessive_precision)]
 fn l25_cuda_fmad_disabled_bit_exact_with_cpu_f64() {
     let ctx = match CudaContext::new() {
         Some(c) => c,

@@ -299,12 +299,12 @@ fn sparse_hessian_rosenbrock_f64() {
     }
 
     assert_eq!(gpu_pattern.nnz(), cpu_pattern.nnz());
-    for k in 0..gpu_hess.len() {
+    for (k, &gpu_h) in gpu_hess.iter().enumerate() {
         assert!(
-            approx_eq_f64(gpu_hess[k], cpu_hess[k], 1e-10, 1e-12),
+            approx_eq_f64(gpu_h, cpu_hess[k], 1e-10, 1e-12),
             "hess[{}]: gpu={}, cpu={}",
             k,
-            gpu_hess[k],
+            gpu_h,
             cpu_hess[k]
         );
     }
