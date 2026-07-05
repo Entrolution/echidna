@@ -10,6 +10,7 @@ use echidna::Dual;
 
 type Dual64 = Dual<f64>;
 
+#[cfg(feature = "taylor")]
 fn finite_diff(f: impl Fn(f64) -> f64, x: f64) -> f64 {
     let h = 1e-7;
     (f(x + h) - f(x - h)) / (2.0 * h)
