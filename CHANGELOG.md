@@ -7,8 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-05
+
+**Coordinated release:** `echidna` 0.12.0 and `echidna-optim` 0.13.2.
+`echidna-optim`'s dep on `echidna` updated from `0.11.0` to `0.12.0`.
+
+Minor bump: adds new public API (`BytecodeTape::validate` /
+`TapeValidationError`, `GpuTapeData::validate`, and the `kernels::*_deriv`
+derivative helpers) and changes two numerical conventions — `abs'(0)` is now
+the minimal-norm subgradient `0` (was `±1`), and `Laurent::is_zero` is
+value-based. The bulk of the release hardens a broad set of out-of-domain, GPU,
+and series edge cases spanning every AD mode and both GPU backends.
+
 ### Fixed (echidna)
 
+- GPU `powf(a, b)` now matches the CPU at a zero base on the wgpu backend across
+  the reverse, forward-tangent, and Hessian-vector-product sweeps. The primal
+  computed `0^0` as `NaN` (WGSL `pow(0, 0)` is undefined); the base-direction
+  first derivative gave `0·Inf = NaN` at exponent `0`; and the HVP's second-order
+  term gave `0·Inf = NaN` at `a = 0` for any exponent `b ≥ 2`, silently corrupting
+  the Hessian. `0^0` is now `1`, the derivative at exponent `0` is `0`, and the HVP
+  uses the division-free `b·(b−1)·a^(b−2)` form that stays finite at `a = 0`. The
+  CUDA backend already matched.
+- GPU `asinh` / `acosh` primals stay finite at very large arguments. Both formed
+  `x²` under the square root, overflowing f32 for `|x| ≳ 1.8·10¹⁹`
+  (`sqrt(Inf) = Inf`, `log(Inf) = Inf`) where the true value is finite and the
+  guarded derivative was already correct — so a sweep could return a correct
+  gradient beside an `Inf` primal. The wgpu forward, tangent, and 2nd-order Taylor
+  kernels now use overflow-safe asymptotic forms (CUDA already used the device
+  `asinh` / `acosh` intrinsics).
+- `Taylor::powf` with a negative base and a live (differentiated) exponent now
+  returns an all-NaN jet instead of a mixed jet (a finite primal `a₀^b₀` beside
+  NaN derivative coefficients). A varying exponent makes `a(t)^b(t)` complex, so
+  the whole jet is undefined — matching `taylor_ln` / `taylor_sqrt`. Applied on the
+  CPU and both GPU Taylor emitters.
+- `Dual::powf` / `DualVec::powf` keep the base-direction derivative finite at an
+  infinite base. The fast-path `n·xⁿ/x` form evaluated `Inf/Inf = NaN` (e.g. the
+  derivative of `Inf²`); it now falls back to the `n·xⁿ⁻¹` form, yielding the
+  correct `Inf` and matching reverse mode and the bytecode `OpCode`.
+- `diffop::hessian` of a constant (zero-input) tape returns the value with an
+  empty gradient and Hessian instead of panicking on an empty multi-index list,
+  matching `BytecodeTape::hessian`.
+- `Laurent` `Add` / `Sub` widen their pole-order shift to `i64`, so extreme
+  opposite-sign pole orders can no longer overflow `i32` and wrap past the gap
+  check, which would silently truncate coefficients.
+- STDE robustness: `dense_stde_2nd` validates each Cholesky row's length up front
+  (a clear message instead of an opaque out-of-bounds panic), `diagonal_kth_order`
+  rejects `k > 18` (`k!` is exact in f64 only through `18!`), and the weighted
+  estimator skips zero-weight directions before its finiteness check.
+- Internal robustness guards: forward-mode `jacobian` rejects an output-count
+  mismatch instead of silently truncating via `zip`; the wgpu compute dispatches
+  reject a workgroup count over the backend limit with a clear message rather than
+  a silent no-op; the bytecode-tape optimizer and dead-code pass assert DAG order
+  and output-index bounds; the thread-local tape guard asserts LIFO drop order; and
+  the generic `OpCode` dispatch flags a lossy f32 `Powi` exponent decode (the tape
+  sweeps use the exact raw-`u32` path).
 - GPU power operations (`powi`, and `powf` with an integer exponent) at a
   negative base silently produced NaN values and gradients on the wgpu
   backend — WGSL `pow(x, y)` is undefined for `x < 0`. All WGSL shader
@@ -144,7 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now reports `is_zero() == true`. `Laurent`'s own arithmetic uses a structural
   check internally, so pole formation (e.g. `1/t`) is unaffected.
 
-### Fixed (echidna-optim)
+### Fixed (echidna-optim, 0.13.2)
 
 - The trust-region solver rejects a `TrustRegionConfig` with `eta` outside
   `[0, 1/4)` at entry (`NumericalError`). An `eta >= 1/4` could reject a step
@@ -173,6 +226,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produces a non-finite result (e.g. a NaN reaching the right-hand side via
   `x_dot` / `z̄`), matching the dense implicit functions. Previously they
   could return `Ok` with NaN entries.
+
+### Changed (echidna-optim, 0.13.2)
+
+- `echidna` dep updated from `0.11.0` to `0.12.0` (follows the coordinated
+  release).
 
 ## [0.11.0] - 2026-05-20
 
@@ -909,7 +967,9 @@ types changed; the bump reflects the wgpu API-break that downstream
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Entrolution/echidna/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/Entrolution/echidna/compare/v0.10.0...v0.11.0
 [0.5.0]: https://github.com/Entrolution/echidna/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Entrolution/echidna/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Entrolution/echidna/compare/v0.3.0...v0.4.0
