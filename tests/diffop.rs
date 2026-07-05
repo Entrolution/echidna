@@ -588,3 +588,28 @@ fn sparse_distribution_nonuniform_weights() {
     assert_eq!(dist.sample_index(0.8), 1); // 0.8 * 4 = 3.2 > 3
     assert_eq!(dist.sample_index(0.99), 1);
 }
+
+// A 0-input (constant) tape has no derivatives. `diffop::hessian` must return
+// the constant with an empty gradient/Hessian — matching `BytecodeTape::hessian`
+// — instead of panicking in `JetPlan::plan` on the empty multi-index list.
+#[test]
+fn diffop_hessian_zero_input_tape_is_graceful() {
+    let tape = record_fn(|_| BReverse::constant(5.0), &[]);
+    let (value, grad, hess) = echidna::diffop::hessian(&tape, &[]);
+    assert_relative_eq!(value, 5.0);
+    assert!(
+        grad.is_empty(),
+        "gradient should be empty, got {}",
+        grad.len()
+    );
+    assert!(
+        hess.is_empty(),
+        "Hessian should be empty, got {}",
+        hess.len()
+    );
+    // Parity with the bytecode Hessian's graceful 0-input handling.
+    let (bv, bg, bh) = tape.hessian(&[]);
+    assert_relative_eq!(bv, value);
+    assert_eq!(bg.len(), grad.len());
+    assert_eq!(bh.len(), hess.len());
+}
