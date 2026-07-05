@@ -255,6 +255,18 @@ pub fn dense_stde_2nd<F: Float>(
         n,
         "cholesky_rows.len() must match tape.num_inputs()"
     );
+    // Row i is read at indices 0..=i by the lower-triangular mat-vec below, so
+    // it must have at least i+1 elements — check up front for a clear message
+    // instead of an opaque out-of-bounds panic mid-computation.
+    for (i, row) in cholesky_rows.iter().enumerate() {
+        assert!(
+            row.len() > i,
+            "cholesky_rows[{}] has length {} but a lower-triangular row needs at least {}",
+            i,
+            row.len(),
+            i + 1
+        );
+    }
 
     stde_2nd_inner(tape, x, z_vectors, |z, v| {
         // Lower-triangular mat-vec: v = L · z
