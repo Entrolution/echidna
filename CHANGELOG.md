@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (echidna)
+
+- Bumped the optional `nalgebra` integration from 0.34 to 0.35 and the
+  optional `simba` scalar-trait dependency from 0.9 to 0.10. Consumers using
+  echidna's `nalgebra` or `simba` features must move to the matching major
+  versions; no echidna API changed. (The dev-only `num-dual` benchmark
+  comparison dependency was bumped to 0.14 to keep the workspace on a single
+  `nalgebra` version.)
+
 ## [0.12.0] - 2026-07-05
 
 **Coordinated release:** `echidna` 0.12.0 and `echidna-optim` 0.13.2.
