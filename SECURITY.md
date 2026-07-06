@@ -4,24 +4,25 @@
 
 | Crate           | Version    | Supported |
 |-----------------|------------|-----------|
-| `echidna`       | >= 0.12.0  | Yes       |
-| `echidna-optim` | >= 0.13.2  | Yes       |
-| `echidna`       | < 0.12.0   | No        |
-| `echidna-optim` | < 0.13.2   | No        |
+| `echidna`       | >= 0.13.0  | Yes       |
+| `echidna-optim` | >= 0.13.3  | Yes       |
+| `echidna`       | < 0.13.0   | No        |
+| `echidna-optim` | < 0.13.3   | No        |
 
 Only the latest release of each crate receives security updates.
-`echidna` 0.12.0 and `echidna-optim` 0.13.2 are a coordinated release
-(`echidna-optim` 0.13.2 depends on `echidna = "0.12.0"`).
+`echidna` 0.13.0 and `echidna-optim` 0.13.3 are a coordinated release
+(`echidna-optim` 0.13.3 depends on `echidna = "0.13.0"`).
 
-0.12.0 is a minor bump over 0.11.0. It adds new public API — tape and
-GPU-upload validation (`BytecodeTape::validate` / `TapeValidationError`,
-`GpuTapeData::validate`) and the `kernels::*_deriv` derivative helpers —
-and changes two numerical conventions: `abs'(0)` is now the minimal-norm
-subgradient `0` (was `±1`), and `Laurent::is_zero` is value-based. Unlike
-0.10.0 → 0.11.0, this release also fixes a broad set of numerical
-correctness bugs — see below and the CHANGELOG.
+0.13.0 is a minor bump over 0.12.0: the optional `nalgebra` and `simba`
+integrations move to new major versions (`nalgebra` 0.35, `simba` 0.10), an
+ABI-breaking change for consumers of those features. No echidna API or
+numerical behaviour changed.
 
 ### Known issues in unsupported versions
+
+**0.12.0** has no known numerical correctness bugs; it is unsupported only
+because 0.13.0 supersedes it (dependency currency — `nalgebra` 0.35 /
+`simba` 0.10).
 
 Every pre-0.12.0 `echidna` release carries the numerical correctness
 bugs fixed in 0.12.0 — out-of-domain derivatives (the restricted
@@ -54,6 +55,9 @@ releases additionally carry version-specific issues:
   lose precision near domain boundaries; CUDA Taylor codegen
   truncates 64-bit offsets.
 - **< 0.8.0**: additional issues documented in the changelog.
+
+`echidna-optim` 0.13.2 has no known bugs; it is unsupported only because the
+coordinated 0.13.3 release supersedes it.
 
 Pre-0.13.2 `echidna-optim` carries solver-robustness bugs fixed in
 0.13.2: the trust-region solver accepted an out-of-range `eta` (silently

@@ -47,7 +47,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-echidna = "0.12"
+echidna = "0.13"
 ```
 
 ### Gradient via reverse mode
@@ -158,7 +158,7 @@ assert!((d2_dxdy - 2.0).abs() < 1e-6);
 Enable features in `Cargo.toml`:
 
 ```toml
-echidna = { version = "0.12", features = ["bytecode", "taylor"] }
+echidna = { version = "0.13", features = ["bytecode", "taylor"] }
 ```
 
 ## API
