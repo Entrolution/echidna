@@ -119,11 +119,18 @@ impl<F: Float> super::BytecodeTape<F> {
     /// `output_index` is set to the first active output.
     ///
     /// # Panics
-    /// Panics if `active_outputs` is empty.
+    /// Panics if `active_outputs` is empty or contains an out-of-range index.
     pub fn dead_code_elimination_for_outputs(&mut self, active_outputs: &[u32]) {
         assert!(
             !active_outputs.is_empty(),
             "active_outputs must not be empty"
+        );
+        assert!(
+            active_outputs
+                .iter()
+                .all(|&oi| (oi as usize) < self.opcodes.len()),
+            "active_outputs contains an index out of range (tape length {})",
+            self.opcodes.len()
         );
         let remap = self.dce_compact(active_outputs);
         self.output_indices = active_outputs
@@ -254,10 +261,15 @@ impl<F: Float> super::BytecodeTape<F> {
                         assert_eq!(b, UNUSED, "Input/Const should have UNUSED args");
                     }
                     OpCode::Powi => {
+                        // arg0 (the base) is a real tape index and must precede
+                        // this op, like every other operand — `< i`, not just
+                        // in-bounds `< n`. arg1 encodes the exponent (not an
+                        // index), so it is not checked. Matches BytecodeTape::validate.
                         assert!(
-                            (a as usize) < n,
-                            "Powi arg0 {} out of bounds (tape len {})",
+                            (a as usize) < i,
+                            "Powi arg0 {} not before op {} (tape len {})",
                             a,
+                            i,
                             n
                         );
                     }

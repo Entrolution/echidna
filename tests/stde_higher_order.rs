@@ -121,10 +121,11 @@ fn diagonal_kth_order_k_too_small() {
 }
 
 #[test]
-#[should_panic(expected = "k must be <= 20")]
+#[should_panic(expected = "k must be <= 18")]
 fn diagonal_kth_order_k_too_large() {
+    // k=19 is the first rejected order: 19! exceeds 2^53 and is inexact in f64.
     let tape = record_fn(exp_1d, &[1.0]);
-    let _ = echidna::stde::diagonal_kth_order(&tape, &[1.0], 21);
+    let _ = echidna::stde::diagonal_kth_order(&tape, &[1.0], 19);
 }
 
 // ══════════════════════════════════════════════

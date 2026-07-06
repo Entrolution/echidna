@@ -445,6 +445,19 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Uses `Dual<Dual<F>>` (nested dual numbers): inner tangent for `v1`,
     /// outer tangent for `v2`.
     pub fn third_order_hvvp(&self, x: &[F], v1: &[F], v2: &[F]) -> (Vec<F>, Vec<F>, Vec<F>) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "third_order_hvvp is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
+        assert!(
+            self.custom_ops.is_empty(),
+            "third_order_hvvp: custom ops produce approximate (first-order) higher-order \
+             derivatives; use eval_forward with Dual<Dual<F>> for exact derivatives through \
+             custom ops"
+        );
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
         assert_eq!(v1.len(), n, "wrong v1 length");

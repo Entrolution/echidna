@@ -15,6 +15,8 @@ pub struct TrustRegionConfig<F> {
     /// Solver returns `NumericalError` if radius shrinks below this.
     pub min_radius: F,
     /// Acceptance threshold for the ratio of actual to predicted reduction (default: 0.1).
+    /// Must be in `[0, 1/4)` (Nocedal & Wright, Alg 4.1); a value `>= 1/4` can reject a step
+    /// without shrinking the radius and stall the solver, so it is rejected at solve entry.
     pub eta: F,
     /// Maximum CG iterations per trust-region subproblem (default: 2 * dim).
     /// If 0, defaults to 2 * dim.
@@ -65,6 +67,11 @@ pub fn trust_region<F: Float, O: Objective<F>>(
     if config.convergence.max_iter == 0
         || config.initial_radius <= F::zero()
         || config.max_radius <= F::zero()
+        // eta must be in [0, 1/4): eta >= 1/4 can reject a step (rho <= eta) without
+        // shrinking the radius (rho >= 1/4), stalling the solver to MaxIterations.
+        // Positive-range form so a NaN eta is rejected too (a NaN would otherwise
+        // make `rho > eta` always false → silent no-progress MaxIterations).
+        || !(config.eta >= F::zero() && config.eta < F::one() / F::from(4.0).unwrap())
     {
         return OptimResult {
             x: x0.to_vec(),
@@ -223,7 +230,7 @@ pub fn trust_region<F: Float, O: Objective<F>>(
                 };
             }
             radius = shrunk;
-        } else if rho > three_quarter && (step_norm - radius).abs() < F::epsilon() * radius {
+        } else if rho > three_quarter && near_boundary(step_norm, radius) {
             // Step was on the boundary and rho is good — expand
             radius = (two * radius).min(config.max_radius);
         }
@@ -465,9 +472,53 @@ fn boundary_tau<F: Float>(s: &[F], d: &[F], radius: F) -> F {
     }
 }
 
+/// Whether a step of length `step_norm` sits on the trust-region boundary of
+/// radius `radius`, within a relative tolerance. The boundary solve
+/// (`boundary_tau`) accumulates several ULPs of round-off, so a 1-ULP tolerance
+/// would (almost) never fire the radius-expansion branch; the tolerance here
+/// matches the `sqrt(eps)` scale used for the CG stopping test elsewhere.
+#[inline]
+fn near_boundary<F: Float>(step_norm: F, radius: F) -> bool {
+    (step_norm - radius).abs() < F::epsilon().sqrt() * radius
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eta_at_or_above_quarter_rejected() {
+        // eta >= 1/4 can reject a step without shrinking the radius, stalling the
+        // solver to MaxIterations. The config must be rejected at entry (Nocedal &
+        // Wright Alg 4.1 requires eta in [0, 1/4)).
+        let mut obj = Rosenbrock;
+        let config = TrustRegionConfig {
+            eta: 0.3,
+            ..Default::default()
+        };
+        let result = trust_region(&mut obj, &[0.0, 0.0], &config);
+        assert_eq!(result.termination, TerminationReason::NumericalError);
+
+        // A NaN eta must also be rejected (positive-range guard) — otherwise
+        // `rho > NaN` is always false and the solver silently spins to
+        // MaxIterations without moving x0.
+        let nan_config = TrustRegionConfig {
+            eta: f64::NAN,
+            ..Default::default()
+        };
+        let nan_result = trust_region(&mut obj, &[0.0, 0.0], &nan_config);
+        assert_eq!(nan_result.termination, TerminationReason::NumericalError);
+    }
+
+    #[test]
+    fn near_boundary_uses_relative_tolerance() {
+        // The boundary solve accumulates several ULPs of round-off; a 1-ULP
+        // tolerance never fires the radius-expansion branch. A deviation of 1e-12
+        // (>> eps*radius but << sqrt(eps)*radius) must count as on-boundary.
+        assert!(near_boundary(1.0 + 1e-12, 1.0));
+        // A clearly-interior step is not on the boundary.
+        assert!(!near_boundary(1.5, 1.0));
+    }
 
     struct Rosenbrock;
 

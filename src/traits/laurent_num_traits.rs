@@ -19,9 +19,16 @@ impl<F: Float, const K: usize> Zero for Laurent<F, K> {
     fn zero() -> Self {
         Laurent::zero()
     }
+    /// Value-based, consistent with the value-based `PartialEq`/`PartialOrd`
+    /// and `num_traits`' `is_zero() ⟺ == Self::zero()` contract: a Laurent is
+    /// "zero" when it evaluates to `0` at the expansion point (a positive-pole
+    /// series like `t`, or a zero constant term at pole 0). Poles evaluate to
+    /// `±Inf` and are not zero. This is what generic `num_traits`-bound code
+    /// expects; Laurent's own arithmetic (`Div`/`recip`/`Mul`) uses the
+    /// structural `is_all_zero_pub` directly, so pole formation is unaffected.
     #[inline]
     fn is_zero(&self) -> bool {
-        self.is_all_zero_pub()
+        self.value() == F::zero()
     }
 }
 

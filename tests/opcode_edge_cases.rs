@@ -128,6 +128,17 @@ fn powi_negative_exponent() {
     assert!((eval_forward(OpCode::Powi, 2.0_f64, b) - 0.25).abs() < TOL);
 }
 
+#[test]
+#[should_panic(expected = "did not round-trip to u32")]
+fn powi_f32_negative_exponent_via_generic_dispatch_is_flagged() {
+    // On an f32 tape a negative exponent's u32 encoding exceeds 2^24 and can't
+    // round-trip through the float `b`, so the generic entry point flags it
+    // (debug) instead of silently computing x^0. Tape sweeps decode from the
+    // raw u32 arg and are unaffected.
+    let b = powi_exp_encode(-2) as f32;
+    let _ = eval_forward(OpCode::Powi, 2.0_f32, b);
+}
+
 // ══════════════════════════════════════════════
 //  eval_forward: rounding ops
 // ══════════════════════════════════════════════

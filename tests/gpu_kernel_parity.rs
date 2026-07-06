@@ -167,14 +167,19 @@ fn wgpu_abs_signed_zero() {
         None => return,
     };
 
-    // |-0.0| = 0.0; d|x|/dx at x = -0.0 is -1 per sign-bit (mirrors f32::signum).
+    // |-0.0| = 0.0; d|x|/dx at the kink is the unified minimal-norm subgradient 0
+    // (value-based, so -0.0 gives 0, not the sign-bit -1). See
+    // tests/abs_kink_convention.rs for the full cross-mode convention.
     let x0 = [-0.0_f64];
     let (tape, _) = record(|v: &[BReverse<f64>]| v[0].abs(), &x0);
 
     let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
     let gpu_tape = ctx.upload_tape(&gpu_data);
     let (_, g) = ctx.gradient_batch(&gpu_tape, &[-0.0_f32], 1).unwrap();
-    assert_eq!(g[0], -1.0, "d|x|/dx at -0.0 should be -1 (sign bit set)");
+    assert_eq!(
+        g[0], 0.0,
+        "d|x|/dx at -0.0 is the unified 0 (not sign-bit -1)"
+    );
 }
 
 // ── fract: trunc semantics ──────────────────────────────────────────

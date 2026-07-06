@@ -65,6 +65,58 @@ fn l8_taylor_sqrt_negative_a0_returns_nan() {
     );
 }
 
+// taylor_hypot with both leading primals zero must peel ANY higher-order signal,
+// not just order 1. `hypot(t², 0) = t²`; the old guard only checked order 1, so it
+// fell through to the square→sqrt path and returned `[0, Inf, …]`. Assert per
+// coefficient — Taylor `==` compares only `coeff(0)`.
+#[test]
+fn taylor_hypot_higher_order_leading_zero() {
+    let zero = Taylor::<f64, 4>::new([0.0, 0.0, 0.0, 0.0]);
+
+    // hypot(t², 0) = t²  →  [0, 0, 1, 0]
+    let r = Taylor::<f64, 4>::new([0.0, 0.0, 1.0, 0.0]).hypot(zero);
+    assert_eq!(r.coeff(0), 0.0);
+    assert_eq!(
+        r.coeff(1),
+        0.0,
+        "coeff(1) must be 0 (was Inf), got {}",
+        r.coeff(1)
+    );
+    assert!(
+        (r.coeff(2) - 1.0).abs() < 1e-12,
+        "coeff(2) = {}",
+        r.coeff(2)
+    );
+    assert_eq!(r.coeff(3), 0.0);
+
+    // hypot(t³, 0) = t³  →  [0, 0, 0, 1]
+    let r3 = Taylor::<f64, 4>::new([0.0, 0.0, 0.0, 1.0]).hypot(zero);
+    assert!(
+        (r3.coeff(3) - 1.0).abs() < 1e-12,
+        "coeff(3) = {}",
+        r3.coeff(3)
+    );
+    for k in 0..3 {
+        assert_eq!(r3.coeff(k), 0.0, "coeff({k}) = {}", r3.coeff(k));
+    }
+}
+
+// Laurent(t², pole 2).hypot(0) rebases to a common pole, introducing leading
+// zeros with an order-2 signal — reaching the kernel's `scale==0` branch (contra
+// the old "unreachable" comment). Must normalize to a clean pole-2 t².
+#[test]
+fn laurent_hypot_rebased_leading_zero() {
+    let r = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], 2).hypot(Laurent::<f64, 4>::zero());
+    assert_eq!(r.pole_order(), 2, "pole_order = {}", r.pole_order());
+    assert!(
+        (r.coeff(2) - 1.0).abs() < 1e-12,
+        "coeff(2) = {}",
+        r.coeff(2)
+    );
+    assert_eq!(r.coeff(0), 0.0);
+    assert_eq!(r.coeff(1), 0.0);
+}
+
 // L9: Taylor::rem with zero divisor must not silently produce Inf/NaN in
 // individual coefficient slots — it should return a uniformly NaN result.
 #[test]
@@ -75,6 +127,52 @@ fn l9_taylor_rem_zero_divisor_returns_nan() {
     assert!(
         taylor_is_nan(&r),
         "rem with zero-divisor Taylor must yield all-NaN"
+    );
+}
+
+// Scalar-variant `Rem`: `Taylor % scalar` and `scalar % Taylor` must apply the
+// same zero-divisor guard as the Taylor%Taylor impl. Previously `Taylor % 0`
+// left `coeffs[0] % 0 = NaN` beside finite higher coefficients, and
+// `scalar % zero-const-Taylor` produced an Inf/NaN mix.
+#[test]
+fn taylor_rem_scalar_zero_divisor_returns_nan() {
+    let a = Taylor::<f64, 4>::new([3.0, 1.0, 2.0, 0.0]);
+    let r = a % 0.0_f64;
+    assert!(taylor_is_nan(&r), "Taylor % 0 must yield all-NaN");
+}
+
+#[test]
+fn scalar_rem_taylor_zero_divisor_returns_nan() {
+    let b = Taylor::<f64, 4>::new([0.0, 1.0, 0.0, 0.0]);
+    let r = 7.0_f64 % b;
+    assert!(
+        taylor_is_nan(&r),
+        "scalar % zero-const Taylor must yield all-NaN"
+    );
+}
+
+// TaylorDyn scalar Rem variants delegate to the guarded generic impl — anchor
+// that the delegation genuinely carries the zero-divisor guard.
+#[cfg(feature = "taylor")]
+#[test]
+fn taylor_dyn_rem_scalar_zero_divisor_returns_nan() {
+    use echidna::{TaylorDyn, TaylorDynGuard};
+
+    let _guard = TaylorDynGuard::<f64>::new(4);
+    let a = TaylorDyn::<f64>::from_coeffs(&[3.0, 1.0, 2.0, 0.0]);
+    let r = a % 0.0_f64;
+    assert!(
+        r.coeffs().iter().all(|c| c.is_nan()),
+        "TaylorDyn % 0 must yield all-NaN, got {:?}",
+        r.coeffs()
+    );
+
+    let b = TaylorDyn::<f64>::from_coeffs(&[0.0, 1.0, 0.0, 0.0]);
+    let r2 = 7.0_f64 % b;
+    assert!(
+        r2.coeffs().iter().all(|c| c.is_nan()),
+        "scalar % zero-const TaylorDyn must yield all-NaN, got {:?}",
+        r2.coeffs()
     );
 }
 
@@ -95,4 +193,75 @@ fn l9_taylor_dyn_rem_zero_divisor_returns_nan() {
         "TaylorDyn::rem with zero-divisor must yield all-NaN, got {:?}",
         coeffs
     );
+}
+
+// Series domain-NaN: the Taylor log / atanh / acosh kernels must return an
+// all-NaN jet strictly outside the real domain (mirroring the scalar Phase-4
+// convention) rather than a NaN primal beside finite higher coefficients.
+#[test]
+fn taylor_log_atanh_acosh_domain_nan() {
+    // ln / log2 / log10: leading coefficient < 0.
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 1.0, 0.0]).ln()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 1.0, 0.0]).log2()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 1.0, 0.0]).log10()
+    ));
+    // ln_1p: leading coefficient < -1.
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0]).ln_1p()
+    ));
+    // atanh: |leading| > 1.
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([1.5, 1.0, 0.0, 0.0]).atanh()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-1.5, 1.0, 0.0, 0.0]).atanh()
+    ));
+    // acosh: leading coefficient < 1 (the a[0] <= -1 gap plus the -1<a<1 range).
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0]).acosh()
+    ));
+    assert!(taylor_is_nan(
+        &Taylor::<f64, 4>::new([0.5, 1.0, 0.0, 0.0]).acosh()
+    ));
+}
+
+// In-domain jets are unchanged (regression anchor, prevents over-guarding).
+#[test]
+fn taylor_ln_in_domain_unchanged() {
+    let r = Taylor::<f64, 4>::new([2.0, 1.0, 0.0, 0.0]).ln();
+    assert!((r.coeff(0) - 2.0_f64.ln()).abs() < 1e-12);
+    // d/dt ln(2+t) = 1/(2+t) = 0.5 at t=0.
+    assert!((r.coeff(1) - 0.5).abs() < 1e-12);
+    assert!(r.coeff(0).is_finite());
+}
+
+// The `a[0]==0` boundary for ln stays the IEEE branch-point singularity (-Inf),
+// NOT NaN — the guard is strictly `< 0`, matching the scalar boundary convention.
+#[test]
+fn taylor_ln_zero_leading_stays_singular_not_nan() {
+    let r = Taylor::<f64, 4>::new([0.0, 1.0, 0.0, 0.0]).ln();
+    assert!(
+        r.coeff(0).is_infinite() && r.coeff(0) < 0.0,
+        "ln(0) leading must be -Inf, got {}",
+        r.coeff(0)
+    );
+    assert!(!r.coeff(0).is_nan());
+}
+
+// Laurent `atanh` / `ln_1p` have no independent domain guard — they inherit it
+// from the kernel fix and now return all-NaN out of domain (Laurent `ln`/`log2`/
+// `log10` were already guarded independently).
+#[test]
+fn laurent_atanh_ln_1p_domain_nan() {
+    assert!(laurent_is_nan(
+        &Laurent::<f64, 4>::new([1.5, 1.0, 0.0, 0.0], 0).atanh()
+    ));
+    assert!(laurent_is_nan(
+        &Laurent::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0], 0).ln_1p()
+    ));
 }

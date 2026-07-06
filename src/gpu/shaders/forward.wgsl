@@ -110,6 +110,15 @@ fn asinh_f32(x: f32) -> f32 {
     // Use |x| to avoid catastrophic cancellation for large negative x:
     // log(x + sqrt(x²+1)) ≈ log(0) when x << 0, but log(|x| + sqrt(x²+1)) is stable.
     let a = abs(x);
+    // Large |x|: x² overflows f32 (|x| > ~1.8e19) → sqrt(Inf)=Inf → log(Inf)=Inf,
+    // whereas the true value is finite. Use the asymptotic form that never
+    // forms x²: asinh(x) = sign(x)·(log|x| + log(1 + sqrt(1 + 1/x²))). 1/x² → 0
+    // as x² overflows, so the result stays finite. (Accurate only for large a;
+    // small a keeps the direct form to avoid log|x| cancellation.)
+    if a > 1e9 {
+        let r = log(a) + log(1.0 + sqrt(1.0 + 1.0 / (a * a)));
+        return select(-r, r, x >= 0.0);
+    }
     let r = log(a + sqrt(a * a + 1.0));
     return select(-r, r, x >= 0.0);
 }
@@ -118,6 +127,10 @@ fn acosh_f32(x: f32) -> f32 {
     // acosh(x) = ln(x + sqrt(x² - 1)). Use factored (x-1)(x+1) under the
     // sqrt to retain precision near x=1 (`x*x - 1` rounds away the ε²
     // term in f32 for x = 1+ε). Matches kernels::acosh_deriv convention.
+    // Large x: (x-1)(x+1) overflows f32; use acosh(x) = log(x)+log(1+sqrt(1-1/x²)).
+    if x > 1e9 {
+        return log(x) + log(1.0 + sqrt(1.0 - 1.0 / (x * x)));
+    }
     return log(x + sqrt((x - 1.0) * (x + 1.0)));
 }
 
@@ -164,10 +177,32 @@ fn signum_f32(x: f32) -> f32 {
     return 1.0;
 }
 
+fn is_nan_f32(x: f32) -> bool {
+    // NaN iff exponent is all-ones and mantissa is non-zero. Inspect the bits
+    // directly — `x != x` can be folded away by Metal's fast-math.
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}
+
+fn powf_real(base: f32, b: f32) -> f32 {
+    // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
+    // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
+    // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
+    // non-integer exponent at a negative base is NaN — the same as on CPU.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly.
+    if base == 0.0 && b == 0.0 { return 1.0; }
+    if base >= 0.0 { return pow(base, b); }
+    let rb = round(b);
+    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 { return -mag; }
+    return mag;
+}
+
 fn powi_f32(base: f32, exp_bits: u32) -> f32 {
     // The exponent is stored as i32 reinterpreted as u32.
     let n = bitcast<i32>(exp_bits);
-    return pow(base, f32(n));
+    return powf_real(base, f32(n));
 }
 
 // ── Main kernel ──
@@ -224,11 +259,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 4u /* MUL */: { r = a * b; }
             case 5u /* DIV */: { r = a / b; }
             case 6u /* REM */: { r = rem_f32(a, b); }
-            case 7u /* POWF */: { r = pow(a, b); }
+            case 7u /* POWF */: { r = powf_real(a, b); }
             case 8u /* ATAN2 */: { r = atan2(a, b); }
             case 9u /* HYPOT */: { r = hypot_f32(a, b); }
-            case 10u /* MAX */: { r = max(a, b); }
-            case 11u /* MIN */: { r = min(a, b); }
+            // Hand-roll the NaN tie-break to return the non-NaN operand,
+            // matching CPU `f32::max`/`min` and the tangent/Taylor kernels.
+            // The raw `max`/`min` builtin's NaN behaviour is backend-defined.
+            case 10u /* MAX */: { if (a >= b || is_nan_f32(b)) { r = a; } else { r = b; } }
+            case 11u /* MIN */: { if (a <= b || is_nan_f32(b)) { r = a; } else { r = b; } }
             case 12u /* NEG */: { r = -a; }
             case 13u /* RECIP */: { r = recip_f32(a); }
             case 14u /* SQRT */: { r = sqrt(a); }
@@ -257,7 +295,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 37u /* SIGNUM */: { r = signum_f32(a); }
             case 38u /* FLOOR */: { r = floor(a); }
             case 39u /* CEIL */: { r = ceil(a); }
-            case 40u /* ROUND */: { r = round(a); }
+            case 40u /* ROUND */: { let t = trunc(a); r = select(t, t + select(-1.0, 1.0, a >= 0.0), abs(a - t) >= 0.5); }
             case 41u /* TRUNC */: { r = trunc(a); }
             // WGSL `fract` is floor-based; CPU `f32::fract()` is truncation-based.
             case 42u /* FRACT */: { r = a - trunc(a); }

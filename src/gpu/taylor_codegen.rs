@@ -168,12 +168,87 @@ fn write_wgsl_helpers(s: &mut String) {
         s,
         "fn sinh_f(x: f32) -> f32 {{ return (exp(x) - exp(-x)) * 0.5; }}
 fn cosh_f(x: f32) -> f32 {{ return (exp(x) + exp(-x)) * 0.5; }}
-fn asinh_f(x: f32) -> f32 {{ return log(x + sqrt(x * x + 1.0)); }}
-fn acosh_f(x: f32) -> f32 {{ return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
+fn asinh_f(x: f32) -> f32 {{ let a = abs(x); if a > 1e9 {{ let r = log(a) + log(1.0 + sqrt(1.0 + 1.0 / (a * a))); return select(-r, r, x >= 0.0); }} let r = log(a + sqrt(a * a + 1.0)); return select(-r, r, x >= 0.0); }}
+fn acosh_f(x: f32) -> f32 {{ if x > 1e9 {{ return log(x) + log(1.0 + sqrt(1.0 - 1.0 / (x * x))); }} return log(x + sqrt((x - 1.0) * (x + 1.0))); }}
 fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
+fn powf_real(base: f32, b: f32) -> f32 {{
+    // WGSL `pow(x, y)` is undefined for x < 0. Rust/C `powf` define x^y for
+    // x < 0 only at integer y: sign(x)^y * |x|^y; non-integer y is NaN.
+    if base >= 0.0 {{ return pow(base, b); }}
+    let rb = round(b);
+    if rb != b {{ return bitcast<f32>(0x7fc00000u); }}
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 {{ return -mag; }}
+    return mag;
+}}
+fn expm1_f(x: f32) -> f32 {{
+    // Accurate exp(x)-1. For small |x| the naive `exp(x)-1` cancels catastrophically
+    // (exp(x) ~ 1), so use the Taylor series (no cancellation). For |x| >= 0.125 the
+    // naive form is accurate and gives the right limits directly (+Inf for large x,
+    // -1 for very negative x). The Kahan `(u-1)*x/log(u)` trick is avoided: Metal
+    // fast-math both reassociates its grouping (overflowing `um1*x` for large x where
+    // expm1 is finite) and, for log1p, folds `(1+x)-1` back to `x`.
+    if (abs(x) < 0.125) {{
+        // x + x^2/2 + x^3/6 + x^4/24 + x^5/120 + x^6/720  (Horner)
+        return x * (1.0 + x * (0.5 + x * (0.16666667 + x * (0.041666668 + x * (0.008333334 + x * 0.0013888889)))));
+    }}
+    return exp(x) - 1.0;
+}}
+fn is_nan_f32(x: f32) -> bool {{
+    // `x != x` is unreliable under Metal fast-math (it may assume no NaNs); test the
+    // IEEE exponent/mantissa bits directly: NaN is exponent all-ones + non-zero mantissa,
+    // i.e. `(bits & 0x7fffffff) > 0x7f800000` (0x7f800000 is exactly +Inf).
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}}
+fn signum_f32(x: f32) -> f32 {{
+    // Rust f32::signum: -1 for -0.0 (sign bit set), +1 for +0.0/positive, NaN at NaN.
+    // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit instead.
+    if (is_nan_f32(x)) {{ return x; }}
+    return select(1.0, -1.0, (bitcast<u32>(x) & 0x80000000u) != 0u);
+}}
+fn log1p_f(x: f32) -> f32 {{
+    // Accurate log(1+x). For small |x| the naive `log(1 + x)` loses the low bits
+    // of `x` when it is added to 1.0; the Kahan `log(u)*x/(u-1)` trick is defeated
+    // by Metal fast-math folding `(1+x)-1` back to `x`, so use the Mercator series
+    // (no cancellation) below a threshold and the direct log elsewhere (where
+    // `1+x` retains enough bits). Only affects the primal v[0]; higher coeffs use
+    // the jet_ln recurrence. x=-1 (>= threshold in magnitude) flows to log(0)=-Inf.
+    if (abs(x) < 0.125) {{
+        // x - x^2/2 + x^3/3 - x^4/4 + x^5/5 - x^6/6  (Horner)
+        let p = 1.0 + x * (-0.5 + x * (0.33333334 + x * (-0.25 + x * (0.2 + x * (-0.16666667)))));
+        return x * p;
+    }}
+    return log(1.0 + x);
+}}
 "
     )
     .unwrap();
+}
+
+/// Emit a WGSL domain guard at the top of a jet fn: if `cond` holds (leading
+/// coeff strictly outside the real domain), return an all-NaN jet — mirroring the
+/// CPU `taylor_*` guards, which short-circuit the whole jet rather than leave a
+/// NaN primal beside finite higher coefficients.
+fn write_wgsl_jet_nan_guard(s: &mut String, k: usize, cond: &str) {
+    writeln!(s, "    if ({cond}) {{").unwrap();
+    writeln!(s, "        var n: JetK;").unwrap();
+    for i in 0..k {
+        writeln!(s, "        n.v[{i}] = bitcast<f32>(0x7fc00000u);").unwrap();
+    }
+    writeln!(s, "        return n;").unwrap();
+    writeln!(s, "    }}").unwrap();
+}
+
+/// CUDA counterpart of [`write_wgsl_jet_nan_guard`]; uses the emitter's `F(0.0/0.0)`
+/// NaN idiom.
+fn write_cuda_jet_nan_guard(s: &mut String, k: usize, cond: &str) {
+    writeln!(s, "    if ({cond}) {{").unwrap();
+    writeln!(s, "        JetK n;").unwrap();
+    for i in 0..k {
+        writeln!(s, "        n.v[{i}] = F(0.0/0.0);").unwrap();
+    }
+    writeln!(s, "        return n;").unwrap();
+    writeln!(s, "    }}").unwrap();
 }
 
 fn write_wgsl_jet_type(s: &mut String, k: usize) {
@@ -301,24 +376,33 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
 
     // Ln: c[0] = ln(a[0]), c[i] = (a[i] - (1/i)*Σ_{j=1}^{i-1} j*c[j]*a[i-j]) / a[0]
     writeln!(s, "fn jet_ln(a: JetK) -> JetK {{").unwrap();
+    // Domain guard: ln(a0<0) is NaN, but the higher coeffs (built from 1/a0) stay
+    // finite — short-circuit to an all-NaN jet (mirrors CPU taylor_ln). Strict
+    // `< 0` keeps a0==0 as the IEEE -Inf singularity. log2/log10/ln1p delegate to
+    // jet_ln, so this one guard covers them too.
+    write_wgsl_jet_nan_guard(s, k, "a.v[0] < 0.0");
     writeln!(s, "    var c: JetK;").unwrap();
-    writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
-    for i in 1..k {
-        if i == 1 {
-            writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
-        } else {
-            let inv_i = 1.0 / i as f64;
-            let mut terms = Vec::new();
-            for j in 1..i {
-                terms.push(format!("{:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+    // `inv_a0` and the recurrence only exist for K > 1; emitting the `let` at
+    // K=1 (where the loop below is empty) leaves an unused binding in the shader.
+    if k > 1 {
+        writeln!(s, "    let inv_a0 = 1.0 / a.v[0];").unwrap();
+        for i in 1..k {
+            if i == 1 {
+                writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
+            } else {
+                let inv_i = 1.0 / i as f64;
+                let mut terms = Vec::new();
+                for j in 1..i {
+                    terms.push(format!("{:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+                }
+                writeln!(
+                    s,
+                    "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
+                    terms.join(" + ")
+                )
+                .unwrap();
             }
-            writeln!(
-                s,
-                "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
-                terms.join(" + ")
-            )
-            .unwrap();
         }
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
@@ -326,6 +410,16 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
     // Sqrt: c[0] = sqrt(a[0]), c[i] = (a[i] - Σ_{j=1}^{i-1} c[j]*c[i-j]) / (2*c[0])
     writeln!(s, "fn jet_sqrt(a: JetK) -> JetK {{").unwrap();
     writeln!(s, "    var c: JetK;").unwrap();
+    // sqrt(0)=0 has a vertical tangent: the higher coeffs are uniformly +Inf, not
+    // the sign-dependent `a.v[i]*(0.5/0)` the recurrence would give (matches CPU
+    // taylor_sqrt). a.v[0] < 0 already all-NaNs via sqrt(neg) in the recurrence.
+    writeln!(s, "    if (a.v[0] == 0.0) {{").unwrap();
+    writeln!(s, "        c.v[0] = 0.0;").unwrap();
+    for i in 1..k {
+        writeln!(s, "        c.v[{i}] = bitcast<f32>(0x7f800000u);").unwrap();
+    }
+    writeln!(s, "        return c;").unwrap();
+    writeln!(s, "    }}").unwrap();
     writeln!(s, "    c.v[0] = sqrt(a.v[0]);").unwrap();
     if k > 1 {
         writeln!(s, "    let inv_2c0 = 0.5 / c.v[0];").unwrap();
@@ -484,7 +578,14 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     // asin: c' = a' / sqrt(1 - a²)
     writeln!(s, "fn jet_asin(a: JetK) -> JetK {{").unwrap();
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
-    write!(s, "    var d: JetK;\n    d.v[0] = 1.0 - asq.v[0];\n").unwrap();
+    // Factored `(1-a0)(1+a0)` for the leading denom coeff avoids catastrophic
+    // cancellation near |a0|=1 (matches CPU taylor_asin and jet_acosh); the
+    // higher coeffs stay `-asq.v[i]` (bit-identical to the factored expansion).
+    write!(
+        s,
+        "    var d: JetK;\n    d.v[0] = (1.0 - a.v[0]) * (1.0 + a.v[0]);\n"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(s, "    d.v[{i}] = -asq.v[{i}];").unwrap();
     }
@@ -504,7 +605,12 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     // acos: π/2 - asin → negate higher coefficients
     writeln!(s, "fn jet_acos(a: JetK) -> JetK {{").unwrap();
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
-    write!(s, "    var d: JetK;\n    d.v[0] = 1.0 - asq.v[0];\n").unwrap();
+    // Factored leading denom coeff (same as jet_asin — acos shares the denom).
+    write!(
+        s,
+        "    var d: JetK;\n    d.v[0] = (1.0 - a.v[0]) * (1.0 + a.v[0]);\n"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(s, "    d.v[{i}] = -asq.v[{i}];").unwrap();
     }
@@ -548,6 +654,11 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
     // of (a-1)·(a+1) and a²-1 are mathematically identical (both
     // equal 2·a.v[0]·a.v[i] + Σ_{j+k=i, j,k≥1} a.v[j]·a.v[k]).
     writeln!(s, "fn jet_acosh(a: JetK) -> JetK {{").unwrap();
+    // Domain guard: acosh(a0<1) is NaN. For a0<=-1 the factored (a0-1)(a0+1)>0
+    // leaves a finite sqrt/recip → finite higher coeffs beside a NaN primal, so
+    // guard explicitly (mirrors CPU taylor_acosh). Strict `< 1` keeps a0==1 as the
+    // +Inf branch-point derivative.
+    write_wgsl_jet_nan_guard(s, k, "a.v[0] < 1.0");
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
     write!(
         s,
@@ -572,8 +683,17 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
 
     // atanh: c' = a' / (1 - a²)
     writeln!(s, "fn jet_atanh(a: JetK) -> JetK {{").unwrap();
+    // Domain guard: atanh(|a0|>1) is NaN, but recip(1-a0^2) stays finite there →
+    // finite higher coeffs beside a NaN primal, so guard explicitly (mirrors CPU
+    // taylor_atanh). Strict keeps |a0|==1 as the ±Inf branch-point derivative.
+    write_wgsl_jet_nan_guard(s, k, "a.v[0] < -1.0 || a.v[0] > 1.0");
     writeln!(s, "    let asq = jet_mul(a, a);").unwrap();
-    write!(s, "    var d: JetK;\n    d.v[0] = 1.0 - asq.v[0];\n").unwrap();
+    // Factored leading denom coeff (same as jet_asin — avoids cancellation near |a0|=1).
+    write!(
+        s,
+        "    var d: JetK;\n    d.v[0] = (1.0 - a.v[0]) * (1.0 + a.v[0]);\n"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(s, "    d.v[{i}] = -asq.v[{i}];").unwrap();
     }
@@ -589,6 +709,70 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
+}
+
+/// Emit the WGSL Taylor-jet integer-power computation, mirroring CPU
+/// `taylor_powi`: sets `r = a^exponent`, handling zero and negative bases
+/// (which WGSL `pow` cannot). `n_expr` is an f32 exponent expression and
+/// `ni_expr` its i32 form. Shared by the POWI opcode and the constant-
+/// integer-exponent POWF path so the two cannot drift.
+fn write_wgsl_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
+    writeln!(s, "                let n = {n_expr};").unwrap();
+    writeln!(s, "                let ni = {ni_expr};").unwrap();
+    writeln!(s, "                if n == 0.0 {{ r = jet_const(1.0); }}").unwrap();
+    writeln!(s, "                else if n == 1.0 {{ r = a; }}").unwrap();
+    // a.v[0] == 0 with small |n|: repeated squaring preserves the higher-order
+    // Taylor coefficients (the log|a| = log(0) = -inf path below poisons them
+    // with NaN). Chain matches CPU `taylor_powi_squaring`.
+    writeln!(
+        s,
+        "                else if a.v[0] == 0.0 && ni == 2 {{ r = jet_mul(a, a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "                else if a.v[0] == 0.0 && ni == 3 {{ r = jet_mul(jet_mul(a, a), a); }}"
+    )
+    .unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 4 {{ let a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 5 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 6 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 7 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}").unwrap();
+    writeln!(s, "                else if a.v[0] == 0.0 && ni == 8 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}").unwrap();
+    // Negative base (a.v[0] < 0) or a.v[0] == 0 with |n| > 8: sign(a)^n * |a|^n.
+    writeln!(s, "                else if a.v[0] <= 0.0 {{").unwrap();
+    writeln!(
+        s,
+        "                    let sf = select(1.0, -1.0, ni % 2 != 0);"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "                    let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);"
+    )
+    .unwrap();
+    writeln!(s, "                    var abs_a: JetK;").unwrap();
+    writeln!(s, "                    abs_a.v[0] = abs(a.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+    }
+    writeln!(
+        s,
+        "                    let e = jet_exp(jet_scale(jet_ln(abs_a), n));"
+    )
+    .unwrap();
+    for i in 0..k {
+        writeln!(s, "                    r.v[{i}] = sf * e.v[{i}];").unwrap();
+    }
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], n);").unwrap();
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(
+        s,
+        "                    r = jet_exp(jet_scale(jet_ln(a), n));"
+    )
+    .unwrap();
+    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "                }}").unwrap();
 }
 
 fn write_wgsl_main_kernel(s: &mut String, k: usize) {
@@ -659,26 +843,63 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     // REM: a % b = a - trunc(a[0]/b[0]) * b. Higher-order: r[k] = a[k] - q * b[k].
     writeln!(s, "            case 6u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
-    writeln!(s, "                let q = trunc(a.v[0] / b.v[0]);").unwrap();
-    writeln!(s, "                r.v[0] = a.v[0] - q * b.v[0];").unwrap();
-    for i in 1..k {
-        writeln!(s, "                r.v[{i}] = a.v[{i}] - q * b.v[{i}];").unwrap();
+    // Zero-leading divisor → all-NaN jet (matches CPU Taylor::rem), not the
+    // Inf/NaN mix that `trunc(x/0)` would produce.
+    writeln!(s, "                if (b.v[0] == 0.0) {{").unwrap();
+    for i in 0..k {
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+        )
+        .unwrap();
     }
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    let q = trunc(a.v[0] / b.v[0]);").unwrap();
+    writeln!(s, "                    r.v[0] = a.v[0] - q * b.v[0];").unwrap();
+    for i in 1..k {
+        writeln!(s, "                    r.v[{i}] = a.v[{i}] - q * b.v[{i}];").unwrap();
+    }
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
-    // POWF — guard a<=0 (ln(a) is NaN/Inf)
+    // POWF — a constant integer exponent (in i32 range) is routed to the powi
+    // jet, which is finite for any base (a<0 is well-defined at integer
+    // powers), mirroring CPU `taylor_powf`. A non-integer or variable exponent
+    // at a<=0 is genuinely NaN.
     writeln!(s, "            case 7u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
-    writeln!(s, "                if a.v[0] <= 0.0 {{").unwrap();
+    // `< 2^31` (not `<= i32::MAX`): 2147483647.0 rounds up to 2^31 in f32, so
+    // the `<=` form would admit 2^31 and overflow the `i32(..)` cast below.
+    let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && abs(b.v[0]) < 2147483648.0");
+    for i in 1..k {
+        b_int_cond.push_str(&format!(" && b.v[{i}] == 0.0"));
+    }
+    writeln!(s, "                let b_is_int = {b_int_cond};").unwrap();
+    writeln!(s, "                if b_is_int {{").unwrap();
+    write_wgsl_powi_jet(s, k, "b.v[0]", "i32(b.v[0])");
+    // Negative base with a non-constant-integer exponent: `a(t)^b(t)` is
+    // complex for a varying exponent → all-NaN jet (matches CPU `taylor_powf`).
+    // naga's `pow(neg, .)` is already NaN, but making it explicit keeps this in
+    // lockstep with the CUDA emit, where C `pow(-2,3) = -8` would otherwise
+    // leave a finite primal beside NaN derivative coefficients (a mixed jet).
+    writeln!(s, "                }} else if a.v[0] < 0.0 {{").unwrap();
+    for i in 0..k {
+        writeln!(
+            s,
+            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+        )
+        .unwrap();
+    }
+    writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
         s,
         "                    let da = b.v[0] * pow(a.v[0], b.v[0] - 1.0);"
     )
     .unwrap();
-    // CPU OpCode::Powf sets db = 0 for a ≤ 0 (finite r at a < 0 means b was
-    // integer; classical db at integer b is undefined, convention is 0).
-    // Any db from log(|a|) would diverge from the CPU.
+    // Reached only for a non-integer or variable exponent at a <= 0, where
+    // a^b is genuinely NaN (real result undefined) — the constant-integer
+    // case was routed to the powi jet above. db = 0 matches CPU OpCode::Powf.
     writeln!(s, "                    let db = 0.0;").unwrap();
     writeln!(s, "                    r.v[0] = val;").unwrap();
     if k > 1 {
@@ -930,7 +1151,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
     writeln!(
         s,
-        "                if a.v[0] >= b.v[0] {{ r = a; }} else {{ r = b; }}"
+        "                if a.v[0] >= b.v[0] || is_nan_f32(b.v[0]) {{ r = a; }} else {{ r = b; }}"
     )
     .unwrap();
     writeln!(s, "            }}").unwrap();
@@ -938,7 +1159,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
     writeln!(
         s,
-        "                if a.v[0] <= b.v[0] {{ r = a; }} else {{ r = b; }}"
+        "                if a.v[0] <= b.v[0] || is_nan_f32(b.v[0]) {{ r = a; }} else {{ r = b; }}"
     )
     .unwrap();
     writeln!(s, "            }}").unwrap();
@@ -991,85 +1212,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 
     // POWI — handle negative bases via sign(a)^n * exp(n * ln(|a|))
     writeln!(s, "            case 16u: {{").unwrap();
-    writeln!(s, "                let n = f32(bitcast<i32>(b_idx));").unwrap();
-    writeln!(s, "                let ni = bitcast<i32>(b_idx);").unwrap();
-    writeln!(s, "                if n == 0.0 {{").unwrap();
-    writeln!(s, "                    r = jet_const(1.0);").unwrap();
-    writeln!(s, "                }} else if n == 1.0 {{").unwrap();
-    writeln!(s, "                    r = a;").unwrap();
-    // a.v[0] == 0 with small |n| ≥ 2: use repeated jet multiplication to preserve
-    // higher-order Taylor coefficients (e.g., x^n at x=0 has the first nonzero
-    // coefficient at index n, which squaring reproduces correctly). The generic
-    // `a.v[0] <= 0.0` path below uses `log|a| = log(0) = -inf` and cannot
-    // represent these without poisoning all coefficients with NaN.
-    // Chain form matches CPU `taylor_powi_squaring`: a² := a·a, a³ := a²·a,
-    // a⁴ := a²·a², a⁵ := a⁴·a, a⁶ := a⁴·a², a⁷ := a⁴·a²·a, a⁸ := a⁴·a⁴.
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 2 {{").unwrap();
-    writeln!(s, "                    r = jet_mul(a, a);").unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 3 {{").unwrap();
-    writeln!(s, "                    r = jet_mul(jet_mul(a, a), a);").unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 4 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); r = jet_mul(a2, a2);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 5 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 6 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a2);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 7 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] == 0.0 && ni == 8 {{").unwrap();
-    writeln!(
-        s,
-        "                    let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a4);"
-    )
-    .unwrap();
-    writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
-    writeln!(
-        s,
-        "                    let sf = select(1.0, -1.0, ni % 2 != 0);"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "                    let sg = select(sign(a.v[0]), 1.0, a.v[0] == 0.0);"
-    )
-    .unwrap();
-    write!(
-        s,
-        "                    var abs_a: JetK;\n                    abs_a.v[0] = abs(a.v[0]);\n"
-    )
-    .unwrap();
-    for i in 1..k {
-        writeln!(s, "                    abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
-    }
-    writeln!(s, "                    let lna = jet_ln(abs_a);").unwrap();
-    writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
-    writeln!(s, "                    let e = jet_exp(nlna);").unwrap();
-    for i in 0..k {
-        writeln!(s, "                    r.v[{i}] = sf * e.v[{i}];").unwrap();
-    }
-    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
-    writeln!(s, "                }} else {{").unwrap();
-    writeln!(s, "                    let lna = jet_ln(a);").unwrap();
-    writeln!(s, "                    let nlna = jet_scale(lna, n);").unwrap();
-    writeln!(s, "                    r = jet_exp(nlna);").unwrap();
-    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
-    writeln!(s, "                }}").unwrap();
+    write_wgsl_powi_jet(s, k, "f32(bitcast<i32>(b_idx))", "bitcast<i32>(b_idx)");
     writeln!(s, "            }}").unwrap();
 
     // Transcendental unary
@@ -1082,7 +1225,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "            }}").unwrap();
     writeln!(s, "            case 19u: {{").unwrap();
     writeln!(s, "                r = jet_exp(a);").unwrap();
-    writeln!(s, "                r.v[0] = exp(a.v[0]) - 1.0;").unwrap();
+    writeln!(s, "                r.v[0] = expm1_f(a.v[0]);").unwrap();
     writeln!(s, "            }}").unwrap();
     writeln!(s, "            case 20u: {{ r = jet_ln(a); }}").unwrap();
     writeln!(s, "            case 21u: {{").unwrap();
@@ -1111,7 +1254,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         writeln!(s, "                one_plus_a.v[{i}] = a.v[{i}];").unwrap();
     }
     writeln!(s, "                r = jet_ln(one_plus_a);").unwrap();
-    writeln!(s, "                r.v[0] = log(1.0 + a.v[0]);").unwrap();
+    writeln!(s, "                r.v[0] = log1p_f(a.v[0]);").unwrap();
     writeln!(s, "            }}").unwrap();
 
     // Sin, Cos
@@ -1173,7 +1316,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                switch op {{").unwrap();
     writeln!(
         s,
-        "                    case 37u: {{ val = select(sign(a.v[0]), 1.0, a.v[0] == 0.0); }}"
+        "                    case 37u: {{ val = signum_f32(a.v[0]); }}"
     )
     .unwrap();
     writeln!(
@@ -1184,7 +1327,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                    case 39u: {{ val = ceil(a.v[0]); }}").unwrap();
     writeln!(
         s,
-        "                    case 40u: {{ val = round(a.v[0]); }}"
+        "                    case 40u: {{ let t = trunc(a.v[0]); val = select(t, t + select(-1.0, 1.0, a.v[0] >= 0.0), abs(a.v[0] - t) >= 0.5); }}"
     )
     .unwrap();
     writeln!(
@@ -1411,24 +1554,30 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
 
     // Ln
     writeln!(s, "__device__ JetK jet_ln(JetK a) {{").unwrap();
+    // Domain guard (mirrors CPU taylor_ln; covers log2/log10/ln1p by delegation).
+    write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)0");
     writeln!(s, "    JetK c;").unwrap();
-    writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
     writeln!(s, "    c.v[0] = log(a.v[0]);").unwrap();
-    for i in 1..k {
-        if i == 1 {
-            writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
-        } else {
-            let inv_i = 1.0 / i as f64;
-            let mut terms = Vec::new();
-            for j in 1..i {
-                terms.push(format!("(F){:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+    // `inv_a0` and the recurrence only exist for K > 1; emitting the
+    // declaration at K=1 (empty loop) leaves an unused variable in the kernel.
+    if k > 1 {
+        writeln!(s, "    F inv_a0 = (F)1 / a.v[0];").unwrap();
+        for i in 1..k {
+            if i == 1 {
+                writeln!(s, "    c.v[1] = a.v[1] * inv_a0;").unwrap();
+            } else {
+                let inv_i = 1.0 / i as f64;
+                let mut terms = Vec::new();
+                for j in 1..i {
+                    terms.push(format!("(F){:.1} * c.v[{j}] * a.v[{}]", j as f64, i - j));
+                }
+                writeln!(
+                    s,
+                    "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
+                    terms.join(" + ")
+                )
+                .unwrap();
             }
-            writeln!(
-                s,
-                "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
-                terms.join(" + ")
-            )
-            .unwrap();
         }
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
@@ -1436,6 +1585,14 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
     // Sqrt
     writeln!(s, "__device__ JetK jet_sqrt(JetK a) {{").unwrap();
     writeln!(s, "    JetK c;").unwrap();
+    // Uniform +Inf higher coeffs at a0==0 (vertical tangent), matching CPU taylor_sqrt.
+    writeln!(s, "    if (a.v[0] == (F)0) {{").unwrap();
+    writeln!(s, "        c.v[0] = (F)0;").unwrap();
+    for i in 1..k {
+        writeln!(s, "        c.v[{i}] = F(1.0/0.0);").unwrap();
+    }
+    writeln!(s, "        return c;").unwrap();
+    writeln!(s, "    }}").unwrap();
     writeln!(s, "    c.v[0] = sqrt(a.v[0]);").unwrap();
     if k > 1 {
         writeln!(s, "    F inv_2c0 = (F)0.5 / c.v[0];").unwrap();
@@ -1583,6 +1740,15 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
 
     for (name, d_expr, use_sqrt, c0_expr, negate) in &inv_trig_fns {
         writeln!(s, "__device__ JetK jet_{name}(JetK a) {{").unwrap();
+        // Series domain-NaN guard for the domain-restricted inverse fns (mirrors CPU
+        // taylor_acosh/taylor_atanh). asin/acos self-NaN via jet_sqrt(negative), and
+        // atan/asinh/acosh(via factoring)... only acosh (a0<1) and atanh (|a0|>1)
+        // leave finite higher coeffs out of domain, so only they need an explicit guard.
+        match *name {
+            "acosh" => write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)1"),
+            "atanh" => write_cuda_jet_nan_guard(s, k, "a.v[0] < (F)-1 || a.v[0] > (F)1"),
+            _ => {}
+        }
         writeln!(s, "    JetK asq = jet_mul(a, a);").unwrap();
         writeln!(s, "    JetK d;").unwrap();
 
@@ -1593,7 +1759,10 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
                 writeln!(s, "    d.v[{i}] = asq.v[{i}];").unwrap();
             }
         } else if d_expr.starts_with("1.0 -") {
-            writeln!(s, "    d.v[0] = (F)1 - asq.v[0];").unwrap();
+            // Factored `(1-a0)(1+a0)` for the leading denom coeff avoids
+            // cancellation near |a0|=1 (matches CPU taylor_asin/taylor_atanh and
+            // the acosh branch below); asin/acos/atanh all share this branch.
+            writeln!(s, "    d.v[0] = ((F)1 - a.v[0]) * ((F)1 + a.v[0]);").unwrap();
             for i in 1..k {
                 writeln!(s, "    d.v[{i}] = -asq.v[{i}];").unwrap();
             }
@@ -1632,6 +1801,60 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
         }
         writeln!(s, "    return c;\n}}\n").unwrap();
     }
+}
+
+/// Emit the CUDA Taylor-jet integer-power computation, mirroring CPU
+/// `taylor_powi` (and the WGSL `write_wgsl_powi_jet`): sets `r = a^exponent`,
+/// handling zero and negative bases. `n_expr` is an F exponent expression and
+/// `ni_expr` its int form. Shared by the POWI opcode and the constant-integer-
+/// exponent POWF path so the two cannot drift.
+fn write_cuda_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
+    writeln!(s, "            int ni = {ni_expr};").unwrap();
+    writeln!(s, "            F n = {n_expr};").unwrap();
+    writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
+    writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
+    // a.v[0] == 0 with small |n|: repeated squaring preserves higher-order
+    // coefficients (the log|a| = log(0) = -inf path poisons them). Matches CPU
+    // `taylor_powi_squaring`.
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 2) {{ r = jet_mul(a, a); }}"
+    )
+    .unwrap();
+    writeln!(
+        s,
+        "            else if (a.v[0] == F(0) && ni == 3) {{ r = jet_mul(jet_mul(a, a), a); }}"
+    )
+    .unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 4) {{ JetK a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 5) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 6) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 7) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}").unwrap();
+    writeln!(s, "            else if (a.v[0] == F(0) && ni == 8) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}").unwrap();
+    // Negative base (or a==0 with |n|>8): sign(a)^n * |a|^n. C `pow` handles a
+    // negative base at an integer exponent (Annex F), so r.v[0] stays native.
+    writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
+    writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
+    writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
+    writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
+    }
+    writeln!(
+        s,
+        "                JetK e = jet_exp(jet_scale(jet_ln(abs_a), n));"
+    )
+    .unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = sf * e.v[{i}];").unwrap();
+    }
+    writeln!(s, "                r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(
+        s,
+        "            else {{ r = jet_exp(jet_scale(jet_ln(a), n)); r.v[0] = pow(a.v[0], n); }}"
+    )
+    .unwrap();
 }
 
 fn write_cuda_main_kernel(s: &mut String, k: usize) {
@@ -1743,6 +1966,13 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     for c in 0..k {
         writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
     }
+    // Zero-leading divisor → all-NaN jet (matches CPU Taylor::rem).
+    writeln!(s, "            if (b.v[0] == (F)0) {{").unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
+    }
+    writeln!(s, "                break;").unwrap();
+    writeln!(s, "            }}").unwrap();
     writeln!(s, "            F q = trunc(a.v[0] / b.v[0]);").unwrap();
     writeln!(s, "            r.v[0] = fmod(a.v[0], b.v[0]);").unwrap();
     for i in 1..k {
@@ -1751,7 +1981,9 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // POWF — guard a<=0 (ln(a) is NaN/Inf)
+    // POWF — a constant integer exponent (in i32 range) is routed to the powi
+    // jet, finite for any base (a<0 is well-defined at integer powers),
+    // mirroring CPU `taylor_powf`. A non-integer/variable exponent at a<=0 is NaN.
     writeln!(s, "        case 7: {{").unwrap();
     writeln!(
         s,
@@ -1761,15 +1993,33 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     for c in 0..k {
         writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
     }
-    writeln!(s, "            if (a.v[0] <= F(0)) {{").unwrap();
+    // `< 2^31` (not `<= i32::MAX`): 2147483647 rounds up to 2^31 in f32, so the
+    // `<=` form would admit 2^31 and overflow the `(int)` cast below.
+    let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && fabs(b.v[0]) < F(2147483648.0)");
+    for i in 1..k {
+        b_int_cond.push_str(&format!(" && b.v[{i}] == F(0)"));
+    }
+    writeln!(s, "            bool b_is_int = {b_int_cond};").unwrap();
+    writeln!(s, "            if (b_is_int) {{").unwrap();
+    write_cuda_powi_jet(s, k, "b.v[0]", "(int)b.v[0]");
+    // Negative base with a non-constant-integer exponent → all-NaN jet (matches
+    // CPU `taylor_powf` and the WGSL twin). C `pow(-2,3) = -8` is finite, so
+    // force NaN here — otherwise the primal would be finite beside NaN
+    // derivative coefficients (a mixed jet), diverging from CPU.
+    writeln!(s, "            }} else if (a.v[0] < F(0)) {{").unwrap();
+    for i in 0..k {
+        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
+    }
+    writeln!(s, "            }} else if (a.v[0] <= F(0)) {{").unwrap();
     writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
     writeln!(
         s,
         "                F da = b.v[0] * pow(a.v[0], b.v[0] - F(1));"
     )
     .unwrap();
-    // CPU OpCode::Powf sets db = 0 for a ≤ 0 (finite val at a < 0 means b was
-    // integer; classical db at integer b is undefined, convention is 0).
+    // Reached only for a non-integer or variable exponent at a <= 0, where
+    // a^b is genuinely NaN — the constant-integer case is routed to the powi
+    // jet above. db = 0 matches CPU OpCode::Powf.
     writeln!(s, "                F db = F(0);").unwrap();
     writeln!(s, "                r.v[0] = val;").unwrap();
     if k > 1 {
@@ -1985,7 +2235,8 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
-    // MAX, MIN
+    // MAX, MIN — `|| isnan(b.v[0])` mirrors CPU Taylor::max/min's `|| other.is_nan()`
+    // tie-break, so max(x, NaN) returns the finite operand instead of the NaN.
     for (case, cmp) in &[(10, ">="), (11, "<=")] {
         writeln!(s, "        case {case}: {{").unwrap();
         writeln!(
@@ -1996,7 +2247,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         for c in 0..k {
             writeln!(s, "            b.v[{c}] = jets[b_off + {c}];").unwrap();
         }
-        writeln!(s, "            r = (a.v[0] {cmp} b.v[0]) ? a : b; break;").unwrap();
+        writeln!(
+            s,
+            "            r = (a.v[0] {cmp} b.v[0] || isnan(b.v[0])) ? a : b; break;"
+        )
+        .unwrap();
         writeln!(s, "        }}").unwrap();
     }
 
@@ -2032,71 +2287,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // POWI — handle negative bases via sign(a)^n * exp(n * ln(|a|))
     writeln!(s, "        case 16: {{").unwrap();
-    writeln!(s, "            int ni = (int)b_idx;").unwrap();
-    writeln!(s, "            F n = (F)ni;").unwrap();
-    writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
-    writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
-    // a.v[0] == 0 with small |n| ≥ 2: use repeated jet_mul to preserve
-    // higher-order Taylor coefficients. The `log|a| = log(0) = -inf` path
-    // below poisons all coefficients with NaN at a = 0, so explicit squaring
-    // for |n| ∈ {2,…,8} is required to match CPU `taylor_powi_squaring`.
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 2) {{ r = jet_mul(a, a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 3) {{ r = jet_mul(jet_mul(a, a), a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 4) {{ JetK a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 5) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 6) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 7) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}"
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "            else if (a.v[0] == F(0) && ni == 8) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}"
-    )
-    .unwrap();
-    writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
-    writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
-    writeln!(s, "                F sg = _sign(a.v[0]);").unwrap();
-    writeln!(s, "                JetK abs_a; abs_a.v[0] = fabs(a.v[0]);").unwrap();
-    for i in 1..k {
-        writeln!(s, "                abs_a.v[{i}] = sg * a.v[{i}];").unwrap();
-    }
-    writeln!(
-        s,
-        "                JetK e = jet_exp(jet_scale(jet_ln(abs_a), n));"
-    )
-    .unwrap();
-    for i in 0..k {
-        writeln!(s, "                r.v[{i}] = sf * e.v[{i}];").unwrap();
-    }
-    writeln!(s, "                r.v[0] = pow(a.v[0], n);").unwrap();
-    writeln!(s, "            }}").unwrap();
-    writeln!(
-        s,
-        "            else {{ r = jet_exp(jet_scale(jet_ln(a), n)); r.v[0] = pow(a.v[0], n); }}"
-    )
-    .unwrap();
+    write_cuda_powi_jet(s, k, "(F)ni", "(int)b_idx");
     writeln!(s, "            break;").unwrap();
     writeln!(s, "        }}").unwrap();
 
@@ -2105,7 +2296,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        case 18: {{ r = jet_exp(jet_scale(a, log((F)2))); r.v[0] = exp2(a.v[0]); break; }}").unwrap();
     writeln!(
         s,
-        "        case 19: {{ r = jet_exp(a); r.v[0] = exp(a.v[0]) - (F)1; break; }}"
+        "        case 19: {{ r = jet_exp(a); r.v[0] = expm1(a.v[0]); break; }}"
     )
     .unwrap();
     writeln!(s, "        case 20: r = jet_ln(a); break;").unwrap();
@@ -2140,7 +2331,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     }
     writeln!(
         s,
-        "            r = jet_ln(opa); r.v[0] = log((F)1 + a.v[0]); break;"
+        "            r = jet_ln(opa); r.v[0] = log1p(a.v[0]); break;"
     )
     .unwrap();
     writeln!(s, "        }}").unwrap();
@@ -2277,5 +2468,209 @@ mod tests {
             let cuda = generate_taylor_cuda(k);
             assert!(cuda.contains(&format!("F v[{k}]")));
         }
+    }
+
+    // asin/acos/atanh jet denominators use the cancellation-safe factored
+    // `(1 - a0)(1 + a0)` (matching CPU `taylor_asin`/`taylor_atanh` and the
+    // already-factored `jet_acosh`) rather than the naive `1 - a0^2`, which
+    // loses the `eps^2` term near `|a0| = 1`. The higher coefficients stay
+    // `-asq.v[i]` (bit-identical to the factored expansion). The f32 GPU path
+    // cannot demonstrate the precision gain within the parity tolerance floor
+    // (see gpu_cpu_parity.rs acosh near-1 note), so this codegen assertion is
+    // the load-bearing regression pin.
+    #[test]
+    fn m7_inverse_trig_denominators_factored() {
+        let wgsl = generate_taylor_wgsl(3);
+        // asin/acos/atanh each emit the factored leading denominator.
+        assert_eq!(
+            wgsl.matches("d.v[0] = (1.0 - a.v[0]) * (1.0 + a.v[0]);")
+                .count(),
+            3,
+            "asin/acos/atanh must all emit the factored `(1-a0)(1+a0)` denominator"
+        );
+        // The naive unfactored form must be gone (atan keeps `1.0 + asq.v[0]`).
+        assert!(
+            !wgsl.contains("d.v[0] = 1.0 - asq.v[0];"),
+            "no jet denominator may keep the naive `1 - a0^2` form"
+        );
+
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("d.v[0] = ((F)1 - a.v[0]) * ((F)1 + a.v[0]);"),
+            "CUDA `1.0 -` table branch must emit the factored denominator"
+        );
+        assert!(
+            !cuda.contains("d.v[0] = (F)1 - asq.v[0];"),
+            "CUDA must not keep the naive `1 - a0^2` denominator"
+        );
+    }
+
+    // EXPM1/LN1P patch only the primal `v[0]`; the naive `exp(x)-1` / `log(1+x)`
+    // lose accuracy for small `x`. WGSL uses guard-free polyfills: a Taylor/Mercator
+    // series for `|x| < 0.125` (no cancellation) and the naive `exp(x)-1.0` /
+    // `log(1.0+x)` above the threshold, which give the correct limits directly
+    // (`+Inf` for large x since `+Inf - 1 = +Inf`; `-Inf` at `x = -1` since
+    // `log(0) = -Inf`). CUDA uses the native `expm1`/`log1p` device intrinsics.
+    #[test]
+    fn m9_expm1_ln1p_accurate_primal() {
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(wgsl.contains("fn expm1_f(x: f32) -> f32"));
+        assert!(wgsl.contains("fn log1p_f(x: f32) -> f32"));
+        assert!(wgsl.contains("r.v[0] = expm1_f(a.v[0]);"));
+        assert!(wgsl.contains("r.v[0] = log1p_f(a.v[0]);"));
+        // Both polyfills use the series-below-0.125 / naive-above split (the Kahan
+        // trick is defeated by Metal fast-math: it reassociates expm1's grouping to
+        // overflow, and folds log1p's `(1+x)-1` back to `x`). expm1_f falls back to
+        // `exp(x) - 1.0` above the threshold (right limits: +Inf / -1 without guards).
+        let expm1_body = wgsl[wgsl.find("fn expm1_f").unwrap()..]
+            .split("fn log1p_f")
+            .next()
+            .unwrap();
+        assert!(
+            expm1_body.contains("abs(x) < 0.125") && expm1_body.contains("exp(x) - 1.0"),
+            "expm1_f must use the series-below-0.125 / naive-above split"
+        );
+        assert!(
+            wgsl[wgsl.find("fn log1p_f").unwrap()..].contains("abs(x) < 0.125"),
+            "log1p_f must use the series-below-0.125 split"
+        );
+        // The naive primal forms must be gone.
+        assert!(!wgsl.contains("r.v[0] = exp(a.v[0]) - 1.0;"));
+        assert!(!wgsl.contains("r.v[0] = log(1.0 + a.v[0]);"));
+
+        let cuda = generate_taylor_cuda(3);
+        assert!(cuda.contains("r.v[0] = expm1(a.v[0]);"));
+        assert!(cuda.contains("r.v[0] = log1p(a.v[0]);"));
+        assert!(!cuda.contains("r.v[0] = exp(a.v[0]) - (F)1;"));
+        assert!(!cuda.contains("r.v[0] = log((F)1 + a.v[0]);"));
+    }
+
+    // Series domain-NaN guards: jet_ln (covers ln/log2/log10/ln1p by delegation),
+    // jet_acosh, and jet_atanh emit an all-NaN jet strictly outside the real domain,
+    // mirroring the CPU taylor_ln/taylor_acosh/taylor_atanh guards. Strict `<`
+    // comparisons keep the branch-point boundary (ln@0, acosh@1, atanh@±1) singular.
+    #[test]
+    fn m_series_domain_nan_guards_present() {
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(wgsl.contains("if (a.v[0] < 0.0) {"), "jet_ln domain guard");
+        assert!(
+            wgsl.contains("if (a.v[0] < 1.0) {"),
+            "jet_acosh domain guard"
+        );
+        assert!(
+            wgsl.contains("if (a.v[0] < -1.0 || a.v[0] > 1.0) {"),
+            "jet_atanh domain guard"
+        );
+
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("if (a.v[0] < (F)0) {"),
+            "CUDA jet_ln domain guard"
+        );
+        assert!(
+            cuda.contains("if (a.v[0] < (F)1) {"),
+            "CUDA jet_acosh domain guard"
+        );
+        assert!(
+            cuda.contains("if (a.v[0] < (F)-1 || a.v[0] > (F)1) {"),
+            "CUDA jet_atanh domain guard"
+        );
+    }
+
+    #[test]
+    fn m_powf_neg_base_all_nan_in_both_backends() {
+        // taylor_powf convention (Option A): a negative base with a
+        // non-constant-integer exponent gives an all-NaN jet on both backends.
+        // CUDA's C `pow(-2,3) = -8` is forced to NaN to match CPU + WGSL,
+        // avoiding a mixed (finite primal / NaN derivative) jet.
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(
+            wgsl.contains("} else if a.v[0] < 0.0 {"),
+            "WGSL powf neg-base all-NaN branch"
+        );
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("} else if (a.v[0] < F(0)) {"),
+            "CUDA powf neg-base all-NaN branch"
+        );
+    }
+
+    #[test]
+    fn jet_ln_omits_inv_a0_at_k1() {
+        // At K=1 the ln recurrence loop is empty, so `inv_a0` must not be
+        // emitted — an unused binding is a shader-compile warning.
+        assert!(
+            !generate_taylor_wgsl(1).contains("inv_a0"),
+            "K=1 WGSL jet_ln must not emit inv_a0"
+        );
+        assert!(
+            generate_taylor_wgsl(3).contains("inv_a0"),
+            "K=3 WGSL jet_ln must emit inv_a0"
+        );
+        assert!(
+            !generate_taylor_cuda(1).contains("inv_a0"),
+            "K=1 CUDA jet_ln must not emit inv_a0"
+        );
+        assert!(
+            generate_taylor_cuda(3).contains("inv_a0"),
+            "K=3 CUDA jet_ln must emit inv_a0"
+        );
+    }
+
+    // GPU-low parity: MAX/MIN keep CPU's NaN tie-break (`|| other.is_nan()`), jet_sqrt
+    // gives a uniform +Inf higher-coeff jet at a0==0 (not sign-dependent Inf/NaN), and
+    // REM by a zero-leading divisor returns an all-NaN jet (matching CPU Taylor::rem).
+    #[test]
+    fn m_gpu_low_parity_max_min_sqrt_rem() {
+        let wgsl = generate_taylor_wgsl(3);
+        // MAX/MIN: the NaN-of-b tie-break makes max(x, NaN) return the finite operand.
+        assert_eq!(
+            wgsl.matches("|| is_nan_f32(b.v[0])").count(),
+            2,
+            "WGSL MAX and MIN must both carry the NaN tie-break"
+        );
+        // jet_sqrt: uniform +Inf branch at a0==0.
+        assert!(
+            wgsl.contains("fn jet_sqrt") && wgsl.contains("if (a.v[0] == 0.0) {"),
+            "WGSL jet_sqrt must guard a0==0"
+        );
+        // REM: all-NaN when the divisor's leading coeff is zero.
+        assert!(
+            wgsl.contains("if (b.v[0] == 0.0) {"),
+            "WGSL REM must guard a zero-leading divisor"
+        );
+
+        let cuda = generate_taylor_cuda(3);
+        assert!(
+            cuda.contains("|| isnan(b.v[0])"),
+            "CUDA MAX/MIN must carry the NaN tie-break"
+        );
+        assert!(
+            cuda.contains("if (a.v[0] == (F)0) {"),
+            "CUDA jet_sqrt must guard a0==0"
+        );
+        assert!(
+            cuda.contains("if (b.v[0] == (F)0) {"),
+            "CUDA REM must guard a zero-leading divisor"
+        );
+    }
+
+    // GPU-low (WGSL primal conventions): SIGNUM uses the sign-bit helper (so -0.0
+    // gives -1, not +1), and ROUND is ties-away-from-zero (WGSL `round()` is
+    // ties-to-even). CUDA's `round`/`copysign` are already ties-away / sign-bit.
+    #[test]
+    fn m_wgsl_signum_round_conventions() {
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(wgsl.contains("fn signum_f32"));
+        assert!(wgsl.contains("val = signum_f32(a.v[0]);"));
+        assert!(!wgsl.contains("val = select(sign(a.v[0]), 1.0"));
+        // Ties-away via trunc-then-fractional-compare (`a - trunc(a)` is exact, so
+        // no double-rounding — the additive `trunc(a+0.5)` form regresses large
+        // odd integers and `nextbelow(0.5)`).
+        assert!(wgsl.contains(
+            "let t = trunc(a.v[0]); val = select(t, t + select(-1.0, 1.0, a.v[0] >= 0.0), abs(a.v[0] - t) >= 0.5);"
+        ));
+        assert!(!wgsl.contains("val = round(a.v[0]);"));
+        assert!(!wgsl.contains("trunc(a.v[0] + select(-0.5, 0.5"));
     }
 }

@@ -150,6 +150,14 @@ pub fn jacobian<F: Float>(
             })
             .collect();
         let outputs = f(&inputs);
+        assert_eq!(
+            outputs.len(),
+            jac.len(),
+            "function produced {} outputs but the Jacobian was sized for {} — \
+             a `zip` here would silently drop the mismatch",
+            outputs.len(),
+            jac.len()
+        );
         for (row, out) in jac.iter_mut().zip(outputs.iter()) {
             row[j] = out.eps;
         }

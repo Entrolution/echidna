@@ -382,7 +382,10 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
 /// * `x0` - Initial state
 /// * `num_steps` - Number of times to apply `step`
 /// * `num_checkpoints` - Number of checkpoint slots
-/// * `dir` - Directory to store checkpoint files. Must exist.
+/// * `dir` - Directory in which checkpoint files are stored. Must exist.
+///   Each invocation creates — and removes on completion or panic — its own
+///   uniquely-named subdirectory, so a single scratch directory can be
+///   shared by concurrent or nested gradient computations.
 ///
 /// # Safety considerations
 ///
@@ -392,7 +395,8 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
 ///
 /// # Panics
 ///
-/// Panics if `dir` doesn't exist, on I/O errors, or if `step` changes dimension.
+/// Panics if `dir` doesn't exist, if the per-invocation subdirectory cannot
+/// be created, on I/O errors, or if `step` changes dimension.
 pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
     step: impl Fn(&[BReverse<F>]) -> Vec<BReverse<F>>,
     loss: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
@@ -421,13 +425,23 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
     all_positions.truncate(num_checkpoints);
     let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
-    // Drop guard ensures cleanup even on panic.
-    let mut guard = DiskCheckpointGuard { files: Vec::new() };
+    // Isolate this invocation in a uniquely-named subdirectory: concurrent
+    // or nested computations may share `dir`, and fixed filenames would let
+    // one run overwrite — or delete during cleanup — checkpoints another
+    // run still needs, silently corrupting its recomputed segments.
+    let run_dir = unique_run_dir(dir);
 
-    // Write initial state (step 0).
-    let path_0 = dir.join("ckpt_0.bin");
+    // Drop guard ensures cleanup even on panic (files, then the run dir).
+    let mut guard = DiskCheckpointGuard {
+        files: Vec::new(),
+        run_dir: Some(run_dir.clone()),
+    };
+
+    // Write initial state (step 0). Paths are registered with the guard
+    // BEFORE writing, so a panic mid-write cannot leak a partial file.
+    let path_0 = run_dir.join("ckpt_0.bin");
+    guard.files.push(path_0.clone());
     write_checkpoint(x0, &path_0);
-    guard.files.push(path_0);
 
     // Forward pass: run all steps, saving checkpoints to disk.
     let mut current_state = x0.to_vec();
@@ -443,9 +457,9 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 
         let next_step = s + 1;
         if next_step < num_steps && checkpoint_positions.contains(&next_step) {
-            let path = dir.join(format!("ckpt_{}.bin", next_step));
+            let path = run_dir.join(format!("ckpt_{}.bin", next_step));
+            guard.files.push(path.clone());
             write_checkpoint(&current_state, &path);
-            guard.files.push(path);
         }
     }
 
@@ -477,7 +491,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
         let seg_len = seg_end - ckpt_step;
 
         // Read checkpoint state from disk.
-        let path = dir.join(format!("ckpt_{}.bin", ckpt_step));
+        let path = run_dir.join(format!("ckpt_{}.bin", ckpt_step));
         let ckpt_state = read_checkpoint::<F>(&path, dim);
 
         // Recompute states in this segment from the checkpoint.
@@ -530,14 +544,42 @@ fn read_checkpoint<F: Float>(path: &std::path::Path, dim: usize) -> Vec<F> {
     state
 }
 
+/// Create a uniquely-named subdirectory of `dir` for one invocation's
+/// checkpoint files. The name combines the process id, wall-clock
+/// nanoseconds, and a process-wide counter, so concurrent processes,
+/// nested calls, and rapid sequential calls all get distinct directories.
+fn unique_run_dir(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let run_dir = dir.join(format!(
+        "ckpt-{}-{:x}-{}",
+        std::process::id(),
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&run_dir).expect("failed to create checkpoint subdirectory");
+    run_dir
+}
+
 struct DiskCheckpointGuard {
     files: Vec<std::path::PathBuf>,
+    /// The per-invocation subdirectory, removed after the files. Every
+    /// created file is registered in `files` before it is written, so the
+    /// directory is empty by the time it is removed.
+    run_dir: Option<std::path::PathBuf>,
 }
 
 impl DiskCheckpointGuard {
     fn cleanup(&mut self) {
         for f in self.files.drain(..) {
             let _ = std::fs::remove_file(f);
+        }
+        if let Some(d) = self.run_dir.take() {
+            let _ = std::fs::remove_dir(d);
         }
     }
 }

@@ -1,25 +1,22 @@
 //! Per-opcode math kernels (single source of truth for formulas).
 //!
-//! Historical context: before this module, each opcode's numerical
-//! formula was duplicated across several CPU AD types (`Dual`,
-//! `DualVec`, `Reverse`, `BReverse`, `Laurent`) and the bytecode-tape
-//! opcode dispatcher (`opcode.rs`). The GPU side — WGSL shaders and the
-//! CUDA NVRTC kernel — carry yet another copy in their respective
-//! source-level languages. A change to one copy could drift silently
-//! from the others; Phase 7 of Cycle 6 found multiple such drifts
-//! (atan large-|a|, div small-|b|, hypot Inf handling).
+//! Each opcode's numerical formula is easy to duplicate across the CPU AD
+//! types (`Dual`, `DualVec`, `Reverse`, `BReverse`, `Laurent`) and the
+//! bytecode-tape opcode dispatcher (`opcode.rs`), with the GPU side — WGSL
+//! shaders and the CUDA NVRTC kernel — carrying yet another copy in their
+//! respective source-level languages. A change to one copy can drift silently
+//! from the others; such drift has produced real bugs (atan large-|a|, div
+//! small-|b|, hypot Inf handling, out-of-domain log/atanh partials).
 //!
-//! Going forward, any numerical formula shared between the CPU AD
-//! types **and** the opcode dispatcher should live here as a single
-//! generic function over `num_traits::Float`. Each AD type then
-//! delegates to the helper, so CPU drift becomes impossible. GPU
-//! drift is caught by `tests/gpu_cpu_parity.rs`.
-//!
-//! Scope note: This module is intentionally minimal at the start.
-//! Only the formulas most prone to recent drift (hypot partials,
-//! atan large-|a|) are extracted; the rest remain inline in the AD
-//! types and opcode dispatcher. Every extraction here must come with
-//! a call-site refactor so we don't add abstraction for its own sake.
+//! Any numerical formula shared between the CPU AD types **and** the opcode
+//! dispatcher should live here as a single generic function over
+//! `num_traits::Float`; each AD type delegates to the helper so CPU drift
+//! becomes impossible, and GPU drift is caught by `tests/gpu_cpu_parity.rs`
+//! (and `tests/domain_nan_convention.rs` for the out-of-domain convention).
+//! Currently extracted: `hypot_partials`, `atan2_partials`, `atan_deriv`,
+//! `asinh_deriv`, `acosh_deriv`, and the domain-guarded log / `atanh`
+//! derivatives below. Every new extraction must come with a call-site refactor
+//! so we don't add abstraction for its own sake.
 
 use num_traits::Float;
 
@@ -96,28 +93,39 @@ pub fn asinh_deriv<T: Float>(a: T) -> T {
     }
 }
 
-/// Derivative of `acosh(a) = ln(a + sqrt(a²-1))` with a large-|a|
-/// overflow-safe path.
+/// Derivative of `acosh(a) = ln(a + sqrt(a²-1))`, guarded to the domain `a >= 1`
+/// with a large-`a` overflow-safe path.
 ///
-/// For `|a| ≤ 1e8`, returns `1/sqrt((a-1)·(a+1))`. The factored form
-/// (vs naive `a*a - 1`) avoids catastrophic cancellation near `a = 1`:
-/// at `a = 1 + ε`, `a*a` rounds to `1 + 2ε` and `a*a - 1 = 2ε` loses
-/// the `ε²` contribution, while `(a-1)·(a+1) = ε·(2 + ε)` retains it.
-/// For `|a| > 1e8`, uses `u = 1/a` and `|u|/sqrt(1-u²)`.
+/// Strictly outside the domain (`a < 1`) returns NaN, matching [`ln_deriv`] /
+/// [`atanh_deriv`]: the factored `(a-1)·(a+1)` self-guards only for `-1 < a < 1`
+/// (sqrt of a negative), but `a <= -1` leaves it `>= 0` → a finite but meaningless
+/// value (and `-Inf` at `a = -1` via `1/sqrt(-0.0)`), as does the overflow branch,
+/// so the guard is explicit. The boundary `a = 1` keeps the IEEE `1/sqrt(0) = +Inf`
+/// one-sided limit.
 ///
-/// The WGSL shaders (`reverse.wgsl`, `tangent_forward.wgsl`,
-/// `tangent_reverse.wgsl`, plus the `acosh_f32` primal helper in
-/// `forward.wgsl`), the CUDA kernel (`tape_eval.cu` at three derivative
-/// sites), and the Taylor jet codegen (`taylor_codegen.rs` for both
-/// WGSL and CUDA emitters, including the `acosh_f` primal helper) all
-/// use the same factored form so CPU and GPU stay in lockstep. The
-/// regression test `acosh_deriv_factored_form_keeps_precision_near_one`
-/// below pins the f64 behaviour — any swap back to `a*a - 1` will
-/// trip it.
+/// For `1 <= a <= 1e8`, returns `1/sqrt((a-1)·(a+1))`. The factored form (vs naive
+/// `a*a - 1`) avoids catastrophic cancellation near `a = 1`: at `a = 1 + ε`, `a*a`
+/// rounds to `1 + 2ε` and `a*a - 1 = 2ε` loses the `ε²` contribution, while
+/// `(a-1)·(a+1) = ε·(2 + ε)` retains it. For `a > 1e8`, uses `u = 1/a` and
+/// `|u|/sqrt(1-u²)`.
+///
+/// Every CPU AD mode (`Dual`, `DualVec`, `Reverse`) and the bytecode `OpCode`
+/// dispatcher delegate here, so the factored form and the domain guard share a
+/// single source of truth. The GPU kernels carry the same factored form and guard
+/// in their own languages: the wgpu shaders (`reverse.wgsl`, `tangent_forward.wgsl`,
+/// `tangent_reverse.wgsl` — both HVP phases) and the CUDA `tape_eval.cu` at all four
+/// derivative sweeps (reverse, tangent-forward, and both HVP phases). Pinned by
+/// `acosh_deriv_factored_form_keeps_precision_near_one` (factoring) and
+/// `tests/domain_nan_convention.rs` (the guard, cross-mode + GPU).
 #[inline]
 pub fn acosh_deriv<T: Float>(a: T) -> T {
     let one = T::one();
-    if a.abs() > T::from(1e8).unwrap() {
+    // Domain guard first (see doc): a < 1 is strictly out of domain. After it,
+    // `a >= 1`, so the large-|a| test can use `a` directly instead of `a.abs()`.
+    if a < one {
+        return T::nan();
+    }
+    if a > T::from(1e8).unwrap() {
         let inv = one / a;
         inv.abs() / (one - inv * inv).sqrt()
     } else {
@@ -125,9 +133,151 @@ pub fn acosh_deriv<T: Float>(a: T) -> T {
     }
 }
 
+/// Derivative of `ln(a) = 1/a`, guarded to the real domain.
+///
+/// Domain-restricted logs emit a NaN partial *strictly* outside their valid
+/// interval (`a < 0`) so a caller that supplied an out-of-domain input sees NaN
+/// rather than a finite-but-meaningless value (`1/-2 = -0.5`). The boundary
+/// `a = 0` is left to IEEE arithmetic — `1/0 = +Inf`, the correct one-sided
+/// derivative limit. Every AD mode and the bytecode `OpCode` dispatcher delegate
+/// here so the convention has a single source of truth; the wgpu and CUDA
+/// kernels carry the same guard in their own languages (reverse, forward-tangent,
+/// and HVP sweeps), pinned by `tests/domain_nan_convention.rs`.
+#[inline]
+pub fn ln_deriv<T: Float>(a: T) -> T {
+    if a >= T::zero() {
+        T::one() / a
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `log2(a) = 1/(a·ln 2)`, guarded to `a >= 0` (see [`ln_deriv`]).
+#[inline]
+pub fn log2_deriv<T: Float>(a: T) -> T {
+    if a >= T::zero() {
+        T::one() / (a * T::from(2.0).unwrap().ln())
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `log10(a) = 1/(a·ln 10)`, guarded to `a >= 0` (see [`ln_deriv`]).
+#[inline]
+pub fn log10_deriv<T: Float>(a: T) -> T {
+    if a >= T::zero() {
+        T::one() / (a * T::from(10.0).unwrap().ln())
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `ln(1+a) = 1/(1+a)`, guarded to `a >= -1`.
+///
+/// The boundary `a = -1` yields IEEE `1/0 = +Inf`; `a < -1` yields NaN.
+#[inline]
+pub fn ln_1p_deriv<T: Float>(a: T) -> T {
+    if a >= -T::one() {
+        T::one() / (T::one() + a)
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative of `atanh(a) = 1/((1-a)(1+a))`, guarded to `|a| <= 1`.
+///
+/// Unlike `asin`/`acos` (whose `sqrt(neg)` self-guards to NaN), `atanh`'s
+/// derivative is a bare reciprocal that stays finite for `|a| > 1`
+/// (`1/((1-1.5)(1+1.5)) = -0.8`), so it needs an explicit domain guard. The
+/// boundary `|a| = 1` yields IEEE `1/0 = +Inf`.
+#[inline]
+pub fn atanh_deriv<T: Float>(a: T) -> T {
+    if a >= -T::one() && a <= T::one() {
+        T::one() / ((T::one() - a) * (T::one() + a))
+    } else {
+        T::nan()
+    }
+}
+
+/// Derivative (subgradient) of `|a|`, unified across every AD mode and both GPU
+/// backends: `0` at the kink `a = 0`, `sign(a)` elsewhere, `NaN` at `NaN`.
+///
+/// `0` is the minimal-norm element of the Clarke subdifferential `[-1, 1]` at the
+/// kink — the convention PyTorch / JAX / TensorFlow use. Crucially it is *value*-
+/// based: `a == 0` catches both `+0.0` and `-0.0`, so the result never depends on
+/// the sign bit of a zero (which is reachable via `0*-1`, `x - x`, underflow…).
+/// Relying on `a.signum()` alone would leak that sign bit — `signum(+0.0) = +1`,
+/// `signum(-0.0) = -1` in Rust — making algebraically equivalent points report
+/// different subgradients. `NaN` flows through via `signum(NaN) = NaN`.
+///
+/// Every eager AD type (`Dual`, `DualVec`, `Reverse`) and the bytecode `OpCode`
+/// dispatcher delegate here; the wgpu and CUDA kernels carry the same
+/// `a == 0 -> 0` guard. Sharp/limiting subgradients (Clarke, `jacobian_limiting`)
+/// still force `±1` explicitly via `forced_reverse_partials`, independent of this
+/// smooth default.
+#[inline]
+pub fn abs_deriv<T: Float>(a: T) -> T {
+    if a == T::zero() {
+        T::zero()
+    } else {
+        a.signum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domain_restricted_derivs_guard_outside_and_keep_boundary() {
+        // Out of domain → NaN (not finite garbage).
+        assert!(ln_deriv(-2.0_f64).is_nan());
+        assert!(log2_deriv(-2.0_f64).is_nan());
+        assert!(log10_deriv(-2.0_f64).is_nan());
+        assert!(ln_1p_deriv(-2.0_f64).is_nan());
+        assert!(atanh_deriv(1.5_f64).is_nan());
+        assert!(atanh_deriv(-1.5_f64).is_nan());
+
+        // Boundary → IEEE +Inf one-sided limit.
+        assert!(ln_deriv(0.0_f64).is_infinite() && ln_deriv(0.0_f64) > 0.0);
+        assert!(log2_deriv(0.0_f64).is_infinite() && log2_deriv(0.0_f64) > 0.0);
+        assert!(log10_deriv(0.0_f64).is_infinite() && log10_deriv(0.0_f64) > 0.0);
+        assert!(ln_1p_deriv(-1.0_f64).is_infinite() && ln_1p_deriv(-1.0_f64) > 0.0);
+        assert!(atanh_deriv(1.0_f64).is_infinite() && atanh_deriv(1.0_f64) > 0.0);
+        assert!(atanh_deriv(-1.0_f64).is_infinite() && atanh_deriv(-1.0_f64) > 0.0);
+
+        // In domain → known values.
+        assert!((ln_deriv(2.0_f64) - 0.5).abs() < 1e-15);
+        assert!((log2_deriv(2.0_f64) - 1.0 / (2.0 * 2.0_f64.ln())).abs() < 1e-15);
+        assert!((log10_deriv(2.0_f64) - 1.0 / (2.0 * 10.0_f64.ln())).abs() < 1e-15);
+        assert!((ln_1p_deriv(3.0_f64) - 0.25).abs() < 1e-15);
+        assert!((atanh_deriv(0.5_f64) - 1.0 / (0.75)).abs() < 1e-15);
+
+        // acosh: domain is a >= 1. Strictly outside → NaN. The factored form
+        // self-guards for -1 < a < 1 (sqrt of a negative), but a <= -1 leaves
+        // (a-1)(a+1) >= 0 → finite garbage (and -Inf at a=-1 via 1/sqrt(-0.0)),
+        // and the large-|a| overflow branch stays finite for a <= -1e8, so an
+        // explicit guard is required for those legs.
+        assert!(acosh_deriv(-1.5_f64).is_nan());
+        assert!(acosh_deriv(-2.0_f64).is_nan());
+        assert!(acosh_deriv(0.5_f64).is_nan());
+        assert!(acosh_deriv(-1.0_f64).is_nan());
+        assert!(acosh_deriv(-1e9_f64).is_nan()); // overflow-branch leg
+                                                 // Boundary a=1 → +Inf (1/sqrt(0)); in domain a=2 → 1/sqrt(3).
+        assert!(acosh_deriv(1.0_f64).is_infinite() && acosh_deriv(1.0_f64) > 0.0);
+        assert!((acosh_deriv(2.0_f64) - 1.0 / 3.0_f64.sqrt()).abs() < 1e-15);
+    }
+
+    #[test]
+    fn abs_deriv_is_zero_at_the_kink_regardless_of_sign_bit() {
+        // The kink returns 0 (minimal-norm subgradient), value-based so +0 and -0
+        // agree; sign(a) elsewhere; NaN -> NaN.
+        assert_eq!(abs_deriv(0.0_f64), 0.0);
+        assert_eq!(abs_deriv(-0.0_f64), 0.0);
+        assert_eq!(abs_deriv(2.0_f64), 1.0);
+        assert_eq!(abs_deriv(-3.0_f64), -1.0);
+        assert!(abs_deriv(f64::NAN).is_nan());
+    }
 
     /// Pin the factored-form precision near `a = 1`. The factored form
     /// `(a-1)·(a+1)` and the unfactored form `a*a - 1` are mathematically

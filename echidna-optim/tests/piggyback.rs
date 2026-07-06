@@ -69,6 +69,42 @@ fn tangent_solve_linear_contraction() {
 }
 
 // ============================================================
+// Test 2b: tangent_solve_warm_started_primal
+// ============================================================
+
+#[test]
+fn tangent_solve_warm_started_primal() {
+    // Same map as above — G(z, x) = 0.5*z + x, z* = 2x, ż* = (1 - 0.5)⁻¹·ẋ = 2ẋ —
+    // but the primal starts AT the fixed point. The tangent always starts at
+    // zero and needs its own ~40 iterations: ż_k = (1 - 0.5^k)·2. A solver
+    // that gates convergence on the primal delta alone returns after one
+    // step with ż = 1 (a single Neumann term), half the true JVP.
+    let (tape, _) = record_multi(
+        |v| {
+            let z = v[0];
+            let x = v[1];
+            let half = x / (x + x);
+            vec![half * z + x]
+        },
+        &[0.0_f64, 3.0],
+    );
+
+    let result = piggyback_tangent_solve(&tape, &[6.0], &[3.0], &[1.0], 1, 200, 1e-12);
+    let (z_star, z_dot_star, _) = result.expect("should converge");
+
+    assert!(
+        (z_star[0] - 6.0).abs() < 1e-10,
+        "z* = {}, expected 6",
+        z_star[0]
+    );
+    assert!(
+        (z_dot_star[0] - 2.0).abs() < 1e-8,
+        "ż* = {}, expected 2 (a primal-only convergence gate returns 1)",
+        z_dot_star[0]
+    );
+}
+
+// ============================================================
 // Test 3: tangent_solve_2d_contraction
 // ============================================================
 

@@ -295,11 +295,10 @@ fn multiple_custom_ops_on_same_tape() {
 
 #[test]
 fn custom_op_jvp() {
-    // f(x, y) = softplus(x) + y
-    // Test the Jacobian through a custom op. `jacobian_forward` now asserts
-    // no custom ops (linearization around recording-time primals biases the
-    // result at x ≠ x_record); use the reverse-mode `jacobian` instead, which
-    // honours `CustomOp::partials` exactly.
+    // f(x, y) = softplus(x) + y. Both the reverse-mode `jacobian` and the
+    // forward-mode `jacobian_forward` compute the Jacobian exactly through the
+    // custom op — forward mode via `CustomOp::eval_dual` (exact first order at
+    // the evaluation point, not a recording-time linearization).
     let x = [2.0_f64, 3.0];
     let mut tape = record_with_customs(&x, vec![Arc::new(Softplus)], |v, h, xv| {
         let sp_val = softplus(xv[0]);
@@ -307,8 +306,9 @@ fn custom_op_jvp() {
         sp + v[1]
     });
 
-    let jac = tape.jacobian(&x);
     let expected_dx = sigmoid(2.0);
+
+    let jac = tape.jacobian(&x);
     assert!(
         (jac[0][0] - expected_dx).abs() < 1e-10,
         "df/dx={}, expected={}",
@@ -319,6 +319,73 @@ fn custom_op_jvp() {
         (jac[0][1] - 1.0).abs() < 1e-10,
         "df/dy={}, expected=1.0",
         jac[0][1]
+    );
+
+    let jac_fwd = tape.jacobian_forward(&x);
+    assert!(
+        (jac_fwd[0][0] - expected_dx).abs() < 1e-10,
+        "forward df/dx={}, expected={}",
+        jac_fwd[0][0],
+        expected_dx
+    );
+    assert!(
+        (jac_fwd[0][1] - 1.0).abs() < 1e-10,
+        "forward df/dy={}, expected=1.0",
+        jac_fwd[0][1]
+    );
+}
+
+// `jacobian_forward` computes the exact Jacobian through custom ops via
+// `CustomOp::eval_dual`, evaluated at the given `x` — not a linearization frozen
+// at the recording point. Recorded at x0=1, evaluated at x1=2: the derivative
+// must be sigmoid(2), not the recording-point sigmoid(1).
+#[test]
+fn jacobian_forward_exact_custom_op_off_recording_point() {
+    let tape = record_with_customs(&[1.0_f64], vec![Arc::new(Softplus)], |v, h, xv| {
+        let sp_val = softplus(xv[0]);
+        v[0].custom_unary(h[0], sp_val)
+    });
+
+    let jac = tape.jacobian_forward(&[2.0_f64]);
+    let exact = sigmoid(2.0);
+    let recording_point = sigmoid(1.0);
+    assert!(
+        (jac[0][0] - exact).abs() < 1e-10,
+        "expected sigmoid(2)={exact}, got {}",
+        jac[0][0]
+    );
+    assert!(
+        (jac[0][0] - recording_point).abs() > 1e-3,
+        "must not be the recording-point value sigmoid(1)={recording_point}"
+    );
+}
+
+// The dense (`jacobian_forward`), serial (`sparse_jacobian`), and parallel
+// (`sparse_jacobian_par`) Jacobian paths must all agree on the exact Jacobian
+// through a custom op evaluated off the recording point. They reach it by
+// different routes — dense via `CustomOp::eval_dual`, the sparse paths via a
+// `forward(x)`-refreshed sweep — so this pins their consistency.
+#[test]
+fn forward_jacobian_paths_agree_through_custom_ops() {
+    let x1 = [2.0_f64];
+    let exact = sigmoid(2.0);
+    let mut tape = record_with_customs(&[1.0_f64], vec![Arc::new(Softplus)], |v, h, xv| {
+        let sp_val = softplus(xv[0]);
+        v[0].custom_unary(h[0], sp_val)
+    });
+
+    let dense = tape.jacobian_forward(&x1)[0][0];
+    #[cfg(feature = "parallel")]
+    let parallel = tape.sparse_jacobian_par(&x1).2;
+    let serial = tape.sparse_jacobian(&x1).2;
+
+    assert!((dense - exact).abs() < 1e-10, "dense={dense}");
+    assert!((serial[0] - exact).abs() < 1e-10, "serial={}", serial[0]);
+    #[cfg(feature = "parallel")]
+    assert!(
+        (parallel[0] - exact).abs() < 1e-10,
+        "parallel={}",
+        parallel[0]
     );
 }
 

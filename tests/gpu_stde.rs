@@ -8,6 +8,10 @@ use echidna::gpu::CudaContext;
 use echidna::gpu::WgpuContext;
 use echidna::gpu::{GpuBackend, GpuTapeData};
 
+// The shared helpers below are each used by a feature-dependent subset of
+// the tests (some sections are wgpu- or cuda-only), so under a single-backend
+// build a helper can be legitimately unused.
+#[allow(dead_code)]
 fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     let one = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(1.0).unwrap());
     let hundred = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(100.0).unwrap());
@@ -16,10 +20,12 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     dx * dx + hundred * t * t
 }
 
+#[allow(dead_code)]
 fn polynomial<T: Scalar>(x: &[T]) -> T {
     x[0] * x[0] + x[1] * x[1]
 }
 
+#[allow(dead_code)]
 fn trig_func<T: Scalar>(x: &[T]) -> T {
     let two = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.0).unwrap());
     x[0].sin() * x[1].cos() + (x[0] * x[1] / two).exp()
@@ -219,6 +225,37 @@ fn check_1d(
     );
 }
 
+/// Assert the GPU jet PRIMAL (`values[0]`) matches an f64 reference to within a
+/// relative tolerance. Used for M9 (expm1/ln1p small-arg accuracy): the naive
+/// `exp(x)-1`/`log(1+x)` lose ~5-100% relative accuracy at `x ~ 1e-6..1e-7` in
+/// f32, the series polyfills recover it. The reference is taken at the actually
+/// uploaded f32 input so the check isolates the primal-formula error from f32
+/// input quantization.
+#[cfg(feature = "stde")]
+fn check_primal_rel(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+    truth: fn(f64) -> f64,
+    tol: f64,
+    label: &str,
+) {
+    let x = [x0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap();
+    let want = truth(x0 as f32 as f64);
+    let got = gpu_result.values[0] as f64;
+    let rel = (got - want).abs() / want.abs().max(f64::MIN_POSITIVE);
+    assert!(
+        rel < tol,
+        "{label}: gpu primal={got} truth={want} rel={rel} (tol {tol})"
+    );
+}
+
 fn f_exp<T: Scalar>(x: &[T]) -> T {
     x[0].exp()
 }
@@ -290,6 +327,12 @@ fn f_powi3<T: Scalar>(x: &[T]) -> T {
 }
 fn f_powf25<T: Scalar>(x: &[T]) -> T {
     let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(2.5).unwrap());
+    x[0].powf(exp)
+}
+fn f_powf3<T: Scalar>(x: &[T]) -> T {
+    // Integer exponent recorded via `powf` (OpCode::Powf, no integer lowering),
+    // so the negative-base Taylor-jet path is exercised.
+    let exp = T::from_f(<T::Float as num_traits::FromPrimitive>::from_f64(3.0).unwrap());
     x[0].powf(exp)
 }
 fn f_arith<T: Scalar>(x: &[T]) -> T {
@@ -391,6 +434,12 @@ macro_rules! opcode_tests_for_backend {
                 };
                 check_1d(&ctx, f_powf25, 2.0, "powf");
                 check_1d(&ctx, f_powi3, 2.0, "powi");
+                // Negative base with integer exponent: x³ at x=-2 has value -8
+                // and finite Taylor coefficients. WGSL `pow(x<0, ·)` is
+                // undefined; the codegen routes constant-integer POWF/POWI
+                // through the sign-correcting powi jet.
+                check_1d(&ctx, f_powi3, -2.0, "powi_neg");
+                check_1d(&ctx, f_powf3, -2.0, "powf_neg");
             }
             #[test]
             fn op_arithmetic() {
@@ -416,6 +465,265 @@ macro_rules! opcode_tests_for_backend {
                 };
                 check_1d(&ctx, f_abs_fn, -2.0, "abs_neg");
                 check_1d(&ctx, f_abs_fn, 2.0, "abs_pos");
+            }
+
+            // M7: near-|x|=1 finiteness + coarse-parity regression anchor. This
+            // is deliberately NOT red-first — the factored-vs-naive precision
+            // gain is below the f32 parity floor here (cf. gpu_cpu_parity.rs
+            // acosh near-1); the factoring itself is pinned by the codegen-string
+            // test `m7_inverse_trig_denominators_factored`.
+            #[test]
+            fn op_asin_acos_atanh_near_boundary() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                for &x in &[0.9_f64, 0.99] {
+                    check_1d(&ctx, f_asin, x, "asin_near");
+                    check_1d(&ctx, f_acos, x, "acos_near");
+                    check_1d(&ctx, f_atanh, x, "atanh_near");
+                }
+            }
+
+            // M9: expm1/ln1p small-arg accuracy. Genuinely red-first on Metal —
+            // the naive f32 primal is ~5% wrong at 1e-6 and ~100% wrong at 1e-7,
+            // the series polyfills reach < 1e-3 relative.
+            #[test]
+            fn op_expm1_ln1p_primal_accuracy() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                check_primal_rel(&ctx, f_exp_m1, 1e-6, |x| x.exp_m1(), 1e-3, "expm1@1e-6");
+                check_primal_rel(&ctx, f_exp_m1, 1e-7, |x| x.exp_m1(), 1e-3, "expm1@1e-7");
+                check_primal_rel(&ctx, f_ln_1p, 1e-6, |x| x.ln_1p(), 1e-3, "ln1p@1e-6");
+                check_primal_rel(&ctx, f_ln_1p, 1e-7, |x| x.ln_1p(), 1e-3, "ln1p@1e-7");
+            }
+
+            // M9: above the series threshold expm1_f falls back to `exp(x)-1.0`;
+            // for x past the f32 exp-overflow point (~88.7) that is `+Inf - 1 = +Inf`.
+            // Pins the large-x limit.
+            #[test]
+            fn op_expm1_overflow_stays_inf() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (tape, _) = record(f_exp_m1, &[90.0_f64]);
+                let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+                let tape_buf = ctx.upload_tape(&gpu_data);
+                let r = ctx
+                    .taylor_forward_2nd_batch(&tape_buf, &[90.0f32], &[1.0f32], 1)
+                    .unwrap();
+                assert!(
+                    r.values[0].is_infinite() && r.values[0] > 0.0,
+                    "expm1(90) primal must be +Inf, got {}",
+                    r.values[0]
+                );
+                // Just BELOW the overflow point expm1(87)=6.08e37 is finite and
+                // f32-representable, and `exp(87)-1.0` is exact there. (A Kahan
+                // `(u-1)*x/log(u)` form would overflow the `um1*x` intermediate to
+                // +Inf here — Metal fast-math even reassociates a parenthesized
+                // `um1*(x/log u)` back into it — which is why the split avoids it.)
+                // CPU/CUDA stay finite, so WGSL must too.
+                check_primal_rel(&ctx, f_exp_m1, 87.0, |x| x.exp_m1(), 1e-3, "expm1@87");
+            }
+
+            // Series domain-NaN jets: strictly outside the real domain the GPU jet
+            // must be all-NaN (mirroring the CPU taylor_ln/taylor_atanh/taylor_acosh
+            // guards), not a NaN primal beside finite higher coefficients.
+            #[test]
+            fn op_series_out_of_domain() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                use CoeffClass::NaN;
+                // Genuine red-first: pre-guard these divide by a finite quantity out
+                // of domain (jet_ln 1/a0; jet_atanh recip(1-a0^2); jet_acosh at a<=-1
+                // where (a-1)(a+1)>0), leaving finite c1/c2 beside a NaN primal.
+                check_series_domain_jet(&ctx, f_ln, -2.0, NaN, NaN, NaN, "ln@-2");
+                check_series_domain_jet(&ctx, f_log2, -2.0, NaN, NaN, NaN, "log2@-2");
+                check_series_domain_jet(&ctx, f_log10, -2.0, NaN, NaN, NaN, "log10@-2");
+                check_series_domain_jet(&ctx, f_ln_1p, -2.0, NaN, NaN, NaN, "ln1p@-2");
+                check_series_domain_jet(&ctx, f_acosh, -2.0, NaN, NaN, NaN, "acosh@-2");
+                check_series_domain_jet(&ctx, f_atanh, 1.5, NaN, NaN, NaN, "atanh@1.5");
+                // Green anchors: already all-NaN pre-guard — asin/acos self-NaN via
+                // jet_sqrt(negative-leading) for c1/c2, with c0 from the native
+                // asin/acos builtin (NaN out of [-1,1] on both Metal and CUDA);
+                // acosh(0.5) via (0.5-1)(0.5+1)<0.
+                check_series_domain_jet(&ctx, f_asin, 1.5, NaN, NaN, NaN, "asin@1.5");
+                check_series_domain_jet(&ctx, f_acos, 1.5, NaN, NaN, NaN, "acos@1.5");
+                check_series_domain_jet(&ctx, f_acosh, 0.5, NaN, NaN, NaN, "acosh@0.5");
+            }
+
+            // The strict `<` domain guards must NOT clobber the in-domain boundary
+            // to NaN (over-guard tripwire): acosh(1)=0, atanh(1)=+Inf, ln1p(-1)=-Inf,
+            // ln(0)=-Inf all keep their branch-point value.
+            #[test]
+            fn op_series_domain_boundary_stays_singular() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                assert_eq!(
+                    series_jet_primal(&ctx, f_acosh, 1.0),
+                    0.0,
+                    "acosh(1) primal must be 0, not NaN"
+                );
+                let atanh1 = series_jet_primal(&ctx, f_atanh, 1.0);
+                assert!(
+                    atanh1.is_infinite() && atanh1 > 0.0,
+                    "atanh(1) primal must be +Inf, got {atanh1}"
+                );
+                // Both directions of the compound atanh guard (`< -1 || > 1`): the
+                // `-1` boundary must also stay singular, not be clobbered to NaN.
+                let atanh_neg1 = series_jet_primal(&ctx, f_atanh, -1.0);
+                assert!(
+                    atanh_neg1.is_infinite() && atanh_neg1 < 0.0,
+                    "atanh(-1) primal must be -Inf, got {atanh_neg1}"
+                );
+                let ln1p_neg1 = series_jet_primal(&ctx, f_ln_1p, -1.0);
+                assert!(
+                    ln1p_neg1.is_infinite() && ln1p_neg1 < 0.0,
+                    "ln1p(-1) primal must be -Inf, got {ln1p_neg1}"
+                );
+                let ln0 = series_jet_primal(&ctx, f_ln, 0.0);
+                assert!(
+                    ln0.is_infinite() && ln0 < 0.0,
+                    "ln(0) primal must be -Inf, got {ln0}"
+                );
+            }
+
+            // GPU-low: MAX/MIN keep CPU's NaN tie-break — max(x, NaN) = min(x, NaN) = x,
+            // the finite operand (pre-fix `x >= NaN` is false so GPU returned NaN).
+            #[test]
+            fn op_max_min_nan_tiebreak() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (mx, _, _) = run_binary_jet(
+                    &ctx,
+                    |v| num_traits::Float::max(v[0], v[1]),
+                    1.0,
+                    f32::NAN,
+                    [1.0, 0.0],
+                );
+                assert_eq!(mx, 1.0, "max(1, NaN) must be the finite operand, got {mx}");
+                let (mn, _, _) = run_binary_jet(
+                    &ctx,
+                    |v| num_traits::Float::min(v[0], v[1]),
+                    1.0,
+                    f32::NAN,
+                    [1.0, 0.0],
+                );
+                assert_eq!(mn, 1.0, "min(1, NaN) must be the finite operand, got {mn}");
+            }
+
+            // GPU-low: REM by a zero-leading divisor is an all-NaN jet (matches CPU
+            // Taylor::rem), not the Inf/NaN mix from trunc(x/0).
+            #[test]
+            fn op_rem_zero_divisor_all_nan() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (c0, c1, c2) = run_binary_jet(&ctx, |v| v[0] % v[1], 3.0, 0.0, [1.0, 0.0]);
+                assert!(
+                    c0.is_nan() && c1.is_nan() && c2.is_nan(),
+                    "x % 0 jet must be all-NaN, got ({c0}, {c1}, {c2})"
+                );
+            }
+
+            // GPU-low (WGSL primal conventions): SIGNUM(-0.0) = -1 (sign-bit, not
+            // the +1 that `a >= 0.0` gave), and ROUND is ties-away-from-zero (WGSL
+            // `round()` is ties-to-even). Exercised through the Taylor-jet primal.
+            #[test]
+            fn op_signum_round_wgsl_conventions() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let neg_zero = f32::from_bits(0x8000_0000);
+                let sn = series_jet_primal(
+                    &ctx,
+                    |v| num_traits::sign::Signed::signum(&v[0]),
+                    neg_zero as f64,
+                );
+                assert_eq!(sn, -1.0, "signum(-0.0) jet primal must be -1, got {sn}");
+                // ties-away: round(2.5)=3, round(-2.5)=-3, round(0.5)=1 (ties-to-even
+                // would give 2, -2, 0).
+                let r_up = series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), 2.5);
+                assert_eq!(r_up, 3.0, "round(2.5) must be 3 (ties away), got {r_up}");
+                let r_dn = series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), -2.5);
+                assert_eq!(r_dn, -3.0, "round(-2.5) must be -3 (ties away), got {r_dn}");
+                let r_half = series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), 0.5);
+                assert_eq!(
+                    r_half, 1.0,
+                    "round(0.5) must be 1 (ties away), got {r_half}"
+                );
+                // Regression: the additive `trunc(a+0.5)` form double-rounds — it
+                // off-by-ones large odd integers and rounds nextbelow(0.5) up to 1.
+                let r_bigodd =
+                    series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), 8388609.0);
+                assert_eq!(
+                    r_bigodd, 8388609.0,
+                    "round(8388609) must be itself, got {r_bigodd}"
+                );
+                let below_half = f32::from_bits(0x3EFFFFFF); // nextbelow(0.5) ~ 0.49999997
+                let r_nb =
+                    series_jet_primal(&ctx, |v| num_traits::Float::round(v[0]), below_half as f64);
+                assert_eq!(r_nb, 0.0, "round(nextbelow(0.5)) must be 0, got {r_nb}");
+            }
+
+            // GPU-low: sqrt at a0==0 gives a uniform +Inf higher-coeff jet (vertical
+            // tangent), not the sign-dependent +Inf/-Inf the recurrence produced.
+            #[test]
+            fn op_sqrt_zero_uniform_inf() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (tape, _) = record(f_sqrt, &[0.0_f64]);
+                let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+                let tape_buf = ctx.upload_tape(&gpu_data);
+                let r = ctx
+                    .taylor_forward_2nd_batch(&tape_buf, &[0.0f32], &[1.0f32], 1)
+                    .unwrap();
+                assert_eq!(r.values[0], 0.0, "sqrt(0) primal must be 0");
+                assert!(
+                    r.c1s[0].is_infinite() && r.c1s[0] > 0.0,
+                    "sqrt(0) c1 must be +Inf, got {}",
+                    r.c1s[0]
+                );
+                assert!(
+                    r.c2s[0].is_infinite() && r.c2s[0] > 0.0,
+                    "sqrt(0) c2 must be +Inf (uniform), got {}",
+                    r.c2s[0]
+                );
+            }
+
+            // M9: ln1p(-1) is the domain singularity -Inf. x=-1 is above the series
+            // threshold, so log1p_f returns the naive `log(1.0 + (-1)) = log(0) = -Inf`
+            // (NOT -1). Pins that the small-|x| series branch never clamps x=-1.
+            #[test]
+            fn op_ln1p_neg_one_is_singular() {
+                let ctx = match get_ctx() {
+                    Some(c) => c,
+                    None => return,
+                };
+                let (tape, _) = record(f_ln_1p, &[-1.0_f64]);
+                let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+                let tape_buf = ctx.upload_tape(&gpu_data);
+                let r = ctx
+                    .taylor_forward_2nd_batch(&tape_buf, &[-1.0f32], &[1.0f32], 1)
+                    .unwrap();
+                assert!(
+                    r.values[0].is_infinite() && r.values[0] < 0.0,
+                    "ln1p(-1) primal must be -Inf, got {}",
+                    r.values[0]
+                );
             }
         }
     };
@@ -510,6 +818,32 @@ fn gpu_hessian_diagonal_matches_cpu() {
             c
         );
     }
+}
+
+// hessian_diagonal_gpu reads `values[0]` / per-element `c2s` assuming a scalar
+// output; on a multi-output tape that silently interleaves. The guard (shared
+// backend-agnostic Rust, fires before any GPU dispatch) must reject it, matching
+// `laplacian_gpu`.
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_hessian_diagonal_rejects_multi_output() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let (tape, _) = echidna::record_multi(
+        |v: &[echidna::BReverse<f64>]| vec![v[0] * v[0], v[1] * v[1]],
+        &[1.0_f64, 2.0],
+    );
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let res = echidna::gpu::stde_gpu::hessian_diagonal_gpu(&ctx, &tape_buf, &[1.0f32, 2.0]);
+    assert!(
+        res.is_err(),
+        "hessian_diagonal_gpu must reject a multi-output tape"
+    );
 }
 
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
@@ -1275,6 +1609,74 @@ fn check_hypot_jet_non_finite_higher(
     check(gpu_result.values[0], primal_class, "c0");
     check(gpu_result.c1s[0], c1_class, "c1");
     check(gpu_result.c2s[0], c2_class, "c2");
+}
+
+/// Single-input analogue of `check_hypot_jet_non_finite_higher`: classify the
+/// primal / c1 / c2 of a unary op's GPU jet. Used for the series domain-NaN
+/// guards (`jet_ln`/`jet_atanh`/`jet_acosh` must return an all-NaN jet strictly
+/// outside the real domain, mirroring the CPU `taylor_*` kernels).
+#[cfg(feature = "stde")]
+fn check_series_domain_jet(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+    primal_class: CoeffClass,
+    c1_class: CoeffClass,
+    c2_class: CoeffClass,
+    label: &str,
+) {
+    let x = [x0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let gpu_result = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap();
+    let check = |v: f32, cls: CoeffClass, slot: &str| match cls {
+        CoeffClass::Zero => assert!(v == 0.0, "{label} {slot}: expected 0, got {v}"),
+        CoeffClass::Inf => assert!(v.is_infinite(), "{label} {slot}: expected Inf, got {v}"),
+        CoeffClass::NaN => assert!(v.is_nan(), "{label} {slot}: expected NaN, got {v}"),
+    };
+    check(gpu_result.values[0], primal_class, "c0");
+    check(gpu_result.c1s[0], c1_class, "c1");
+    check(gpu_result.c2s[0], c2_class, "c2");
+}
+
+/// Run a binary-op GPU jet and return `(c0, c1, c2)`. Used for the GPU-low parity
+/// tests (MAX/MIN NaN tie-break, REM zero-divisor) where the inputs include NaN/0.
+#[cfg(feature = "stde")]
+fn run_binary_jet(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f32,
+    x1: f32,
+    seed: [f32; 2],
+) -> (f32, f32, f32) {
+    // The tape is structural (`f(in0, in1)`); the NaN/0 inputs only matter at eval.
+    let (tape, _) = record(f, &[x0 as f64, x1 as f64]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let r = ctx
+        .taylor_forward_2nd_batch(&tape_buf, &[x0, x1], &seed, 1)
+        .unwrap();
+    (r.values[0], r.c1s[0], r.c2s[0])
+}
+
+/// Read only the GPU jet primal (`values[0]`) of a unary op — for the domain
+/// boundary anchors (strict `<` guards must not clobber the in-domain boundary
+/// to NaN).
+#[cfg(feature = "stde")]
+fn series_jet_primal(
+    ctx: &impl GpuBackend,
+    f: fn(&[echidna::BReverse<f64>]) -> echidna::BReverse<f64>,
+    x0: f64,
+) -> f32 {
+    let (tape, _) = record(f, &[x0]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    ctx.taylor_forward_2nd_batch(&tape_buf, &[x0 as f32], &[1.0f32], 1)
+        .unwrap()
+        .values[0]
 }
 
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]

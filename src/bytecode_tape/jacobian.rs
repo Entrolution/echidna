@@ -135,20 +135,13 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// More efficient than reverse mode when `num_inputs < num_outputs`.
     ///
-    /// # Panics
-    ///
-    /// Panics if the tape contains custom ops. `forward_tangent` linearizes
-    /// custom ops around recording-time primals, so at an evaluation `x`
-    /// different from the recording inputs the Jacobian would be silently
-    /// biased. Matches the behaviour of `hessian_vec`, `sparse_hessian_vec`,
-    /// and `sparse_jacobian_vec`.
+    /// Custom ops are handled exactly (first order) via `CustomOp::eval_dual`,
+    /// which propagates the tangent at the evaluation point `x` — so the
+    /// Jacobian is correct at any `x`, not a linearization frozen at the
+    /// recording inputs. (Second-order paths — `hessian_vec`,
+    /// `sparse_hessian_vec` — still reject custom ops, since their linearizing
+    /// sweep is only first-order-accurate.)
     pub fn jacobian_forward(&self, x: &[F]) -> Vec<Vec<F>> {
-        assert!(
-            self.custom_ops.is_empty(),
-            "jacobian_forward: custom ops produce a linearization around recording-\
-             time primals; use `jacobian` (reverse mode) for exact Jacobians through \
-             custom ops"
-        );
         let n = self.num_inputs as usize;
 
         let out_indices = self.all_output_indices();
@@ -166,7 +159,7 @@ impl<F: Float> super::BytecodeTape<F> {
                 (0..n).map(|i| Dual::new(x[i], if i == col { F::one() } else { F::zero() })),
             );
 
-            self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
+            self.forward_tangent_dual(&dual_input_buf, &mut dual_vals_buf);
 
             for (row_idx, &out_idx) in out_indices.iter().enumerate() {
                 jac[row_idx][col] = dual_vals_buf[out_idx as usize].eps;

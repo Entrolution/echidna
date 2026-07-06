@@ -647,6 +647,20 @@ pub fn hessian<F: Float + TaylorArenaLocal>(
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 
+    // Constant-output tape (n == 0): there are no derivatives. Recover the
+    // constant via the primal forward pass and return an empty gradient and
+    // Hessian — matching `BytecodeTape::hessian` — instead of panicking in
+    // `JetPlan::plan`, which rejects the empty multi-index list this would build.
+    if n == 0 {
+        let mut values_buf = Vec::new();
+        tape.forward_into(&[], &mut values_buf);
+        let value = values_buf
+            .get(tape.output_index())
+            .copied()
+            .unwrap_or_else(F::zero);
+        return (value, Vec::new(), Vec::new());
+    }
+
     let mut indices = Vec::with_capacity(n + n * (n + 1) / 2);
 
     // First-order partials
