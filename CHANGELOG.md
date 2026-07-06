@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-06
+
+**Coordinated release:** `echidna` 0.13.0 and `echidna-optim` 0.13.3.
+`echidna-optim`'s dep on `echidna` updated from `0.12.0` to `0.13.0`.
+
+Minor bump: the optional `nalgebra` and `simba` integrations move to new
+major versions (`nalgebra` 0.35, `simba` 0.10), an ABI-breaking change for
+consumers of those features. No echidna API or numerical behaviour changed.
+
 ### Changed (echidna)
 
 - Bumped the optional `nalgebra` integration from 0.34 to 0.35 and the
@@ -15,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versions; no echidna API changed. (The dev-only `num-dual` benchmark
   comparison dependency was bumped to 0.14 to keep the workspace on a single
   `nalgebra` version.)
+
+### Changed (echidna-optim, 0.13.3)
+
+- `echidna` dep updated from `0.12.0` to `0.13.0` (follows the coordinated
+  release; `echidna-optim`'s public API is unchanged).
 
 ## [0.12.0] - 2026-07-05
 
@@ -976,7 +990,8 @@ types changed; the bump reflects the wgpu API-break that downstream
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Entrolution/echidna/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Entrolution/echidna/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Entrolution/echidna/compare/v0.10.0...v0.11.0
 [0.5.0]: https://github.com/Entrolution/echidna/compare/v0.4.1...v0.5.0
