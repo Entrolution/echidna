@@ -51,6 +51,10 @@ impl WgpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // wgpu 30 added limit bucketing (adapter-fingerprinting mitigation
+                // for untrusted content). echidna is a trusted native compute host,
+                // so keep the full reported limits available.
+                apply_limit_buckets: false,
             })
             .await
             .ok()?;
@@ -533,7 +537,9 @@ impl WgpuContext {
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
             .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let raw: &[f32] = bytemuck::cast_slice(&data);
 
         // Deinterleave: raw is [c0, c1, ..., c_{K-1}] per output per batch element
@@ -799,7 +805,9 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
             .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging_buf.unmap();
@@ -1027,12 +1035,16 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
             .map_err(|e| GpuError::Other(format!("grad map failed: {e}")))?;
 
-        let out_data = out_slice.get_mapped_range();
+        let out_data = out_slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let outputs: Vec<f32> = bytemuck::cast_slice(&out_data).to_vec();
         drop(out_data);
         output_staging.unmap();
 
-        let grad_data = grad_slice.get_mapped_range();
+        let grad_data = grad_slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let grads: Vec<f32> = bytemuck::cast_slice(&grad_data).to_vec();
         drop(grad_data);
         grad_staging.unmap();
@@ -1224,7 +1236,9 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("recv: {e}")))?
             .map_err(|e| GpuError::Other(format!("map: {e}")))?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let tangent_results: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging.unmap();
@@ -1457,12 +1471,16 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("{e}")))?
             .map_err(|e| GpuError::Other(format!("{e}")))?;
 
-        let gd = gs.get_mapped_range();
+        let gd = gs
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let grads: Vec<f32> = bytemuck::cast_slice(&gd).to_vec();
         drop(gd);
         grad_staging.unmap();
 
-        let hd = hs.get_mapped_range();
+        let hd = hs
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let hvps: Vec<f32> = bytemuck::cast_slice(&hd).to_vec();
         drop(hd);
         hvp_staging.unmap();
