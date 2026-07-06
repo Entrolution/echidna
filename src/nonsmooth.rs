@@ -35,13 +35,16 @@ pub struct KinkEntry<F: Float> {
     /// Distance from the kink point:
     /// - `Abs`, `Signum`: `x` (kink at `x = 0`)
     /// - `Min`, `Max`: `a - b` (kink at `a = b`)
-    /// - `Floor`, `Ceil`, `Round`, `Trunc`: `x - round(x)` (kink at integers)
+    /// - `Floor`, `Ceil`, `Trunc`: `x - round(x)` (kink at integers)
+    /// - `Round`: `(x + 0.5) - round(x + 0.5)` (kink at half-integers)
     pub switching_value: F,
     /// Which branch was taken:
     /// - `Abs`, `Signum`: `+1` if `x >= 0`, `-1` if `x < 0`
     /// - `Max`: `+1` if `a >= b` (first wins), `-1` if `b > a`
     /// - `Min`: `+1` if `a <= b` (first wins), `-1` if `b < a`
     /// - `Floor`, `Ceil`, `Round`, `Trunc`: `+1` if `fract(x) < 0.5`, `-1` otherwise
+    /// - `Fract`: `+1` if `fract(x) >= 0`, `-1` otherwise — nominal, since
+    ///   `fract'` is side-independent (a value jump, not a derivative kink)
     pub branch: i8,
 }
 

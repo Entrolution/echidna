@@ -362,3 +362,67 @@ fn l23_wgpu_powi_n1_at_zero_second_derivative_finite() {
     );
     assert_eq!(hv[0], 0.0, "Hessian of linear function is zero");
 }
+
+// ── H1: power ops at a negative base — value, gradient, and HVP must be
+// finite and match CPU. WGSL `pow(x<0, y)` is undefined (→ NaN); the
+// `powf_real` helper restores the sign for integer exponents. This exercises
+// the tangent_reverse HVP kernel (the reverse-gradient path is covered by the
+// `powi`/`powf_int` cases in gpu_cpu_parity.rs). Generic over the backend so
+// both wgpu and CUDA run the identical check.
+#[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
+fn check_negative_base_power_hvp<B: GpuBackend>(ctx: &B) {
+    // f(x) = x³ at x = -2:  value -8,  gradient 3x² = 12,  Hessian 6x = -12.
+    // `powf(3.0)` records OpCode::Powf (no integer lowering); `powi(3)`
+    // records OpCode::Powi — both must handle the negative base.
+    let cases: [(&str, echidna::BytecodeTape<f64>); 2] = [
+        (
+            "powf",
+            record(
+                |v: &[BReverse<f64>]| v[0].powf(BReverse::constant(3.0)),
+                &[-2.0_f64],
+            )
+            .0,
+        ),
+        (
+            "powi",
+            record(|v: &[BReverse<f64>]| v[0].powi(3), &[-2.0_f64]).0,
+        ),
+    ];
+    for (label, tape) in cases {
+        let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+        let (hv_grad, hv) = ctx
+            .hvp_batch(&gpu_tape, &[-2.0_f32], &[1.0_f32], 1)
+            .unwrap();
+        assert!(
+            hv_grad[0].is_finite() && (hv_grad[0] as f64 - 12.0).abs() < 1e-3,
+            "{label}: gradient at x=-2 expected 12, got {}",
+            hv_grad[0]
+        );
+        assert!(
+            hv[0].is_finite() && (hv[0] as f64 + 12.0).abs() < 1e-3,
+            "{label}: HVP (Hessian·1) at x=-2 expected -12, got {}",
+            hv[0]
+        );
+    }
+}
+
+#[cfg(feature = "gpu-wgpu")]
+#[test]
+fn wgpu_negative_base_power_hvp_finite() {
+    let ctx = match WgpuContext::new() {
+        Some(c) => c,
+        None => return,
+    };
+    check_negative_base_power_hvp(&ctx);
+}
+
+#[cfg(feature = "gpu-cuda")]
+#[test]
+fn cuda_negative_base_power_hvp_finite() {
+    let ctx = match CudaContext::new() {
+        Some(c) => c,
+        None => return,
+    };
+    check_negative_base_power_hvp(&ctx);
+}

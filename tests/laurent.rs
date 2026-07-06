@@ -4,6 +4,7 @@
 
 use approx::assert_relative_eq;
 use echidna::Laurent;
+#[cfg(feature = "bytecode")]
 use num_traits::Float;
 
 type L4 = Laurent<f64, 4>;
@@ -251,16 +252,35 @@ fn regression_12_laurent_sub_pole_order_gap_panics() {
     let _ = a - b; // pole-order gap = 5 > K-1 = 2, should panic
 }
 
-// ── #13: Laurent is_zero semantics ──
-
+// ── Laurent is_zero semantics ──
+//
+// `Zero::is_zero` is value-based, matching the value-based `==`/`partial_cmp`
+// and num_traits' `is_zero() ⟺ == Self::zero()` contract (and every other AD
+// type). This supersedes an earlier structural pin: a series like `t`
+// (pole_order 1) evaluates to 0 at the expansion point, so it IS zero for the
+// trait. Laurent's own pole arithmetic uses `is_all_zero_pub` directly and is
+// unaffected — only generic `num_traits`-bound consumers see this.
 #[test]
-fn regression_13_laurent_nonzero_with_positive_pole_order_is_not_zero() {
+fn laurent_is_zero_is_value_based() {
     use num_traits::Zero;
-    let l = L3::new([1.0, 0.0, 0.0], 1);
-    assert!(
-        !l.is_zero(),
-        "Laurent with nonzero coefficients and pole_order>0 should not be zero"
+
+    // `t` (pole_order 1) has value() == 0 → is_zero, and equals Laurent::zero().
+    let t = L3::new([1.0, 0.0, 0.0], 1);
+    assert!(t.is_zero());
+    assert_eq!(
+        t.is_zero(),
+        t == L3::zero(),
+        "is_zero must agree with `== zero`"
     );
+
+    // A pole (pole_order < 0) has value ±Inf → not zero.
+    let pole = L3::new([1.0, 0.0, 0.0], -1);
+    assert!(!pole.is_zero());
+    assert_eq!(pole.is_zero(), pole == L3::zero());
+
+    // A regular non-zero value is not zero; the additive identity is zero.
+    assert!(!L3::new([2.0, 1.0, 0.0], 0).is_zero());
+    assert!(L3::zero().is_zero());
 }
 
 // ── #21: Laurent max/min NaN ──

@@ -80,6 +80,16 @@ struct TapeMeta {
 
 // ── Main kernel ──
 
+fn abs_deriv_f32(x: f32) -> f32 {
+    // Unified abs' convention (matches kernels::abs_deriv): 0 at the kink
+    // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
+    // test inspects the bits — `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if (x == 0.0) { return 0.0; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let batch_id = gid.x;
@@ -157,7 +167,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             case 7u /* POWF */: {
                 let b = values[v_base + b_idx];
-                da = b * pow(a, b - 1.0);
+                // At b == 0 the base-direction derivative is 0 (matches CPU
+                // `OpCode::Powf`); the raw form gives `0 * a^(-1) = 0*Inf = NaN`
+                // at a == 0. `select` discards the NaN false-branch.
+                da = select(b * powf_real(a, b - 1.0), 0.0, b == 0.0);
                 // For a <= 0, `log(a)` is NaN. A finite `r` at a < 0 means b
                 // was integer; the classical derivative w.r.t. b at integer b
                 // is undefined, and the convention here is 0 — matches the
@@ -218,17 +231,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let exp = bitcast<i32>(b_idx);
                 if exp == 0 { da = 0.0; } else {
                 let n = f32(exp);
-                da = n * pow(a, n - 1.0); }
+                da = n * powf_real(a, n - 1.0); }
             }
 
             // Exp/Log
             case 17u /* EXP */: { da = r; }
             case 18u /* EXP2 */: { da = r * log(2.0); }
             case 19u /* EXPM1 */: { da = r + 1.0; }
-            case 20u /* LN */: { da = 1.0 / a; }
-            case 21u /* LOG2 */: { da = 1.0 / (a * log(2.0)); }
-            case 22u /* LOG10 */: { da = 1.0 / (a * log(10.0)); }
-            case 23u /* LN1P */: { da = 1.0 / (1.0 + a); }
+            case 20u /* LN */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / a, a >= 0.0); }
+            case 21u /* LOG2 */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (a * log(2.0)), a >= 0.0); }
+            case 22u /* LOG10 */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (a * log(10.0)), a >= 0.0); }
+            case 23u /* LN1P */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (1.0 + a), a >= -1.0); }
 
             // Trig
             case 24u /* SIN */: { da = cos(a); }
@@ -260,7 +273,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
             }
             case 34u /* ACOSH */: {
-                if abs(a) > 1e8 {
+                if a < 1.0 {
+                    // acosh domain is a >= 1. Out of domain → NaN (the factored
+                    // form self-guards only for -1 < a < 1; a <= -1 and the
+                    // large-|a| branch stay finite). Matches kernels::acosh_deriv;
+                    // strict `< 1` keeps a==1 → +Inf.
+                    da = bitcast<f32>(0x7fc00000u);
+                } else if abs(a) > 1e8 {
                     let inv = 1.0 / a;
                     da = abs(inv) / sqrt(1.0 - inv * inv);
                 } else {
@@ -269,19 +288,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     da = 1.0 / sqrt((a - 1.0) * (a + 1.0));
                 }
             }
-            case 35u /* ATANH */: { da = 1.0 / ((1.0 - a) * (1.0 + a)); }
+            case 35u /* ATANH */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
 
             // Misc
-            case 36u /* ABS */: {
-                // `a >= 0.0` maps -0.0 to +1; to mirror Rust's `f32::signum`
-                // (which uses the sign bit), inspect bit 31 of the bitcast.
-                if a != a {
-                    da = a; // NaN
-                } else {
-                    let bits = bitcast<u32>(a);
-                    da = select(1.0, -1.0, (bits & 0x80000000u) != 0u);
-                }
-            }
+            case 36u /* ABS */: { da = abs_deriv_f32(a); }
             case 37u, 38u, 39u, 40u, 41u /* SIGNUM..TRUNC */: { da = 0.0; }
             case 42u /* FRACT */: { da = 1.0; }
 
@@ -303,6 +313,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Manual implementations for WGSL builtins not available.
+fn powf_real(base: f32, b: f32) -> f32 {
+    // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
+    // `exp2(y*log2(x))`, and `log2(negative) = NaN`). Rust/C `powf` define
+    // x^y for x < 0 only when y is an integer: sign(x)^y * |x|^y. A
+    // non-integer exponent at a negative base is NaN — the same as on CPU.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly.
+    if base == 0.0 && b == 0.0 { return 1.0; }
+    if base >= 0.0 { return pow(base, b); }
+    let rb = round(b);
+    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    let mag = pow(abs(base), b);
+    if (i32(rb) & 1) != 0 { return -mag; }
+    return mag;
+}
+
 fn sinh(x: f32) -> f32 {
     return (exp(x) - exp(-x)) * 0.5;
 }

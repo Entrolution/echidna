@@ -477,7 +477,10 @@ impl CudaContext {
     }
 
     fn grid_dim(batch_size: u32) -> (u32, u32, u32) {
-        ((batch_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1)
+        // div_ceil (not `(n + BLOCK - 1) / BLOCK`): the manual form overflows
+        // u32 for batch_size > u32::MAX - BLOCK_SIZE + 1, silently
+        // under-dispatching in release builds.
+        (batch_size.div_ceil(BLOCK_SIZE), 1, 1)
     }
 
     fn block_dim() -> (u32, u32, u32) {
@@ -492,6 +495,11 @@ impl CudaContext {
         if tape.has_custom_ops() {
             return Err(GpuError::CustomOpsNotSupported);
         }
+        // The f64 kernels index device memory with the tape's operand and
+        // output indices, so a structurally-invalid tape (e.g. one
+        // deserialized from tampered bytes) must be rejected before upload.
+        tape.validate()
+            .map_err(|e| GpuError::Other(format!("refusing to upload invalid tape: {e}")))?;
         let s = &self.stream;
         // SAFETY(u32 cast): OpCode is #[repr(u8)], so *op as u32 is lossless.
         let opcodes: Vec<u32> = tape.opcodes_slice().iter().map(|op| *op as u32).collect();
@@ -531,17 +539,21 @@ impl CudaContext {
 impl GpuBackend for CudaContext {
     type TapeBuffers = CudaTapeBuffers;
 
-    /// # Panics
-    ///
-    /// Panics if CUDA device memory allocation fails (e.g., OOM). The
-    /// `GpuBackend` trait returns `Self::TapeBuffers` (not `Result`),
+    /// Number of outputs the tape produces.
     fn num_outputs(&self, tape: &CudaTapeBuffers) -> u32 {
         tape.num_outputs
     }
 
-    /// preventing graceful error handling. Use `upload_tape_f64` for
-    /// the `Result`-returning f64 variant.
+    /// # Panics
+    ///
+    /// Panics if `data` fails validation, or if CUDA device memory allocation
+    /// fails (e.g. OOM). The `GpuBackend` trait returns `Self::TapeBuffers`
+    /// (not `Result`), preventing graceful error handling — use
+    /// `upload_tape_f64` for the `Result`-returning f64 variant.
     fn upload_tape(&self, data: &GpuTapeData) -> CudaTapeBuffers {
+        if let Err(e) = data.validate() {
+            panic!("refusing to upload invalid GpuTapeData: {e}");
+        }
         let s = &self.stream;
         // Defensive fallback matching wgpu: single-output tapes set
         // `output_indices = []` and only populate `output_index`, but

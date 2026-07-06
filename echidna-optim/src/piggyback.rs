@@ -38,11 +38,14 @@ pub enum PiggybackError {
     /// non-finite when detection came from the norm check; finite
     /// when it came from the componentwise `lambda_new` check.
     AdjointDivergence { iteration: usize, last_norm: f64 },
-    /// `piggyback_tangent_solve` reached `max_iter` without meeting
-    /// `tol`. `z_norm` is the final iteration's relative primal-delta
-    /// norm (`||z_new - z|| / (1 + ||z||)`) — a value just over `tol`
-    /// signals proximity to convergence; many orders over signals
-    /// stagnation. `iteration` equals `max_iter`.
+    /// `piggyback_tangent_solve` reached `max_iter` before **both** the
+    /// primal and tangent step-deltas met `tol`. `z_norm` is the final
+    /// iteration's relative primal-delta norm
+    /// (`||z_new - z|| / (1 + ||z||)`) — a value just over `tol` signals
+    /// proximity to convergence; many orders over signals stagnation; a
+    /// value **at or below** `tol` means the primal had converged and the
+    /// tangent (which starts at zero and converges on its own schedule)
+    /// was the stream still iterating. `iteration` equals `max_iter`.
     IterationsExhaustedTangent { iteration: usize, z_norm: f64 },
     /// `piggyback_adjoint_solve` reached `max_iter` without meeting
     /// `tol`. `lam_norm` is the final iteration's relative adjoint-
@@ -230,12 +233,17 @@ pub fn piggyback_tangent_step_with_buf<F: Float>(
 /// Iterates the fixed-point map `z_{k+1} = G(z_k, x)` while simultaneously
 /// propagating tangents `ż_{k+1} = G_z · ż_k + G_x · ẋ`.
 ///
-/// Returns `Ok((z_star, z_dot_star, iterations))` on convergence. Returns
+/// Returns `Ok((z_star, z_dot_star, iterations))` when **both** iterates
+/// have converged (relative step-delta below `tol` for each). The tangent
+/// starts at zero and converges on its own schedule — its error decays as
+/// `ρᵏ·‖ż*‖` regardless of how close `z0` is to `z*` — so primal
+/// convergence alone would return a truncated Neumann sum for a
+/// warm-started primal. Returns
 /// `Err(PiggybackError::PrimalDivergence)` when the primal norm becomes
 /// non-finite, `Err(PiggybackError::TangentDivergence)` when the primal
 /// stays finite but the tangent overflows (ratio-converging case), or
 /// `Err(PiggybackError::IterationsExhaustedTangent { iteration, z_norm })` when
-/// `max_iter` is reached without satisfying `tol`.
+/// `max_iter` is reached before both deltas satisfy `tol`.
 pub fn piggyback_tangent_solve<F: Float>(
     step_tape: &BytecodeTape<F>,
     z0: &[F],
@@ -304,8 +312,25 @@ pub fn piggyback_tangent_solve<F: Float>(
                 last_norm: norm.to_f64().unwrap_or(f64::NAN),
             });
         }
+        // Tangent convergence, mirroring the primal's relative-delta form
+        // (and `piggyback_forward_adjoint_solve`'s two-stream gate). The
+        // tangent starts at zero, so its delta shrinks on its own schedule;
+        // gating on the primal alone would return early with a truncated
+        // Neumann sum whenever the primal is warm-started. A non-finite
+        // `tangent_norm` cannot fake convergence (`NaN < tol` and
+        // `Inf < tol` are both false), and non-finite tangents were already
+        // rejected componentwise above.
+        let mut tangent_delta_sq = F::zero();
+        let mut tangent_sq = F::zero();
+        for i in 0..m {
+            let d = z_dot_new[i] - z_dot[i];
+            tangent_delta_sq = tangent_delta_sq + d * d;
+            tangent_sq = tangent_sq + z_dot[i] * z_dot[i];
+        }
+        let tangent_norm = tangent_delta_sq.sqrt() / (F::one() + tangent_sq.sqrt());
+
         last_norm = norm.to_f64().unwrap_or(f64::NAN);
-        if norm < tol {
+        if norm < tol && tangent_norm < tol {
             return Ok((z_new, z_dot_new, k + 1));
         }
 

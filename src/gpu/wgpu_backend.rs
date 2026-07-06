@@ -33,6 +33,7 @@ pub struct WgpuContext {
     reverse_io_bind_group_layout: wgpu::BindGroupLayout,
     tangent_fwd_io_bind_group_layout: wgpu::BindGroupLayout,
     tangent_rev_io_bind_group_layout: wgpu::BindGroupLayout,
+    #[cfg(feature = "stde")]
     taylor_fwd_2nd_io_bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -50,6 +51,10 @@ impl WgpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                // wgpu 30 added limit bucketing (adapter-fingerprinting mitigation
+                // for untrusted content). echidna is a trusted native compute host,
+                // so keep the full reported limits available.
+                apply_limit_buckets: false,
             })
             .await
             .ok()?;
@@ -253,7 +258,8 @@ impl WgpuContext {
                 cache: None,
             });
 
-        // Taylor forward 2nd-order pipeline (for STDE)
+        // Taylor forward 2nd-order pipeline (STDE only)
+        #[cfg(feature = "stde")]
         let taylor_fwd_2nd_io_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("echidna_taylor2_io_bgl"),
@@ -265,6 +271,7 @@ impl WgpuContext {
                 ],
             });
 
+        #[cfg(feature = "stde")]
         let taylor2_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("echidna_taylor_fwd_2nd_pl"),
             bind_group_layouts: &[
@@ -311,6 +318,7 @@ impl WgpuContext {
             reverse_io_bind_group_layout,
             tangent_fwd_io_bind_group_layout,
             tangent_rev_io_bind_group_layout,
+            #[cfg(feature = "stde")]
             taylor_fwd_2nd_io_bind_group_layout,
         })
     }
@@ -502,6 +510,7 @@ impl WgpuContext {
             pass.set_pipeline(&self.taylor_fwd_kth_pipelines[order - 1]);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
+            self.check_dispatch_1d(batch_size.div_ceil(256))?;
             pass.dispatch_workgroups(batch_size.div_ceil(256), 1, 1);
         }
 
@@ -528,7 +537,9 @@ impl WgpuContext {
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
             .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let raw: &[f32] = bytemuck::cast_slice(&data);
 
         // Deinterleave: raw is [c0, c1, ..., c_{K-1}] per output per batch element
@@ -552,6 +563,24 @@ impl WgpuContext {
     }
 }
 
+impl WgpuContext {
+    /// Reject a 1-D dispatch whose workgroup count would exceed the device's
+    /// `max_compute_workgroups_per_dimension` limit (65535 on the wgpu
+    /// downlevel defaults), returning a clean `GpuError` instead of the opaque
+    /// wgpu validation error a too-large batch would otherwise raise.
+    fn check_dispatch_1d(&self, workgroups: u32) -> Result<(), GpuError> {
+        let max = self.device.limits().max_compute_workgroups_per_dimension;
+        if workgroups > max {
+            return Err(GpuError::Other(format!(
+                "dispatch of {workgroups} workgroups exceeds the device limit of {max} \
+                 per dimension (~{} elements at 256 per workgroup); split the batch",
+                (max as u64) * 256
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl GpuBackend for WgpuContext {
     type TapeBuffers = WgpuTapeBuffers;
 
@@ -561,6 +590,10 @@ impl GpuBackend for WgpuContext {
 
     fn upload_tape(&self, data: &GpuTapeData) -> WgpuTapeBuffers {
         use wgpu::util::DeviceExt;
+
+        if let Err(e) = data.validate() {
+            panic!("refusing to upload invalid GpuTapeData: {e}");
+        }
 
         let opcodes_buf = self
             .device
@@ -744,6 +777,7 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.forward_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
+            self.check_dispatch_1d(batch_size.div_ceil(256))?;
             pass.dispatch_workgroups(batch_size.div_ceil(256), 1, 1);
         }
 
@@ -771,7 +805,9 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
             .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging_buf.unmap();
@@ -931,6 +967,7 @@ impl GpuBackend for WgpuContext {
         });
 
         let workgroups = batch_size.div_ceil(256);
+        self.check_dispatch_1d(workgroups)?;
 
         // Encode: forward pass → reverse pass → copy results
         let mut encoder = self
@@ -998,12 +1035,16 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
             .map_err(|e| GpuError::Other(format!("grad map failed: {e}")))?;
 
-        let out_data = out_slice.get_mapped_range();
+        let out_data = out_slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let outputs: Vec<f32> = bytemuck::cast_slice(&out_data).to_vec();
         drop(out_data);
         output_staging.unmap();
 
-        let grad_data = grad_slice.get_mapped_range();
+        let grad_data = grad_slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let grads: Vec<f32> = bytemuck::cast_slice(&grad_data).to_vec();
         drop(grad_data);
         grad_staging.unmap();
@@ -1170,6 +1211,7 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.tangent_fwd_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
+            self.check_dispatch_1d(batch.div_ceil(256))?;
             pass.dispatch_workgroups(batch.div_ceil(256), 1, 1);
         }
         encoder.copy_buffer_to_buffer(&tangent_out_buf, 0, &staging, 0, out_size);
@@ -1194,7 +1236,9 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("recv: {e}")))?
             .map_err(|e| GpuError::Other(format!("map: {e}")))?;
 
-        let data = slice.get_mapped_range();
+        let data = slice
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let tangent_results: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
         staging.unmap();
@@ -1391,6 +1435,7 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.tangent_rev_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
+            self.check_dispatch_1d(batch_size.div_ceil(256))?;
             pass.dispatch_workgroups(batch_size.div_ceil(256), 1, 1);
         }
 
@@ -1426,12 +1471,16 @@ impl GpuBackend for WgpuContext {
             .map_err(|e| GpuError::Other(format!("{e}")))?
             .map_err(|e| GpuError::Other(format!("{e}")))?;
 
-        let gd = gs.get_mapped_range();
+        let gd = gs
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let grads: Vec<f32> = bytemuck::cast_slice(&gd).to_vec();
         drop(gd);
         grad_staging.unmap();
 
-        let hd = hs.get_mapped_range();
+        let hd = hs
+            .get_mapped_range()
+            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
         let hvps: Vec<f32> = bytemuck::cast_slice(&hd).to_vec();
         drop(hd);
         hvp_staging.unmap();
@@ -1537,5 +1586,23 @@ fn bgl_storage_rw(binding: u32) -> wgpu::BindGroupLayoutEntry {
             min_binding_size: None,
         },
         count: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Metal-gated: the 1-D dispatch guard rejects a workgroup count above the
+    // device limit and accepts one at the limit (skips when no adapter).
+    #[test]
+    fn dispatch_1d_guard_rejects_over_limit() {
+        let Some(ctx) = WgpuContext::new() else {
+            return;
+        };
+        let max = ctx.device.limits().max_compute_workgroups_per_dimension;
+        assert!(ctx.check_dispatch_1d(max).is_ok());
+        assert!(ctx.check_dispatch_1d(max + 1).is_err());
+        assert!(ctx.check_dispatch_1d(u32::MAX).is_err());
     }
 }

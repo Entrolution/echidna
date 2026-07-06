@@ -44,6 +44,13 @@ impl<F: Float> super::BytecodeTape<F> {
     /// HVP calls instead of `n`, which can be dramatically fewer for banded
     /// or sparse interaction structures.
     pub fn sparse_hessian(&self, x: &[F]) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "sparse_hessian is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -69,6 +76,13 @@ impl<F: Float> super::BytecodeTape<F> {
         &self,
         x: &[F],
     ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "sparse_hessian_vec is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
         assert!(
             self.custom_ops.is_empty(),
             "sparse_hessian_vec: custom ops produce approximate (first-order) second derivatives; \
@@ -380,6 +394,13 @@ impl<F: Float> super::BytecodeTape<F> {
         colors: &[u32],
         num_colors: u32,
     ) -> (F, Vec<F>, Vec<F>) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "sparse_hessian_with_pattern is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 

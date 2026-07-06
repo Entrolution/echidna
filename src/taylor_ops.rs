@@ -121,6 +121,18 @@ pub fn taylor_exp<F: Float>(a: &[F], c: &mut [F]) {
 #[inline]
 pub fn taylor_ln<F: Float>(a: &[F], c: &mut [F]) {
     let n = c.len();
+    if a[0] < F::zero() {
+        // `ln` is undefined on the negatives; emit an all-NaN jet rather than a
+        // NaN primal beside finite higher coefficients computed from `1/a[0]`.
+        // The `a[0] == 0` branch point is left to the IEEE singularity
+        // (`c[0] = -Inf`), matching `taylor_sqrt` and the scalar convention.
+        // This also covers `taylor_log2`/`taylor_log10`/`taylor_ln_1p` (which
+        // delegate here) and `taylor_powf`'s non-integer negative-base path.
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     let inv_a0 = F::one() / a[0];
     c[0] = a[0].ln();
     for k in 1..n {
@@ -387,6 +399,16 @@ pub fn taylor_asinh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
 #[inline]
 pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
     let n = c.len();
+    if a[0] < F::one() {
+        // `acosh` domain is `a >= 1`. For `-1 < a[0] < 1` the `a²-1 < 0` sqrt
+        // already yields an all-NaN jet, but `a[0] <= -1` leaves `a²-1 >= 0`, so
+        // the recurrence produces finite higher coefficients beside a NaN
+        // primal. Emit an all-NaN jet across the whole out-of-domain range.
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     c[0] = a[0].acosh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
@@ -411,6 +433,16 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
 #[inline]
 pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
     let n = c.len();
+    if a[0] < -F::one() || a[0] > F::one() {
+        // `atanh` domain is `|a| <= 1`. Outside it, `1 - a²` is finite so the
+        // recurrence would produce finite higher coefficients beside a NaN
+        // primal; emit an all-NaN jet instead. (`|a[0]| == 1` is left to the
+        // IEEE `±Inf` singularity, matching the scalar boundary convention.)
+        for ci in c.iter_mut() {
+            *ci = F::nan();
+        }
+        return;
+    }
     c[0] = a[0].atanh();
     // scratch1 = a²
     taylor_mul(a, a, scratch1);
@@ -448,9 +480,10 @@ pub fn taylor_powf<F: Float>(
 ) {
     // Constant integer exponent fast path: if `b` is a plain scalar (higher
     // coefficients are zero) and that scalar is an integer, route to
-    // `taylor_powi`. Otherwise `taylor_ln(a)` returns NaN for `a[0] <= 0`,
-    // poisoning the entire result — even for negative-base integer powers
-    // that have well-defined Taylor coefficients.
+    // `taylor_powi`. Otherwise `taylor_ln(a)` yields an all-NaN jet for
+    // `a[0] < 0` (and an Inf-singular jet at `a[0] == 0`), poisoning the entire
+    // result — even for negative-base integer powers that have well-defined
+    // Taylor coefficients.
     if b[1..].iter().all(|&bk| bk == F::zero()) {
         let b0 = b[0];
         if let Some(ni) = b0.to_i32() {
@@ -468,14 +501,22 @@ pub fn taylor_powf<F: Float>(
     // But we can't use scratch1 anymore since taylor_exp needs its own output...
     // Actually taylor_exp writes to c, so we just need scratch2 as input.
     taylor_exp(scratch2, c);
-    // Fix c[0] for better primal accuracy (use direct powf instead of exp(b*ln(a))).
-    // Higher coefficients c[1..] were computed using the exp-ln path's c[0], which
-    // may differ from the patched value by sub-ULP rounding. This is a deliberate
-    // Intentional precision tradeoff: patching c[0] with direct powf is more accurate
-    // than the exp-ln roundtrip, but c[1..K] were computed using the exp-ln c[0] value.
-    // The inconsistency is O(ULP) for well-conditioned inputs and does not affect
-    // derivative correctness beyond rounding.
-    c[0] = a[0].powf(b[0]);
+    if a[0] < F::zero() {
+        // Negative base with a LIVE exponent (the constant-integer fast path
+        // above already returned). `a(t)^b(t)` for a varying — hence, for
+        // t != 0, non-integer — exponent is complex, so the whole jet is
+        // undefined: `taylor_ln(a)` already produced an all-NaN `c[1..]`.
+        // Return a consistent all-NaN jet rather than a finite primal
+        // (`a[0].powf(b[0])`, finite only when `b[0]` is an integer) beside
+        // NaN derivative coefficients. Matches `taylor_ln`/`taylor_sqrt`.
+        c[0] = F::nan();
+    } else {
+        // Fix c[0] for better primal accuracy (direct powf vs exp(b*ln(a))).
+        // Higher coefficients c[1..] used the exp-ln path's c[0], which may
+        // differ from the patched value by sub-ULP rounding — an intentional
+        // precision tradeoff that does not affect derivative correctness.
+        c[0] = a[0].powf(b[0]);
+    }
 }
 
 /// `c = a^n` (powi) — integer power.
@@ -715,7 +756,9 @@ pub fn taylor_hypot<F: Float>(
         // shifted series, then shift the result back by one to represent the
         // `|t|·…` factor. This mirrors CPU `Taylor::abs` and gives the true
         // Taylor expansion rather than the `log(0)·exp` path's NaN/Inf.
-        if n > 1 && (a[1] != F::zero() || b[1] != F::zero()) {
+        if n > 1
+            && (a[1..n].iter().any(|&v| v != F::zero()) || b[1..n].iter().any(|&v| v != F::zero()))
+        {
             let mut a_shifted = vec![F::zero(); n];
             let mut b_shifted = vec![F::zero(); n];
             a_shifted[..(n - 1)].copy_from_slice(&a[1..n]);
@@ -734,11 +777,13 @@ pub fn taylor_hypot<F: Float>(
             c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
             return;
         }
-        // Deeper-order zero (a and b both vanish past the first-non-zero
-        // we can detect in the shifted series) or identically-zero — fall
-        // through to the direct square-then-sqrt path, which gives 0 for
-        // the primal and Inf for higher derivatives (the latter matches
-        // the singular-derivative convention at a true zero).
+        // Both series are identically zero past the leading coefficient — fall
+        // through to the direct square-then-sqrt path, which gives 0 for the
+        // primal and Inf for higher derivatives (the latter matches the
+        // singular-derivative convention at a true zero). A leading zero with a
+        // higher-order signal is handled by the peel-and-recurse branch above,
+        // which shifts one order at a time until a non-zero leading coefficient
+        // drives a non-zero scale.
         taylor_mul(a, a, scratch1);
         taylor_mul(b, b, scratch2);
         for k in 0..n {
