@@ -11,6 +11,7 @@
 //! - M10: `taylor_hypot` smooth-at-zero inputs extract common `t`-factor
 
 use echidna::{Dual, DualVec};
+#[cfg(feature = "bytecode")]
 use num_traits::Float;
 
 // ── M1: Powf at Inf ──────────────────────────────────────────────────

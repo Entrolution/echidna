@@ -23,6 +23,7 @@ fn cubic_mix<T: Scalar>(x: &[T]) -> T {
 }
 
 /// f(x,y) = x^4 + y^4
+#[cfg(feature = "diffop")]
 fn quartic<T: Scalar>(x: &[T]) -> T {
     let x0 = x[0];
     let y0 = x[1];

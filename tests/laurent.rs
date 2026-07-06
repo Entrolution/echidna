@@ -4,6 +4,7 @@
 
 use approx::assert_relative_eq;
 use echidna::Laurent;
+#[cfg(feature = "bytecode")]
 use num_traits::Float;
 
 type L4 = Laurent<f64, 4>;
