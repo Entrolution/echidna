@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `2.5e300`), and reverse mode now matches the other AD modes at an infinite
   base (`Inf` derivative instead of NaN).
 
+- The generated GPU Taylor kernels (wgpu and CUDA) now match the CPU jets
+  in four cases that previously diverged silently: `fract` uses the
+  truncation convention (`fract(-2.3)` = `-0.3`, previously `+0.7`);
+  `hypot` with leading zeros at any depth expands correctly
+  (`hypot(t², 0)` = `t²`, previously an `[0, Inf, …]` jet) and a NaN
+  operand yields an all-NaN jet; `powi` with a zero base uses binary
+  exponentiation for every positive exponent (previously exponents above 8
+  produced NaN coefficients instead of zeros). The `1/k` recurrence
+  weights in generated kernels now carry full `f64` precision (previously
+  10 decimal digits, a ~1e-10 relative error on fourth-order CUDA `f64`
+  coefficients), and CUDA jet-buffer indexing is 64-bit clean for very
+  large tapes.
+
 ### Changed (echidna)
 
 - Division primals for `Dual`, `DualVec`, and `Reverse` are now the correctly

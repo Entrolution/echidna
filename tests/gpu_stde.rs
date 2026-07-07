@@ -1453,20 +1453,18 @@ fn check_hypot_jet_nonfinite_input(
         ),
         _ => panic!("unknown expected_primal_kind {expected_primal_kind}"),
     }
-    // Higher-order coefficients are conventional zero on GPU at the
-    // function-domain boundary (CPU diverges to NaN via `Inf*0=NaN`;
-    // both are defensible at the singularity). Asserting zero pins
-    // the GPU contract — anyone changing the special-case return
-    // values (e.g. omitting the explicit zero loop, regressing back
-    // to NaN) trips here.
-    assert_eq!(
-        gpu_result.c1s[0], 0.0,
-        "{label} c1: expected 0.0 at boundary, got {}",
+    // A NaN operand makes the whole jet NaN — the GPU now matches the CPU
+    // kernel's NaN guard (previously the GPU zero-filled the higher
+    // coefficients, a documented CPU-GPU divergence). Asserting NaN pins
+    // the unified contract.
+    assert!(
+        gpu_result.c1s[0].is_nan(),
+        "{label} c1: expected NaN at a NaN operand, got {}",
         gpu_result.c1s[0]
     );
-    assert_eq!(
-        gpu_result.c2s[0], 0.0,
-        "{label} c2: expected 0.0 at boundary, got {}",
+    assert!(
+        gpu_result.c2s[0].is_nan(),
+        "{label} c2: expected NaN at a NaN operand, got {}",
         gpu_result.c2s[0]
     );
 }
@@ -1746,33 +1744,31 @@ fn ws9_cuda_hypot_inf_finite_propagates_nan() {
 
 #[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
 #[test]
-fn ws9_wgpu_hypot_deeper_order_zero_returns_inf_higher() {
+fn ws9_wgpu_hypot_identically_zero_is_all_zero() {
     let ctx = match gpu_context() {
         Some(c) => c,
         None => return,
     };
-    // `hypot(0, 0)` with seed [0, 0]: inside the tape, both
-    // primal and first-order tangents are zero for hypot's inputs,
-    // so the GPU h==0 branch fires and the shift-and-square inner
-    // check `a.v[1] != 0 || b.v[1] != 0` fails (the tangents are
-    // also zero). Falls into the else-branch → 0 primal + Inf
-    // higher, matching CPU's `taylor_sqrt` convention at a true
-    // zero leading.
+    // `hypot(0, 0)` with seed [0, 0]: both operand jets are identically
+    // zero inside the tape, so the composite function is the constant 0
+    // and every Taylor coefficient of the result is zero — there is no
+    // branch point, so no singular [0, Inf, …] jet. Matches the CPU
+    // kernel's identically-zero arm and `Laurent::hypot`.
     check_hypot_jet_non_finite_higher(
         &ctx,
         0.0,
         0.0,
         [0.0, 0.0],
         CoeffClass::Zero,
-        CoeffClass::Inf,
-        CoeffClass::Inf,
-        "wgpu_hypot_deeper_zero",
+        CoeffClass::Zero,
+        CoeffClass::Zero,
+        "wgpu_hypot_identically_zero",
     );
 }
 
 #[cfg(all(feature = "gpu-cuda", feature = "stde"))]
 #[test]
-fn ws9_cuda_hypot_deeper_order_zero_returns_inf_higher() {
+fn ws9_cuda_hypot_identically_zero_is_all_zero() {
     let ctx = match cuda_context() {
         Some(c) => c,
         None => return,
@@ -1783,9 +1779,9 @@ fn ws9_cuda_hypot_deeper_order_zero_returns_inf_higher() {
         0.0,
         [0.0, 0.0],
         CoeffClass::Zero,
-        CoeffClass::Inf,
-        CoeffClass::Inf,
-        "cuda_hypot_deeper_zero",
+        CoeffClass::Zero,
+        CoeffClass::Zero,
+        "cuda_hypot_identically_zero",
     );
 }
 
@@ -1827,5 +1823,172 @@ fn gpu_trig_taylor_2nd() {
         "c2: {} vs {}",
         result.c2s[0],
         c2
+    );
+}
+
+// ══════════════════════════════════════════════
+//  Generated-kernel conventions: fract, hypot depth, powi zero-base
+// ══════════════════════════════════════════════
+
+/// `fract` at a negative input through the generated Taylor kernel: Rust's
+/// `fract` is truncation-based (fract(-2.3) = -0.3); the floor-based form
+/// (`x - floor(x)` = +0.7) is off by exactly 1.0 for negative non-integer
+/// inputs. Higher coefficients pass through (slope 1).
+#[cfg(all(any(feature = "gpu-wgpu", feature = "gpu-cuda"), feature = "stde"))]
+fn check_taylor_fract_negative(ctx: &impl GpuBackend, label: &str) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].fract();
+    let x = [-2.3_f64];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &[-2.3f32], &[1.0f32], 1, 3)
+        .unwrap();
+    let c0 = result.coefficients[0][0];
+    assert!(
+        (c0 - (-0.3f32)).abs() < 1e-5,
+        "{label}: fract(-2.3) primal must be -0.3 (trunc convention), got {c0}"
+    );
+    let c1 = result.coefficients[1][0];
+    assert!(
+        (c1 - 1.0).abs() < 1e-6,
+        "{label}: fract first coefficient must be 1, got {c1}"
+    );
+}
+
+/// hypot with both leading coefficient pairs zero to depth 2:
+/// hypot(t², 0) = t² must give [0, 0, 1, 0, 0] — the depth-d shift matches
+/// the CPU kernel's recursion (one-level-only handling would emit
+/// [0, Inf, …]).
+#[cfg(all(any(feature = "gpu-wgpu", feature = "gpu-cuda"), feature = "stde"))]
+fn check_taylor_hypot_depth_two(ctx: &impl GpuBackend, label: &str) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| (v[0] * v[0]).hypot(v[1]);
+    let x = [0.0_f64, 0.0];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &[0.0f32, 0.0], &[1.0f32, 0.0], 1, 5)
+        .unwrap();
+    let expected = [0.0f32, 0.0, 1.0, 0.0, 0.0];
+    for (k, e) in expected.iter().enumerate() {
+        let got = result.coefficients[k][0];
+        assert!(
+            (got - e).abs() < 1e-6,
+            "{label}: hypot(t², 0) c{k} must be {e}, got {got}"
+        );
+    }
+}
+
+/// powi with a zero base and exponent above the truncation order: x^10 with
+/// x seeded at 0 has valuation 10 > K-1, so every retained coefficient is
+/// exactly zero (the log|a| fallback would emit [0, NaN, …]).
+#[cfg(all(any(feature = "gpu-wgpu", feature = "gpu-cuda"), feature = "stde"))]
+fn check_taylor_powi_zero_base_high_exponent(ctx: &impl GpuBackend, label: &str) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].powi(10);
+    let x = [0.0_f64];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &[0.0f32], &[1.0f32], 1, 5)
+        .unwrap();
+    for k in 0..5 {
+        let got = result.coefficients[k][0];
+        assert!(
+            got == 0.0,
+            "{label}: powi(0-seeded, 10) c{k} must be exactly 0, got {got}"
+        );
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn wgpu_taylor_fract_negative_matches_cpu() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_fract_negative(&ctx, "wgpu");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn cuda_taylor_fract_negative_matches_cpu() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_fract_negative(&ctx, "cuda");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn wgpu_taylor_hypot_depth_two() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_hypot_depth_two(&ctx, "wgpu");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn cuda_taylor_hypot_depth_two() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_hypot_depth_two(&ctx, "cuda");
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn wgpu_taylor_powi_zero_base_high_exponent() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_powi_zero_base_high_exponent(&ctx, "wgpu");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn cuda_taylor_powi_zero_base_high_exponent() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_powi_zero_base_high_exponent(&ctx, "cuda");
+}
+
+/// Pins on the generated source itself — CI-safe (no GPU needed): the
+/// truncation-based fract and full-precision 1/k weights must be present in
+/// both emitters. The 1/3 weight first appears at coefficient order 3, so
+/// generate at K >= 4.
+#[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
+#[test]
+fn generated_source_pins_trunc_fract_and_full_precision_weights() {
+    let wgsl = echidna::gpu::taylor_codegen::generate_taylor_wgsl(4);
+    assert!(
+        wgsl.contains("- trunc("),
+        "WGSL fract must use the truncation form"
+    );
+    assert!(
+        wgsl.contains("0.33333333333333331"),
+        "WGSL 1/3 weight must carry full f64 precision"
+    );
+
+    let cuda = echidna::gpu::taylor_codegen::generate_taylor_cuda(4);
+    assert!(
+        cuda.contains("x - trunc(x)"),
+        "CUDA _fract must use the truncation form"
+    );
+    assert!(
+        cuda.contains("0.33333333333333331"),
+        "CUDA 1/3 weight must carry full f64 precision"
     );
 }
