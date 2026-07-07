@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `x - (-0.0)` stay on the tape (they are not IEEE identities for a
   `-0.0` operand). `x * 1`, `x / 1`, and the `powi` fast paths are
   unchanged.
+- The GPU batched entry points (`forward_batch`, `gradient_batch`,
+  `hvp_batch`, `taylor_forward_kth_batch`, and `taylor_forward_2nd_batch`
+  on both wgpu and CUDA backends, including the CUDA `_f64` variants) and
+  the STDE helpers (`laplacian_gpu`,
+  `laplacian_with_control_gpu`, `hessian_diagonal_gpu`) now reject empty
+  batches and zero-input (constant-function) tapes with a recoverable
+  `GpuError` instead of panicking on zero-sized GPU buffer creation deep
+  inside the backend.
 - Debug builds now tag each `BReverse` with the identity of the tape that
   recorded it and panic when a value crosses into a different recording
   (capturing an outer variable inside a nested `record`, stashing values

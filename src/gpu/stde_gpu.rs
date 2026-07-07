@@ -37,6 +37,13 @@ pub fn laplacian_gpu<B: GpuBackend>(
         )));
     }
     let n = x.len();
+    if n == 0 {
+        return Err(GpuError::Other(
+            "laplacian_gpu requires a non-empty x (a zero-input tape has no \
+             Laplacian); zero-sized GPU buffers would panic"
+                .into(),
+        ));
+    }
     let s = directions.len();
     if s == 0 {
         return Err(GpuError::Other("no directions provided".into()));
@@ -113,6 +120,13 @@ pub fn hessian_diagonal_gpu<B: GpuBackend>(
         )));
     }
     let n = x.len();
+    if n == 0 {
+        return Err(GpuError::Other(
+            "hessian_diagonal_gpu requires a non-empty x (a zero-input tape \
+             has no Hessian diagonal); zero-sized GPU buffers would panic"
+                .into(),
+        ));
+    }
 
     // Build n basis directions
     let mut primals = Vec::with_capacity(n * n);
@@ -153,6 +167,13 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
         )));
     }
     let n = x.len();
+    if n == 0 {
+        return Err(GpuError::Other(
+            "laplacian_with_control_gpu requires a non-empty x; zero-sized \
+             GPU buffers would panic"
+                .into(),
+        ));
+    }
     let s = directions.len();
     assert_eq!(
         control_diagonal.len(),

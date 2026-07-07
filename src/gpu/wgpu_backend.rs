@@ -391,6 +391,7 @@ impl WgpuContext {
                 "unsupported Taylor order {order}, must be 1..=5"
             )));
         }
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
 
         // SAFETY(u32 cast): order is validated above to be in 1..=5.
         let k = order as u32;
@@ -676,6 +677,7 @@ impl GpuBackend for WgpuContext {
     ) -> Result<Vec<f32>, GpuError> {
         use wgpu::util::DeviceExt;
 
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
         let num_inputs = tape.num_inputs;
         let num_variables = tape.num_variables;
         let num_outputs = tape.num_outputs;
@@ -835,6 +837,7 @@ impl GpuBackend for WgpuContext {
     ) -> Result<(Vec<f32>, Vec<f32>), GpuError> {
         use wgpu::util::DeviceExt;
 
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
         let num_inputs = tape.num_inputs;
         let num_variables = tape.num_variables;
         let num_outputs = tape.num_outputs;
@@ -1285,6 +1288,7 @@ impl GpuBackend for WgpuContext {
     ) -> Result<(Vec<f32>, Vec<f32>), GpuError> {
         use wgpu::util::DeviceExt;
 
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
         let ni = tape.num_inputs;
         let nv = tape.num_variables;
 

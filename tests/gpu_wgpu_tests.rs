@@ -1009,3 +1009,50 @@ mod hvp_edge_parity {
         );
     }
 }
+
+/// Degenerate batched inputs must surface as recoverable errors, not
+/// zero-sized-buffer panics deep inside the backend.
+#[cfg(feature = "gpu-wgpu")]
+mod degenerate_inputs {
+    use super::*;
+    use echidna::gpu::GpuTapeData;
+    use echidna::record;
+
+    #[test]
+    fn zero_batch_and_zero_input_tapes_error_cleanly() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        // Normal tape, zero batch size.
+        let (tape, _) = record(|x: &[echidna::BReverse<f32>]| x[0] * x[0], &[2.0_f32]);
+        let gd = GpuTapeData::from_tape(&tape).unwrap();
+        let gt = ctx.upload_tape(&gd);
+        assert!(ctx.forward_batch(&gt, &[], 0).is_err());
+        assert!(ctx.gradient_batch(&gt, &[], 0).is_err());
+        assert!(ctx.hvp_batch(&gt, &[2.0], &[], 0).is_err());
+
+        // Zero-input (constant-function) tape with a non-zero batch.
+        let (ctape, _) = record(
+            |_: &[echidna::BReverse<f32>]| echidna::BReverse::constant(3.0),
+            &[],
+        );
+        let cgd = GpuTapeData::from_tape(&ctape).unwrap();
+        let cgt = ctx.upload_tape(&cgd);
+        assert!(ctx.forward_batch(&cgt, &[], 4).is_err());
+        assert!(ctx.gradient_batch(&cgt, &[], 4).is_err());
+
+        // STDE entry point with empty x.
+        #[cfg(feature = "stde")]
+        assert!(echidna::gpu::stde_gpu::hessian_diagonal_gpu(&ctx, &gt, &[]).is_err());
+
+        // Taylor batch entry points share the exposure: zero batch on a
+        // normal tape, and a non-zero batch on a zero-input tape.
+        #[cfg(feature = "stde")]
+        {
+            use echidna::gpu::GpuBackend as _;
+            assert!(ctx.taylor_forward_2nd_batch(&gt, &[], &[], 0).is_err());
+            assert!(ctx.taylor_forward_2nd_batch(&cgt, &[], &[], 4).is_err());
+        }
+    }
+}
