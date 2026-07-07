@@ -1,6 +1,11 @@
 //! wgpu compute backend for GPU-accelerated tape evaluation.
 //!
 //! Cross-platform (Metal, Vulkan, DX12). f32 only — WGSL does not support f64.
+//!
+//! Domain note: WGSL has no exact `fmod`, so the `Rem` opcode is computed as
+//! `a - trunc(a/b) * b` and is exact only while the quotient is exactly
+//! representable in f32 (`|a/b| < 2^24`). Above that ratio the remainder
+//! diverges from the CPU and CUDA backends, which use exact `fmod`.
 
 use super::{GpuBackend, GpuError, GpuTapeData, TapeMeta};
 

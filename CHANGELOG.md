@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   10 decimal digits, a ~1e-10 relative error on fourth-order CUDA `f64`
   coefficients), and CUDA jet-buffer indexing is 64-bit clean for very
   large tapes.
+- The wgpu Hessian-vector-product kernel now computes the `hypot` primal
+  with the overflow-safe rescaled form used by every other kernel
+  (previously `sqrt(a² + b²)`, which overflowed to `Inf` for operands
+  above ~1.8e19 and zeroed the resulting gradient), routes `max`/`min`
+  adjoints past NaN operands with the bit-pattern NaN test used elsewhere
+  (a bare `x != x` can be folded away under fast-math shader compilers),
+  and shares the division-tangent factoring of the other kernels. The
+  wgpu `%` operator's domain (exact only for quotient ratios below 2^24;
+  WGSL has no exact `fmod`) is now documented on the backend.
 
 ### Changed (echidna)
 

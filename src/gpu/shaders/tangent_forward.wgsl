@@ -227,6 +227,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 6u /* REM */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
+                // Exact only for |a/b| < 2^24 — see rem_f32 in forward.wgsl.
                 r = a - trunc(a / b) * b;
                 rt = at - trunc(a / b) * bt;
             }

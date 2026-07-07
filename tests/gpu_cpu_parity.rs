@@ -551,7 +551,16 @@ const PARITY_CASES: &[ParityCase] = &[
         // (5,0): divisor zero — value is NaN (fmod(5,0)); the reverse partial
         // w.r.t. the divisor is -trunc(5/0) = -Inf. Exercises the NaN-aware
         // comparison (both backends must produce NaN, not the same bits).
-        points: &[&[5.0, 2.0], &[7.5, 2.5], &[-3.0, 2.0], &[5.0, 0.0]],
+        // (1e6, 3): large-but-in-domain quotient ratio — wgpu computes REM
+        // as a - trunc(a/b)*b, exact only for |a/b| < 2^24; this point pins
+        // agreement inside that documented domain (see wgpu_backend docs).
+        points: &[
+            &[5.0, 2.0],
+            &[7.5, 2.5],
+            &[-3.0, 2.0],
+            &[5.0, 0.0],
+            &[1e6, 3.0],
+        ],
         f32_ulp: 4,
         f64_ulp: 4,
     },

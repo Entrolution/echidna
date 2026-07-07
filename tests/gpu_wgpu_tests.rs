@@ -835,3 +835,87 @@ mod hvp_opcode_parity {
         );
     }
 }
+
+#[cfg(feature = "gpu-wgpu")]
+mod hvp_edge_parity {
+    use super::*;
+    use echidna::gpu::GpuTapeData;
+    use echidna::record;
+
+    fn approx_eq(a: f32, b: f64, rel: f64, abs: f64) -> bool {
+        let a = a as f64;
+        (a - b).abs() <= abs || (a - b).abs() <= rel * b.abs()
+    }
+
+    /// HYPOT at magnitudes where a naive sqrt(a*a + b*b) primal overflows
+    /// f32 (a*a = 4e38 > f32::MAX) while the true hypot ≈ 2.2e19 is
+    /// representable: the HVP kernel's forward phase must stay finite and
+    /// its gradient must match the CPU reference.
+    #[test]
+    fn hvp_parity_hypot_large_magnitude() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        use num_traits::Float as _;
+        let f = |v: &[echidna::BReverse<f32>]| v[0].hypot(v[1]);
+        let (tape, _) = record(f, &[3.0_f32, 4.0]);
+        let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+        let x = [2e19_f32, 1e19];
+        let v = [1.0_f32, 0.0];
+        let (gpu_grad, gpu_hvp) = ctx.hvp_batch(&gpu_tape, &x, &v, 1).unwrap();
+        let (cpu_grad, cpu_hvp) = tape.hvp(&x, &[1.0, 0.0]);
+        for i in 0..2 {
+            assert!(
+                approx_eq(gpu_grad[i], cpu_grad[i] as f64, 1e-3, 1e-3),
+                "hypot-large grad[{i}]: gpu={}, cpu={}",
+                gpu_grad[i],
+                cpu_grad[i]
+            );
+            assert!(
+                approx_eq(gpu_hvp[i], cpu_hvp[i] as f64, 1e-3, 1e-3),
+                "hypot-large hvp[{i}]: gpu={}, cpu={}",
+                gpu_hvp[i],
+                cpu_hvp[i]
+            );
+        }
+    }
+
+    /// MAX/MIN with a NaN second operand: the adjoint must route to the
+    /// first operand (IEEE maxNum drops the NaN). Pins the bit-pattern NaN
+    /// test in the HVP kernel's reverse phase — a bare `b != b` can fold to
+    /// false under fast-math backends and route the adjoint to the wrong
+    /// operand.
+    #[test]
+    fn hvp_max_min_nan_second_operand_routes_to_first() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        use num_traits::Float as _;
+        for (name, f) in [
+            (
+                "max",
+                (|v: &[echidna::BReverse<f32>]| v[0].max(v[1]))
+                    as fn(&[echidna::BReverse<f32>]) -> echidna::BReverse<f32>,
+            ),
+            ("min", |v: &[echidna::BReverse<f32>]| v[0].min(v[1])),
+        ] {
+            let (tape, _) = record(f, &[1.0_f32, 2.0]);
+            let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+            let gpu_tape = ctx.upload_tape(&gpu_data);
+            let x = [1.0_f32, f32::NAN];
+            let v = [1.0_f32, 0.0];
+            let (gpu_grad, _) = ctx.hvp_batch(&gpu_tape, &x, &v, 1).unwrap();
+            assert_eq!(
+                gpu_grad[0], 1.0,
+                "{name}(1, NaN): adjoint must route to the first operand"
+            );
+            assert_eq!(
+                gpu_grad[1], 0.0,
+                "{name}(1, NaN): no adjoint may reach the NaN operand"
+            );
+        }
+    }
+}

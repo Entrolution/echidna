@@ -157,7 +157,11 @@ fn hypot_f32(a: f32, b: f32) -> f32 {
 }
 
 fn rem_f32(a: f32, b: f32) -> f32 {
-    // Rust's % is remainder (truncated), matching: a - trunc(a/b) * b
+    // Rust's % is remainder (truncated), matching: a - trunc(a/b) * b.
+    // WGSL has no exact fmod, so this is exact only while the quotient is
+    // exactly representable: |a/b| < 2^24 (f32 mantissa). Beyond that,
+    // trunc cannot recover the integer quotient and the result diverges
+    // from CPU/CUDA fmod (e.g. rem(1e8, 3) -> 0 instead of 1).
     return a - trunc(a / b) * b;
 }
 
