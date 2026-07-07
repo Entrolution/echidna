@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wgpu `%` operator's domain (exact only for quotient ratios below 2^24;
   WGSL has no exact `fmod`) is now documented on the backend.
 
+- `grad_checkpointed`, `grad_checkpointed_disk`, and
+  `grad_checkpointed_with_hints` now place stored checkpoints evenly across
+  the trajectory. Previously the schedule positions were capped by keeping
+  the smallest step indices, which clustered every checkpoint at the start
+  and let the backward pass hold up to the entire trajectory's states in
+  memory at once when `num_checkpoints` was much smaller than `num_steps`.
+  Peak memory is now bounded by roughly `num_steps / num_checkpoints`
+  states per segment; gradient values are unchanged, and
+  `grad_checkpointed_online` was already well spaced.
+
 ### Changed (echidna)
 
 - Division primals for `Dual`, `DualVec`, and `Reverse` are now the correctly

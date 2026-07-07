@@ -1,8 +1,11 @@
 //! Compositional gradient checkpointing for iterative computations.
 //!
-//! Uses the optimal binomial (Revolve) checkpointing schedule
-//! (Griewank & Walther, 2000) to minimize recomputation for a given
-//! number of checkpoint slots.
+//! Splits the forward sweep into segments bounded by stored checkpoints,
+//! spread evenly so peak backward memory stays at roughly
+//! `num_steps / num_checkpoints` states while each segment is recomputed
+//! exactly once. (The classic binomial Revolve schedule of Griewank &
+//! Walther, 2000 — retained here as a reference implementation — optimizes
+//! recompute count under recursive multi-replay, a different cost model.)
 //!
 //! # Determinism requirement
 //!
@@ -30,8 +33,9 @@ use crate::float::Float;
 
 /// Compute gradients through an iterative computation using checkpointing.
 ///
-/// Uses the Revolve (optimal binomial) checkpointing schedule to minimize
-/// recomputation given the available checkpoint slots.
+/// Stores `num_checkpoints` evenly spaced snapshots and replays each
+/// segment exactly once on the backward pass, bounding peak memory at
+/// roughly `num_steps / num_checkpoints` states.
 ///
 /// # Arguments
 ///
@@ -65,21 +69,12 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
 
     let num_checkpoints = num_checkpoints.max(1).min(num_steps);
 
-    // Compute optimal checkpoint positions using Revolve schedule.
-    //
-    // The recursive Revolve schedule can produce more positions than the
-    // requested memory budget; we truncate to the first `num_checkpoints`
-    // of them. This keeps the memory guarantee but leaves an uncovered
-    // tail when `num_steps >> num_checkpoints` and the later Revolve
-    // positions sit in the tail — recomputation then walks forward from
-    // the last-kept checkpoint, which is O(tail) per reverse segment and
-    // can degrade to O(num_steps²) in the adversarial case. The budget is
-    // honoured; the performance degradation is the known trade-off. Users
-    // who need the optimal O(n · log n) Revolve schedule should size
-    // `num_checkpoints` to `log2(num_steps)` or larger.
-    let mut all_positions = revolve_schedule(num_steps, num_checkpoints);
-    // SPEC: BudgetInvariant — stored checkpoint count never exceeds num_checkpoints.
-    all_positions.truncate(num_checkpoints);
+    // Stored positions are spread evenly so the largest reverse segment —
+    // and with it peak backward memory, since `backward_from_checkpoints`
+    // materializes a segment's states before its VJP sweep — is bounded by
+    // ~num_steps/(num_checkpoints+1). Total recompute time is one extra
+    // forward pass regardless of placement (each segment replays once).
+    let all_positions = spread_positions(num_steps, num_checkpoints);
     let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
     // -- Forward pass: run all steps, saving at most num_checkpoints states --
@@ -220,8 +215,9 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 
 /// Compute gradients with user-specified required checkpoint positions.
 ///
-/// Distributes remaining checkpoint slots optimally (via Revolve) across the
-/// sub-intervals defined by the required positions. Required positions are always
+/// Distributes remaining checkpoint slots proportionally across the
+/// sub-intervals defined by the required positions, spreading each
+/// interval's slots evenly within it. Required positions are always
 /// stored as checkpoints; the remaining slots are distributed proportionally to
 /// sub-interval length.
 ///
@@ -297,8 +293,7 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
         let sub_steps = end - start;
         let sub_slots = slot_alloc[i];
         if sub_steps > 1 && sub_slots > 0 {
-            let mut sub_positions = revolve_schedule(sub_steps, sub_slots);
-            sub_positions.truncate(sub_slots);
+            let sub_positions = spread_positions(sub_steps, sub_slots);
             // Shift positions to global coordinates.
             all_positions.extend(sub_positions.iter().map(|&p| p + start));
         }
@@ -420,9 +415,9 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 
     let num_checkpoints = num_checkpoints.max(1).min(num_steps);
 
-    // Compute optimal checkpoint positions; truncate to enforce memory budget.
-    let mut all_positions = revolve_schedule(num_steps, num_checkpoints);
-    all_positions.truncate(num_checkpoints);
+    // Evenly spread positions bound the largest reverse segment — see
+    // `grad_checkpointed`.
+    let all_positions = spread_positions(num_steps, num_checkpoints);
     let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
     // Isolate this invocation in a uniquely-named subdirectory: concurrent
@@ -650,11 +645,41 @@ fn backward_from_checkpoints<F: Float + BtapeThreadLocal>(
 //  Revolve schedule computation
 // ══════════════════════════════════════════════
 
-/// Compute optimal checkpoint positions using the Revolve algorithm.
+/// Choose the stored checkpoint positions for `num_steps` forward steps
+/// under a budget of `num_checkpoints` slots.
+///
+/// Positions are spread evenly across `(0, num_steps)` — `⌊j·N/(C+1)⌋` for
+/// `j = 1..=C` — so the largest reverse segment is at most `⌈N/(C+1)⌉`
+/// steps. Peak backward memory is `O(max_segment · dim)` because each
+/// reverse segment re-materializes its forward states before its VJP
+/// sweep, and each segment is recomputed exactly once, so segment length —
+/// not recompute count — is the binding cost. Keeping the smallest
+/// schedule positions instead would cluster every checkpoint at the front
+/// and leave one `O(num_steps)` tail segment.
+// SPEC: BudgetInvariant — stored checkpoint count never exceeds num_checkpoints.
+fn spread_positions(num_steps: usize, num_checkpoints: usize) -> Vec<usize> {
+    if num_checkpoints >= num_steps {
+        // Store-everything: identical to the reference schedule's fast path.
+        return revolve_schedule(num_steps, num_checkpoints);
+    }
+    // C < N ⇒ consecutive targets differ by at least ⌊N/(C+1)⌋ ≥ 1, so the
+    // positions are strictly increasing (sorted and deduplicated) and lie
+    // in [1, N).
+    (1..=num_checkpoints)
+        .map(|j| j * num_steps / (num_checkpoints + 1))
+        .collect()
+}
+
+/// Compute checkpoint positions using the classic Revolve algorithm.
 ///
 /// Given `num_steps` forward steps and `num_checkpoints` available slots,
-/// returns the set of step indices where checkpoints should be placed.
-/// Step 0 (initial state) is always stored implicitly.
+/// returns the set of step indices the binomial schedule visits. Step 0
+/// (initial state) is always stored implicitly.
+///
+/// Retained as the reference algorithm (modeled by `specs/revolve/`);
+/// production placement uses [`spread_positions`] because this
+/// implementation's backward pass replays each segment exactly once, making
+/// segment length rather than recompute count the binding cost.
 fn revolve_schedule(num_steps: usize, num_checkpoints: usize) -> Vec<usize> {
     if num_checkpoints >= num_steps {
         // Store everything
@@ -829,6 +854,53 @@ fn vjp_step<F: Float + BtapeThreadLocal>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spread_positions_bounds_max_segment() {
+        for &(n, c) in &[
+            (10usize, 1usize),
+            (10, 2),
+            (100, 5),
+            (1000, 10),
+            (10000, 20),
+            (5, 4),
+        ] {
+            let pos = spread_positions(n, c);
+            assert!(pos.len() <= c, "(n={n}, c={c}): budget exceeded");
+            assert!(
+                pos.windows(2).all(|w| w[0] < w[1]),
+                "(n={n}, c={c}): not sorted/deduped"
+            );
+            assert!(pos.iter().all(|&p| p >= 1 && p < n));
+            let mut prev = 0usize;
+            let mut max_seg = 0usize;
+            for &p in &pos {
+                max_seg = max_seg.max(p - prev);
+                prev = p;
+            }
+            max_seg = max_seg.max(n - prev);
+            // ⌈N/(C+1)⌉ — the even-spacing bound, including both end segments.
+            let bound = n.div_ceil(c + 1);
+            assert!(
+                max_seg <= bound,
+                "(n={n}, c={c}): max segment {max_seg} exceeds bound {bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn spread_positions_single_checkpoint_centers() {
+        // One slot must land mid-trajectory, halving peak memory — not at
+        // either end.
+        assert_eq!(spread_positions(100, 1), vec![50]);
+        assert_eq!(spread_positions(10, 1), vec![5]);
+    }
+
+    #[test]
+    fn spread_positions_store_all_matches_reference() {
+        assert_eq!(spread_positions(5, 5), revolve_schedule(5, 5));
+        assert_eq!(spread_positions(5, 9), (1..5).collect::<Vec<_>>());
+    }
 
     #[test]
     fn beta_base_cases() {
