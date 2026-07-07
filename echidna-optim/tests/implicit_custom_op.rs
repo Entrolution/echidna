@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use echidna::bytecode_tape::{BtapeGuard, BytecodeTape, CustomOp, CustomOpHandle};
 use echidna::{BReverse, Dual};
-use echidna_optim::{implicit_hessian, implicit_hvp, implicit_jacobian};
+use echidna_optim::{implicit_hessian, implicit_hvp, implicit_jacobian, piggyback_tangent_step};
 
 /// z³ with exact dual implementations: `partials_dual` carries the
 /// derivative of the partial (d(3a²) = 6a·ȧ), which is what makes exact
@@ -134,5 +134,28 @@ fn implicit_hvp_composed_custom_op_away_from_recording_point() {
         (h[0] - (-2.0 / 2187.0)).abs() < 1e-12,
         "h = {}, expected -2/2187",
         h[0]
+    );
+}
+
+#[test]
+fn piggyback_tangent_through_custom_op_away_from_recording_point() {
+    // Step map S(z, x) = cube(z) + x recorded at (2, 8), stepped at (3, 5)
+    // with ż = 1, ẋ = 0. The custom op's primal and tangent must be
+    // evaluated at the CURRENT z: S = 27 + 5 = 32 and Ṡ = 3z²·ż = 27. A
+    // recording-time linearization gives 8 + 12·(3−2) + 5 = 25 and 12.
+    let tape = record_residual(&[2.0, 8.0], vec![Arc::new(Cube)], |v, h, xv| {
+        let c = v[0].custom_unary(h[0], xv[0] * xv[0] * xv[0]);
+        c + v[1]
+    });
+    let (z_new, z_dot_new) = piggyback_tangent_step(&tape, &[3.0], &[5.0], &[1.0], &[0.0], 1);
+    assert!(
+        (z_new[0] - 32.0).abs() < 1e-12,
+        "z_new = {}, expected 32",
+        z_new[0]
+    );
+    assert!(
+        (z_dot_new[0] - 27.0).abs() < 1e-12,
+        "ż_new = {}, expected 27",
+        z_dot_new[0]
     );
 }

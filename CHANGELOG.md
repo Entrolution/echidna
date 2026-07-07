@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BytecodeTape::forward_tangent_dual2`: a `Dual<Dual<F>>` forward sweep
   that routes custom operations through `CustomOp::eval_dual` and
   `CustomOp::partials_dual`, carrying exact first- and second-order
-  information through custom ops at the current evaluation point.
+  information through custom ops at the current evaluation point. The
+  existing `Dual<F>` counterpart `forward_tangent_dual` is now public as
+  well.
 
 ### Added (echidna-optim)
 
@@ -32,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recording point, evaluating the linearization at stale primals. Ops
   relying on the trait's default dual implementations still contribute
   constant partials, but now at the current evaluation point.
+- `piggyback_tangent_step` (and everything built on it, including
+  `piggyback_tangent_solve`) now evaluates custom operations' primals and
+  tangents at the current step point via `CustomOp::eval_dual`.
+  Previously custom ops were linearized around recording-time primals,
+  so both the stepped state and its tangent acquired
+  O(distance-from-recording-point) errors on tapes containing custom
+  ops.
 - `lbfgs` and `newton` results terminating with `LineSearchFailed` now
   include the failed line search's objective evaluations in
   `func_evals`; previously those evaluations were silently dropped from

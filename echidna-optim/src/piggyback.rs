@@ -213,7 +213,9 @@ pub fn piggyback_tangent_step_with_buf<F: Float>(
         dual_inputs.push(Dual::new(x[j], x_dot[j]));
     }
 
-    step_tape.forward_tangent(&dual_inputs, buf);
+    // Dual-specialized sweep: custom ops evaluate their tangents at the
+    // current (z, x) via eval_dual instead of a recording-time linearization.
+    step_tape.forward_tangent_dual(&dual_inputs, buf);
 
     // Extract outputs: .re -> z_new, .eps -> z_dot_new
     let out_indices = step_tape.all_output_indices();

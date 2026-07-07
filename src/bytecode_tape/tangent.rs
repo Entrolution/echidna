@@ -20,10 +20,11 @@ impl<F: Float> super::BytecodeTape<F> {
     /// inputs via [`forward()`](Self::forward) but `self.values` was not updated
     /// to match the tangent inputs, the custom-op linearization point will be
     /// stale, producing O(||x - x_record||) errors in the tangent output.
-    /// For exact derivatives through custom ops, use the `Dual<F>` specialization
-    /// `forward_tangent_dual` (crate-internal) or the public `Dual<Dual<F>>`
-    /// specialization [`forward_tangent_dual2`](Self::forward_tangent_dual2),
-    /// which route through `CustomOp::eval_dual` / `CustomOp::partials_dual`.
+    /// For exact derivatives through custom ops, use the specializations
+    /// [`forward_tangent_dual`](Self::forward_tangent_dual) (`Dual<F>`) or
+    /// [`forward_tangent_dual2`](Self::forward_tangent_dual2)
+    /// (`Dual<Dual<F>>`), which route through `CustomOp::eval_dual` /
+    /// `CustomOp::partials_dual`.
     pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
             // First-order linearization of custom ops: result + da*(a - a₀) + db*(b - b₀).
@@ -77,9 +78,13 @@ impl<F: Float> super::BytecodeTape<F> {
         });
     }
 
-    /// Forward sweep specialized for `Dual<F>`, calling [`CustomOp::eval_dual`]
-    /// so that custom ops propagate tangent information for second-order derivatives.
-    pub(super) fn forward_tangent_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+    /// Forward sweep specialized for `Dual<F>`, calling
+    /// [`CustomOp::eval_dual`](crate::CustomOp::eval_dual) so custom ops
+    /// propagate exact first-order tangents at the *current* inputs. The
+    /// generic [`forward_tangent`](Self::forward_tangent) instead linearizes
+    /// custom ops around recording-time primals, which is stale away from
+    /// the recording point.
+    pub fn forward_tangent_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
         self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
             let [_a_idx, cb_idx] = self.arg_indices[i];
             self.custom_ops[cb_idx as usize].eval_dual(a_t, b_t)
