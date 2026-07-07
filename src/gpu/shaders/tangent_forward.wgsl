@@ -241,12 +241,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let dx = select(
                     select(b * r / a * at, b * powf_real(a, b - 1.0) * at, a == 0.0),
                     0.0,
-                    b == 0.0,
+                    b == 0.0 || at == 0.0,
                 );
                 // db = a^b * ln(a). For a <= 0, ln(a) is NaN and `NaN * 0 = NaN`
                 // would poison rt even when bt = 0; the convention (matching the
                 // CPU `OpCode::Powf`) is db = 0 for a <= 0.
-                let dy = select(r * log(a) * bt, 0.0, r == 0.0 || a <= 0.0);
+                let dy = select(r * log(a) * bt, 0.0, r == 0.0 || a <= 0.0 || bt == 0.0);
                 rt = dx + dy;
             }
             case 8u /* ATAN2 */: {
@@ -388,6 +388,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
 
         primals[p_base + i] = r;
+        // Structural-zero tangent convention (matches the CPU chain rule's
+        // is_all_zero guard, which applies to EVERY unary elemental): a zero
+        // tangent through a unary op stays exactly zero even where the
+        // derivative is unbounded (sqrt/ln at 0, atanh at ±1), overflowed
+        // (exp/sinh/cosh at large arguments), or NaN (out-of-domain primal) —
+        // otherwise IEEE 0*Inf / 0*NaN leaks NaN into constant lanes. POWF is
+        // guarded per-direction in its arm; the remaining binary ops need no
+        // guard (bounded partials or conventions already handled in their
+        // arms).
+        let unary_singular = op >= 12u && op <= 42u; // NEG..FRACT
+        if at == 0.0 && unary_singular {
+            rt = 0.0;
+        }
         tangents[t_base + i] = rt;
     }
 

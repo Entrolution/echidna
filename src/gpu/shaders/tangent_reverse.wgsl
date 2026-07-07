@@ -204,7 +204,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // REM is exact only for |a/b| < 2^24 (f32 mantissa) — see rem_f32 in
             // forward.wgsl; CPU/CUDA use exact fmod.
             case 6u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=a-trunc(a/b)*b; rt=at-trunc(a/b)*bt; }
-            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0), 0.0, b==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0); rt=dx+dy; }
+            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0), 0.0, b==0.0 || at==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0 || bt==0.0); rt=dx+dy; }
             case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let mx=max(abs(a),abs(b)); if mx==0.0 {rt=0.0;} else {let au=a/mx; let bu=b/mx; let d=mx*(au*au+bu*bu); rt=(bu*at-au*bt)/d;} }
             // HYPOT primal via the overflow-safe helper; the tangent numerator
             // a*at + b*bt is left un-rescaled (it overflows only when the true
@@ -250,6 +250,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             default: {}
         }
         primals[base + i] = r;
+        // Structural-zero tangent convention — see tangent_forward.wgsl
+        // (uniform across all unary ops, matching the CPU chain rule).
+        let unary_singular = op >= 12u && op <= 42u; // NEG..FRACT
+        if at == 0.0 && unary_singular {
+            rt = 0.0;
+        }
         tans[base + i] = rt;
     }
 
@@ -330,10 +336,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // ∂²/∂a∂b term carries ln(0), non-finite on CPU and GPU
                     // alike, so it is not asserted.) The a>0 branch is unchanged.
                     if a <= 0.0 {
-                        let daa = select(b*(b-1.0)*powf_real(a, b-2.0)*at, 0.0, b == 1.0);
-                        da_eps = bt*ab1 + daa;
+                        let daa = select(b*(b-1.0)*powf_real(a, b-2.0)*at, 0.0, b == 1.0 || at == 0.0);
+                        // Per-direction structural-zero guards: ab1 can be
+                        // non-finite at a singular base, so each term is
+                        // zeroed with its own direction component.
+                        da_eps = select(bt*ab1, 0.0, bt == 0.0) + daa;
                     } else {
-                        da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at + log(a)*bt);
+                        da_eps = select(bt*ab1, 0.0, bt == 0.0)
+                            + select(b*ab1*((b-1.0)/a)*at, 0.0, at == 0.0)
+                            + select(b*ab1*log(a)*bt, 0.0, bt == 0.0);
                     }
                 }
                 let rr = primals[base+i]; // r = a^b from forward pass
@@ -344,7 +355,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let la = log(a);
                     let rt = tans[base+i];
                     db_re = rr * la;
-                    db_eps = rt*la + rr*at/a;
+                    // rt is direction-consistent from phase 1 (zero for a
+                    // fully-constant direction); the at-term needs its own
+                    // guard because rr can be non-finite on overflow.
+                    db_eps = rt*la + select(rr*at/a, 0.0, at == 0.0);
                 }
             }
             case 8u /* ATAN2 */: {
@@ -492,6 +506,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 37u, 38u, 39u, 40u, 41u: { /* zero derivative */ }
             case 42u /* FRACT */: { da_re=1.0; }
             default: {}
+        }
+
+        // Structural-zero direction component: for the unary arms da_eps is
+        // f''(a)·at, so a zero direction keeps the second-order contribution
+        // exactly zero even at singular primals (0/0 or 0*Inf otherwise).
+        // Mirrors the forward-phase guard; POWF is guarded per-term in its
+        // arm. The first-order multiplier da_re does not involve the
+        // direction and is untouched.
+        let unary_singular2 = op >= 12u && op <= 42u; // NEG..FRACT
+        if at == 0.0 && unary_singular2 {
+            da_eps = 0.0;
         }
 
         // Dual accumulation: adj[arg] += Dual(da_re, da_eps) * Dual(ar, ae)

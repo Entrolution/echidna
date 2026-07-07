@@ -57,9 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tangents to exactly `0` at points where the derivative is unbounded or NaN:
   a constant stays a constant (e.g. the tangent of `sqrt(x²+y²)` at the origin
   is now `0`, matching `hypot`) instead of becoming NaN via IEEE `0 × Inf`.
-  Live tangents keep the non-finite derivative. The `-0.0` behaviour of the
-  logarithm derivative family (`-Inf`, following the IEEE reciprocal sign) is
-  unchanged, now documented and pinned by tests.
+  Live tangents keep the non-finite derivative. The GPU forward-tangent and
+  Hessian-vector-product kernels (wgpu and CUDA) apply the same convention
+  to their tangent and second-order direction slots, so constant direction
+  components no longer produce NaN at singular primals on the GPU either.
+  The `-0.0` behaviour of the logarithm derivative family (`-Inf`, following
+  the IEEE reciprocal sign) is unchanged, now documented and pinned by tests.
 - `hypot` of two identically-zero Taylor / TaylorDyn jets now returns the
   all-zero jet (the composite function is the constant 0) instead of the
   singular `[0, Inf, …]` jet, matching the existing `Laurent::hypot`
