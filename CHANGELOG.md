@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Live tangents keep the non-finite derivative. The `-0.0` behaviour of the
   logarithm derivative family (`-Inf`, following the IEEE reciprocal sign) is
   unchanged, now documented and pinned by tests.
+- `hypot` of two identically-zero Taylor / TaylorDyn jets now returns the
+  all-zero jet (the composite function is the constant 0) instead of the
+  singular `[0, Inf, …]` jet, matching the existing `Laurent::hypot`
+  behaviour so all three series types agree. Deeper zeros with a
+  higher-order signal (e.g. `hypot(t², 0)`) are unchanged. The GPU Taylor
+  kernels follow the same convention.
 
 ## [0.13.0] - 2026-07-06
 

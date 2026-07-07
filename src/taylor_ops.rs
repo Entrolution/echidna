@@ -750,6 +750,18 @@ pub fn taylor_hypot<F: Float>(
     let n = c.len();
     let scale = a[0].abs().max(b[0].abs());
     if scale == F::zero() {
+        // IEEE maxNum drops NaN (`max(NaN, 0) == 0`), so a NaN leading
+        // coefficient lands in this zero-scale branch rather than on the
+        // general rescale path. Propagate it to every coefficient
+        // (hypot(NaN, ·) = NaN), exactly as the general path does when the
+        // co-operand is non-zero — without this, both the peel-and-recurse
+        // and all-zero arms below would silently swallow the NaN.
+        if a[0].is_nan() || b[0].is_nan() {
+            for ck in c.iter_mut() {
+                *ck = F::nan();
+            }
+            return;
+        }
         // Both leading primals are zero. If the *next* order has any signal,
         // the composite function t ↦ hypot(a(t), b(t)) is smoothly
         // `|t|·hypot(a(t)/t, b(t)/t)` near t=0. Recursively compute on the
@@ -777,20 +789,18 @@ pub fn taylor_hypot<F: Float>(
             c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
             return;
         }
-        // Both series are identically zero past the leading coefficient — fall
-        // through to the direct square-then-sqrt path, which gives 0 for the
-        // primal and Inf for higher derivatives (the latter matches the
-        // singular-derivative convention at a true zero). A leading zero with a
-        // higher-order signal is handled by the peel-and-recurse branch above,
-        // which shifts one order at a time until a non-zero leading coefficient
-        // drives a non-zero scale.
-        taylor_mul(a, a, scratch1);
-        taylor_mul(b, b, scratch2);
-        for k in 0..n {
-            scratch1[k] = scratch1[k] + scratch2[k];
+        // Both series are identically zero: t ↦ hypot(a(t), b(t)) is the
+        // constant 0, so every Taylor coefficient is zero. Unlike sqrt at a
+        // genuine simple zero there is no branch point here — emitting the
+        // singular [0, Inf, …] jet would poison downstream sweeps with a
+        // spurious pole. Matches `Laurent::hypot`'s all-zero guard, so the
+        // three hypot surfaces (Taylor, TaylorDyn, Laurent) agree on this
+        // input. A leading zero WITH a higher-order signal is handled by the
+        // peel-and-recurse branch above, which shifts one order at a time
+        // until a non-zero leading coefficient drives a non-zero scale.
+        for ck in c.iter_mut() {
+            *ck = F::zero();
         }
-        taylor_sqrt(scratch1, c);
-        c[0] = a[0].hypot(b[0]);
         return;
     }
     let inv_scale = F::one() / scale;
