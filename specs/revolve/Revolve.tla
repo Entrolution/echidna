@@ -6,8 +6,10 @@
  * Models the full lifecycle:
  *   Phase 1 (Schedule):  Compute optimal checkpoint positions via recursive
  *                         interval splitting (mirrors schedule_recursive).
- *   Phase 2 (Forward):   Walk forward through all steps, storing state at
- *                         checkpoint positions (mirrors grad_checkpointed).
+ *   Phase 2 (Forward):   Walk forward through all steps, storing a
+ *                         budget-capped selection of states (mirrors
+ *                         grad_checkpointed; the selection strategy is
+ *                         abstracted — see ForwardStep).
  *   Phase 3 (Backward):  Process segments in reverse, marking covered steps
  *                         (mirrors backward_from_checkpoints).
  *
@@ -131,8 +133,13 @@ ScheduleDone ==
 (* Phase 2: Forward pass *)
 ---------------------------------------------------------------------------
 (*
- * Walk steps 0..NumSteps-1. After each step, if the next step index is a
- * checkpoint position and we haven't exceeded the budget, store it.
+ * Walk steps 0..NumSteps-1. After each step, the implementation MAY store
+ * the next step index as a checkpoint, provided it is in range and the
+ * budget allows. The choice is nondeterministic: the model covers every
+ * budget-capped, in-range selection, so the invariants below hold for the
+ * whole family of placement strategies — the evenly spread selection the
+ * Rust code uses (spread_positions), the binomial-schedule subset of
+ * earlier versions, and the hint-driven placements alike.
  *
  * Mirrors the forward loop in grad_checkpointed().
  *)
@@ -144,10 +151,11 @@ ForwardStep ==
     /\ LET nextStep == currentStep + 1
        IN
        IF nextStep < NumSteps
-          /\ nextStep \in positions
           /\ Len(storedCheckpoints) < NumCheckpoints + 1  \* +1 for pinned step 0
        THEN
-           storedCheckpoints' = Append(storedCheckpoints, nextStep)
+           \* Nondeterministic selection: store this step, or skip it.
+           \/ storedCheckpoints' = Append(storedCheckpoints, nextStep)
+           \/ storedCheckpoints' = storedCheckpoints
        ELSE
            storedCheckpoints' = storedCheckpoints
     /\ UNCHANGED <<phase, positions, workStack, segIndex, coveredSteps>>
@@ -217,7 +225,7 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
  * storedCheckpoints includes pinned step 0, so the limit is
  * NumCheckpoints + 1.
  *
- * Rust: all_positions.truncate(num_checkpoints) in grad_checkpointed
+ * Rust: spread_positions returns at most num_checkpoints positions
  *)
 BudgetInvariant ==
     Len(storedCheckpoints) <= NumCheckpoints + 1
