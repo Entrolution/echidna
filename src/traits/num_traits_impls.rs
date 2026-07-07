@@ -685,9 +685,15 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
             return rev_binary(self, n, F::one(), F::zero(), dy);
         }
         let val = self.value.powf(n.value);
-        let dx = if self.value == F::zero() || val == F::zero() {
-            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
-            // underflow when x^n underflows to 0 but x != 0
+        let dx = if self.value == F::zero()
+            || val == F::zero()
+            || !self.value.is_finite()
+            || !val.is_finite()
+        {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0, to handle underflow
+            // when x^n underflows to 0 but x != 0, and to avoid Inf/Inf = NaN
+            // at an infinite base (e.g. Inf^2.5 has derivative Inf, not NaN) —
+            // matching `Dual`/`opcode`.
             n.value * self.value.powf(n.value - F::one())
         } else {
             n.value * val / self.value

@@ -44,10 +44,14 @@ impl<F: Float, const N: usize> Div for DualVec<F, N> {
     type Output = Self;
     #[inline(always)]
     fn div(self, rhs: Self) -> Self {
+        // Primal is the correctly-rounded IEEE quotient (bit-exact with `f64`
+        // division and the bytecode tape); `inv` is reused only in the
+        // derivative term, where 1 ULP is inherent.
         let inv = F::one() / rhs.re;
+        let re = self.re / rhs.re;
         DualVec {
-            re: self.re * inv,
-            eps: std::array::from_fn(|k| (self.eps[k] - self.re * inv * rhs.eps[k]) * inv),
+            re,
+            eps: std::array::from_fn(|k| (self.eps[k] - re * rhs.eps[k]) * inv),
         }
     }
 }
@@ -183,9 +187,10 @@ macro_rules! impl_dual_vec_scalar_ops {
             type Output = DualVec<$f, N>;
             #[inline]
             fn div(self, rhs: $f) -> DualVec<$f, N> {
+                // Correctly-rounded primal; `inv` only in the derivative term.
                 let inv = 1.0 / rhs;
                 DualVec {
-                    re: self.re * inv,
+                    re: self.re / rhs,
                     eps: std::array::from_fn(|k| self.eps[k] * inv),
                 }
             }
@@ -195,10 +200,13 @@ macro_rules! impl_dual_vec_scalar_ops {
             type Output = DualVec<$f, N>;
             #[inline]
             fn div(self, rhs: DualVec<$f, N>) -> DualVec<$f, N> {
+                // Correctly-rounded primal, reused in the derivative
+                // d/db (a/b) = -(a/b)/b so the tangent shares its rounding.
                 let inv = 1.0 / rhs.re;
+                let re = self / rhs.re;
                 DualVec {
-                    re: self * inv,
-                    eps: std::array::from_fn(|k| -self * rhs.eps[k] * inv * inv),
+                    re,
+                    eps: std::array::from_fn(|k| -re * rhs.eps[k] * inv),
                 }
             }
         }

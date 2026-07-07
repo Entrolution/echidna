@@ -138,11 +138,17 @@ pub fn acosh_deriv<T: Float>(a: T) -> T {
 /// Domain-restricted logs emit a NaN partial *strictly* outside their valid
 /// interval (`a < 0`) so a caller that supplied an out-of-domain input sees NaN
 /// rather than a finite-but-meaningless value (`1/-2 = -0.5`). The boundary
-/// `a = 0` is left to IEEE arithmetic — `1/0 = +Inf`, the correct one-sided
-/// derivative limit. Every AD mode and the bytecode `OpCode` dispatcher delegate
-/// here so the convention has a single source of truth; the wgpu and CUDA
-/// kernels carry the same guard in their own languages (reverse, forward-tangent,
-/// and HVP sweeps), pinned by `tests/domain_nan_convention.rs`.
+/// `a = 0` is left to IEEE arithmetic, sign of zero included: `1/(+0) = +Inf`
+/// (the one-sided derivative limit) and `1/(-0) = -Inf`. Unlike `abs_deriv`,
+/// ±0 is deliberately NOT collapsed to one value here — every path (all CPU AD
+/// modes and both GPU backends) computes the same `1/a` formula, with the ±0
+/// result following each backend's IEEE division, so special-casing `-0` would
+/// require touching every one of them for an input whose primal `ln(-0) = -Inf`
+/// already signals the degenerate limit. Every AD mode and the bytecode
+/// `OpCode` dispatcher delegate here so the convention has a single source of
+/// truth; the wgpu and CUDA kernels carry the same guard in their own languages
+/// (reverse, forward-tangent, and HVP sweeps), pinned by
+/// `tests/domain_nan_convention.rs`.
 #[inline]
 pub fn ln_deriv<T: Float>(a: T) -> T {
     if a >= T::zero() {
@@ -242,6 +248,15 @@ mod tests {
         assert!(ln_deriv(0.0_f64).is_infinite() && ln_deriv(0.0_f64) > 0.0);
         assert!(log2_deriv(0.0_f64).is_infinite() && log2_deriv(0.0_f64) > 0.0);
         assert!(log10_deriv(0.0_f64).is_infinite() && log10_deriv(0.0_f64) > 0.0);
+
+        // Signed zero: the sign of the zero flows through the reciprocal
+        // (deliberately NOT collapsed like `abs_deriv` — see the `ln_deriv`
+        // doc). 1/(-0.0) = -Inf on the CPU paths; the GPU shaders share the
+        // same `1/a` formula, with the ±0 sign following each backend's
+        // IEEE division.
+        assert!(ln_deriv(-0.0_f64).is_infinite() && ln_deriv(-0.0_f64) < 0.0);
+        assert!(log2_deriv(-0.0_f64).is_infinite() && log2_deriv(-0.0_f64) < 0.0);
+        assert!(log10_deriv(-0.0_f64).is_infinite() && log10_deriv(-0.0_f64) < 0.0);
         assert!(ln_1p_deriv(-1.0_f64).is_infinite() && ln_1p_deriv(-1.0_f64) > 0.0);
         assert!(atanh_deriv(1.0_f64).is_infinite() && atanh_deriv(1.0_f64) > 0.0);
         assert!(atanh_deriv(-1.0_f64).is_infinite() && atanh_deriv(-1.0_f64) > 0.0);

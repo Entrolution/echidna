@@ -1255,3 +1255,374 @@ fn powf_reverse_partial_underflow_tape() {
         grad[0]
     );
 }
+
+// ══════════════════════════════════════════════════════
+//  Nested-dual tangent guards, structural-zero convention,
+//  and division primal rounding
+// ══════════════════════════════════════════════════════
+
+/// Second-order forward-over-forward: guards that test whether a tangent is
+/// zero must inspect the WHOLE tangent (`is_all_zero`), not just its primal —
+/// `PartialEq` on `Dual` compares only `.re`, so a tangent with zero
+/// first-order but live second-order component would otherwise be dropped.
+mod nested_second_order {
+    use echidna::{Dual, DualVec};
+
+    type D2 = Dual<Dual<f64>>;
+
+    /// Forward-over-forward seed: inner eps tracks d/dx, outer eps re-tracks it.
+    fn var(x0: f64) -> D2 {
+        Dual::new(Dual::new(x0, 1.0), Dual::new(1.0, 0.0))
+    }
+    fn cst(c: f64) -> D2 {
+        Dual::new(Dual::new(c, 0.0), Dual::new(0.0, 0.0))
+    }
+
+    #[test]
+    fn recip_keeps_second_order_through_zero_first_derivative() {
+        // f(x) = 1/(x²+1): f'(0) = 0 but f''(0) = -2. At x = 0 the inner
+        // tangent of g = x²+1 has primal 0 with a live second-order part.
+        let x = var(0.0);
+        let g = x * x + cst(1.0);
+        let y = g.recip();
+        assert_eq!(y.eps.eps, -2.0, "d²/dx² 1/(x²+1) at 0 via recip");
+        // The equivalent spelling 1/g must agree.
+        let y2 = cst(1.0) / g;
+        assert_eq!(y2.eps.eps, -2.0, "d²/dx² 1/(x²+1) at 0 via Div");
+    }
+
+    #[test]
+    fn dual_vec_recip_keeps_second_order_per_lane() {
+        type Dv = DualVec<Dual<f64>, 1>;
+        let x: Dv = DualVec::new(Dual::new(0.0, 1.0), [Dual::new(1.0, 0.0)]);
+        let one: Dv = DualVec::constant(Dual::new(1.0, 0.0));
+        let g = x * x + one;
+        let y = g.recip();
+        assert_eq!(y.eps[0].eps, -2.0);
+    }
+
+    #[test]
+    fn powf_constant_integer_fast_path_keeps_exponent_second_order() {
+        // Base 3 constant; exponent h with h(x0) = 2, h'(x0) = 0, h''(x0) = 1.
+        // d²/dx²(3^h) = 3^h·(ln3)²·h'² + 3^h·ln3·h'' = 9·ln3.
+        // The seed h' = 0, h'' = 1 is deliberate: the exponent tangent's
+        // primal is zero, so a primal-only "is the exponent constant?" test
+        // would wrongly dispatch to powi and drop the ln-weighted term.
+        let a = cst(3.0);
+        let h: D2 = Dual::new(Dual::new(2.0, 0.0), Dual::new(0.0, 1.0));
+        let f = a.powf(h);
+        let expected = 9.0 * 3.0_f64.ln();
+        assert!(
+            (f.eps.eps - expected).abs() < 1e-12,
+            "d²/dx² 3^h(x): expected {expected}, got {}",
+            f.eps.eps
+        );
+    }
+
+    #[test]
+    fn dual_vec_powf_fast_path_keeps_exponent_second_order() {
+        type Dv = DualVec<Dual<f64>, 1>;
+        let a: Dv = DualVec::constant(Dual::new(3.0, 0.0));
+        let h: Dv = DualVec::new(Dual::new(2.0, 0.0), [Dual::new(0.0, 1.0)]);
+        let f = a.powf(h);
+        let expected = 9.0 * 3.0_f64.ln();
+        assert!((f.eps[0].eps - expected).abs() < 1e-12);
+    }
+}
+
+/// Elementals with unbounded derivatives at reachable finite points: a
+/// structurally-zero (constant) tangent stays exactly 0 there instead of
+/// IEEE 0×Inf = NaN, while a live tangent keeps the non-finite derivative.
+/// Matches the hypot-origin convention and the reverse-sweep zero-adjoint
+/// skip.
+mod structural_zero_tangent {
+    use echidna::{Dual, DualVec};
+
+    macro_rules! zero_tangent_stays_zero {
+        ($name:ident, $method:ident, $p:expr, $sign:expr) => {
+            #[test]
+            fn $name() {
+                let p: f64 = $p;
+                let sign: f64 = $sign;
+                let c = Dual::<f64>::constant(p).$method();
+                assert_eq!(
+                    c.eps,
+                    0.0,
+                    "constant through {} at {p}: tangent must be exactly 0, got {}",
+                    stringify!($method),
+                    c.eps
+                );
+                let v = Dual::<f64>::variable(p).$method();
+                assert!(
+                    v.eps.is_infinite() && v.eps.signum() == sign,
+                    "variable through {} at {p}: tangent must be {}Inf, got {}",
+                    stringify!($method),
+                    if sign > 0.0 { "+" } else { "-" },
+                    v.eps
+                );
+                let dv = DualVec::<f64, 2>::new(p, [0.0, 1.0]).$method();
+                assert_eq!(dv.eps[0], 0.0, "zero lane must stay 0");
+                assert!(
+                    dv.eps[1].is_infinite() && dv.eps[1].signum() == sign,
+                    "live lane must keep the signed Inf"
+                );
+            }
+        };
+    }
+
+    zero_tangent_stays_zero!(sqrt_at_zero, sqrt, 0.0, 1.0);
+    zero_tangent_stays_zero!(cbrt_at_zero, cbrt, 0.0, 1.0);
+    zero_tangent_stays_zero!(recip_at_zero, recip, 0.0, -1.0);
+    zero_tangent_stays_zero!(ln_at_zero, ln, 0.0, 1.0);
+    zero_tangent_stays_zero!(log2_at_zero, log2, 0.0, 1.0);
+    zero_tangent_stays_zero!(log10_at_zero, log10, 0.0, 1.0);
+    zero_tangent_stays_zero!(asin_at_one, asin, 1.0, 1.0);
+    zero_tangent_stays_zero!(acos_at_one, acos, 1.0, -1.0);
+    zero_tangent_stays_zero!(acosh_at_one, acosh, 1.0, 1.0);
+    zero_tangent_stays_zero!(atanh_at_one, atanh, 1.0, 1.0);
+
+    #[test]
+    fn ln_1p_at_boundary() {
+        let c = Dual::<f64>::constant(-1.0).ln_1p();
+        assert_eq!(c.eps, 0.0);
+        let v = Dual::<f64>::variable(-1.0).ln_1p();
+        assert!(v.eps.is_infinite() && v.eps > 0.0);
+    }
+
+    #[test]
+    fn powi_negative_exponent_at_zero() {
+        // 1/x² at x = 0: same singularity class as recip. The derivative
+        // -2·x^(-3) approaches -Inf from the right.
+        let c = Dual::<f64>::constant(0.0).powi(-2);
+        assert_eq!(c.eps, 0.0);
+        let v = Dual::<f64>::variable(0.0).powi(-2);
+        assert!(v.eps.is_infinite() && v.eps < 0.0);
+    }
+
+    #[test]
+    fn l2_norm_at_origin_matches_hypot() {
+        // sqrt(x²+y²) and hypot(x,y) at the origin must agree: the tangent of
+        // x²+y² is exactly zero there (2x·ẋ = 0), so the structural-zero
+        // convention gives 0 through sqrt — the same value hypot's origin
+        // short-circuit produces.
+        let x = Dual::<f64>::variable(0.0);
+        let y = Dual::<f64>::constant(0.0);
+        let via_sqrt = (x * x + y * y).sqrt();
+        let via_hypot = x.hypot(y);
+        assert_eq!(via_sqrt.eps, 0.0);
+        assert_eq!(via_hypot.eps, 0.0);
+        assert_eq!(via_sqrt.eps, via_hypot.eps);
+    }
+}
+
+/// powf at non-finite / boundary points: the exponent-direction term must not
+/// poison a finite base-direction derivative, in either forward or reverse
+/// mode.
+mod powf_nonfinite_edges {
+    use echidna::{grad, Dual, DualVec, Reverse};
+    use num_traits::Float as NumFloat;
+
+    #[test]
+    fn overflowed_primal_keeps_finite_base_derivative() {
+        // f(x) = x^2.5 at x = 1e200: the primal overflows to Inf but the true
+        // derivative 2.5·x^1.5 ≈ 2.5e300 is representable. The exponent term
+        // (Inf·ln(x)·0) must not turn it into NaN.
+        let x = Dual::<f64>::new(1e200, 1.0);
+        let r = x.powf(Dual::constant(2.5));
+        assert!(r.re.is_infinite());
+        let expected = 2.5e300;
+        assert!(
+            ((r.eps - expected) / expected).abs() < 1e-10,
+            "expected ≈{expected}, got {}",
+            r.eps
+        );
+    }
+
+    #[test]
+    fn reverse_overflowed_primal_keeps_finite_base_derivative() {
+        let g = grad(
+            |x: &[Reverse<f64>]| NumFloat::powf(x[0], Reverse::constant(2.5)),
+            &[1e200],
+        );
+        let expected = 2.5e300;
+        assert!(
+            ((g[0] - expected) / expected).abs() < 1e-10,
+            "reverse d/dx x^2.5 at 1e200: expected ≈{expected}, got {}",
+            g[0]
+        );
+    }
+
+    #[test]
+    fn infinite_base_gives_infinite_derivative_not_nan() {
+        let x = Dual::<f64>::new(f64::INFINITY, 1.0);
+        let r = x.powf(Dual::constant(2.5));
+        assert!(r.re.is_infinite() && r.re > 0.0);
+        assert!(
+            r.eps.is_infinite() && r.eps > 0.0,
+            "d/dx x^2.5 at +Inf must be +Inf, got {}",
+            r.eps
+        );
+        let g = grad(
+            |x: &[Reverse<f64>]| NumFloat::powf(x[0], Reverse::constant(2.5)),
+            &[f64::INFINITY],
+        );
+        assert!(
+            g[0].is_infinite() && g[0] > 0.0,
+            "reverse d/dx x^2.5 at +Inf must be +Inf, got {}",
+            g[0]
+        );
+    }
+
+    // Non-discriminating regression guard: the constant-integer fast path
+    // already routes Inf^0 through powi (result {1, 0}).
+    #[test]
+    fn infinite_base_zero_constant_exponent() {
+        let x = Dual::<f64>::new(f64::INFINITY, 1.0);
+        let r = x.powf(Dual::constant(0.0));
+        assert_eq!(r.re, 1.0);
+        assert_eq!(r.eps, 0.0);
+    }
+
+    #[test]
+    fn fractional_exponent_at_zero_base() {
+        // powf's base-direction path (distinct code from sqrt's chain):
+        // 0^0.5 with a constant base must not produce 0.5·0^(-0.5)·0 = NaN.
+        let c = Dual::<f64>::constant(0.0).powf(Dual::constant(0.5));
+        assert_eq!(c.re, 0.0);
+        assert_eq!(c.eps, 0.0);
+        let v = Dual::<f64>::variable(0.0).powf(Dual::constant(0.5));
+        assert!(v.eps.is_infinite() && v.eps > 0.0);
+    }
+
+    #[test]
+    fn dual_vec_mixed_lanes_fractional_exponent_at_zero_base() {
+        let x = DualVec::<f64, 2>::new(0.0, [0.0, 1.0]);
+        let n = DualVec::<f64, 2>::constant(0.5);
+        let r = x.powf(n);
+        assert_eq!(r.eps[0], 0.0, "constant lane must stay 0");
+        assert!(
+            r.eps[1].is_infinite() && r.eps[1] > 0.0,
+            "live lane must be +Inf, got {}",
+            r.eps[1]
+        );
+    }
+
+    #[test]
+    fn dual_vec_infinite_base_mixed_lanes() {
+        // Both direction factors are non-finite at an infinite base
+        // (dx_factor = n·Inf^{n-1} = Inf, dy_factor = Inf·ln(Inf) = Inf):
+        // each constant lane must contribute exactly 0 in its direction,
+        // each live lane must stay +Inf — otherwise Inf·0 = NaN leaks in.
+        let x = DualVec::<f64, 2>::new(f64::INFINITY, [1.0, 0.0]);
+        let n = DualVec::<f64, 2>::new(2.5, [0.0, 1.0]);
+        let r = x.powf(n);
+        assert!(
+            r.eps[0].is_infinite() && r.eps[0] > 0.0,
+            "base-live lane must be +Inf, got {}",
+            r.eps[0]
+        );
+        assert!(
+            r.eps[1].is_infinite() && r.eps[1] > 0.0,
+            "exponent-live lane must be +Inf, got {}",
+            r.eps[1]
+        );
+    }
+
+    #[test]
+    fn dual_vec_infinite_base_zero_exponent_mixed_lanes() {
+        // Exponent primal exactly 0 with one live lane bypasses the
+        // all-constant powi fast path: dy = ln(Inf) = +Inf, so the constant
+        // lane needs the structural-zero short-circuit to stay 0.
+        let x = DualVec::<f64, 2>::new(f64::INFINITY, [0.0, 0.0]);
+        let n = DualVec::<f64, 2>::new(0.0, [0.0, 1.0]);
+        let r = x.powf(n);
+        assert_eq!(r.re, 1.0);
+        assert_eq!(r.eps[0], 0.0, "constant lane must stay exactly 0");
+        assert!(
+            r.eps[1].is_infinite() && r.eps[1] > 0.0,
+            "live lane must be +Inf, got {}",
+            r.eps[1]
+        );
+    }
+
+    #[test]
+    fn f32_overflowed_primal_keeps_finite_base_derivative() {
+        // The f32 overflow threshold (~3.4e38) is ~270 orders of magnitude
+        // below f64's: x^2.5 at x = 2e25 overflows the f32 primal while the
+        // derivative 2.5·x^1.5 ≈ 2.2e38 is still representable.
+        let x = Dual::<f32>::new(2e25, 1.0);
+        let r = x.powf(Dual::constant(2.5));
+        assert!(r.re.is_infinite());
+        assert!(
+            r.eps.is_finite() && r.eps > 0.0,
+            "f32 derivative must stay finite, got {}",
+            r.eps
+        );
+    }
+}
+
+/// Division primal must be the single correctly-rounded IEEE quotient —
+/// bit-identical to `f64` division and to the bytecode tape — not the
+/// double-rounded `a·(1/b)`.
+mod div_primal_rounding {
+    use echidna::{Dual, DualVec};
+
+    #[test]
+    fn dual_div_primal_is_correctly_rounded() {
+        let cases: [(f64, f64); 6] = [
+            (3.0, 10.0),
+            (7.0, 3.0),
+            (1.0, 49.0),
+            (1e-3, 7.0),
+            (5.5, 1.1),
+            (-3.0, 10.0),
+        ];
+        for (a, b) in cases {
+            let exact = (a / b).to_bits();
+            let q = (Dual::<f64>::variable(a) / Dual::variable(b)).re;
+            assert_eq!(q.to_bits(), exact, "Dual/Dual {a}/{b}");
+            let q = (Dual::<f64>::variable(a) / b).re;
+            assert_eq!(q.to_bits(), exact, "Dual/f64 {a}/{b}");
+            let q = (a / Dual::<f64>::variable(b)).re;
+            assert_eq!(q.to_bits(), exact, "f64/Dual {a}/{b}");
+            let q = (DualVec::<f64, 1>::with_tangent(a, 0) / DualVec::with_tangent(b, 0)).re;
+            assert_eq!(q.to_bits(), exact, "DualVec/DualVec {a}/{b}");
+            let q = (DualVec::<f64, 1>::with_tangent(a, 0) / b).re;
+            assert_eq!(q.to_bits(), exact, "DualVec/f64 {a}/{b}");
+            let q = (a / DualVec::<f64, 1>::with_tangent(b, 0)).re;
+            assert_eq!(q.to_bits(), exact, "f64/DualVec {a}/{b}");
+        }
+    }
+
+    #[test]
+    fn reverse_div_primal_is_correctly_rounded() {
+        use echidna::{vjp, Reverse};
+        let (out, g) = vjp(|x: &[Reverse<f64>]| vec![x[0] / x[1]], &[3.0, 10.0], &[1.0]);
+        assert_eq!(out[0].to_bits(), (3.0_f64 / 10.0).to_bits());
+        // Adjoints: d/da (a/b) = 1/b = 0.1, d/db (a/b) = -a/b² = -0.03.
+        assert!((g[0] - 0.1).abs() < 1e-16);
+        assert!((g[1] - (-0.03)).abs() < 1e-16);
+    }
+
+    #[test]
+    fn f32_div_primal_is_correctly_rounded() {
+        // Pairs chosen so that a·(1/b) genuinely double-rounds in f32
+        // (3/7: 0x3edb6db7 direct vs 0x3edb6db8 via reciprocal); pairs like
+        // 3/10 happen to agree in f32 and would not discriminate.
+        for (a, b) in [(3.0_f32, 7.0_f32), (7.0_f32, 3.0_f32)] {
+            let q = (Dual::<f32>::variable(a) / Dual::variable(b)).re;
+            assert_eq!(q.to_bits(), (a / b).to_bits(), "{a}/{b}");
+        }
+    }
+
+    #[cfg(feature = "bytecode")]
+    #[test]
+    fn taped_div_agrees_bitwise_with_f64() {
+        use echidna::{record, BReverse};
+        let (mut tape, val) = record(|x: &[BReverse<f64>]| x[0] / x[1], &[3.0, 10.0]);
+        assert_eq!(val.to_bits(), (3.0_f64 / 10.0).to_bits());
+        let g = tape.gradient(&[3.0, 10.0]);
+        assert!((g[0] - 0.1).abs() < 1e-16);
+        assert!((g[1] - (-0.03)).abs() < 1e-16);
+    }
+}

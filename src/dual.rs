@@ -53,12 +53,24 @@ impl<F: Float> Dual<F> {
     }
 
     /// Apply the chain rule: given `f(self.re)` and `f'(self.re)`, produce the dual result.
+    ///
+    /// A structurally zero tangent short-circuits to exactly zero: the
+    /// derivative of a constant is 0 regardless of where `f` is evaluated,
+    /// even where `f_deriv` is ±Inf (domain boundaries like `sqrt`/`ln` at 0,
+    /// `atanh` at ±1) or NaN (out-of-domain primals) — IEEE `0 * Inf` would
+    /// otherwise poison the tangent with NaN. This matches the `hypot` origin
+    /// convention and the reverse-sweep zero-adjoint skip. The check uses
+    /// `is_all_zero()` rather than `==` (which compares only the primal) so a
+    /// nested tangent like `Dual<Dual<F>>` with a zero first-order but live
+    /// second-order component is NOT dropped.
     #[inline]
     fn chain(self, f_val: F, f_deriv: F) -> Self {
-        Dual {
-            re: f_val,
-            eps: self.eps * f_deriv,
-        }
+        let eps = if self.eps.is_all_zero() {
+            F::zero()
+        } else {
+            self.eps * f_deriv
+        };
+        Dual { re: f_val, eps }
     }
 
     // ── Powers ──
@@ -66,17 +78,11 @@ impl<F: Float> Dual<F> {
     /// Reciprocal (1/x).
     #[inline]
     pub fn recip(self) -> Self {
+        // d/dx (1/x) = -1/x². At x = 0 the derivative is unbounded; `chain`'s
+        // structural-zero short-circuit keeps a constant input's tangent at
+        // exactly 0, while a live tangent keeps the Inf.
         let inv = F::one() / self.re;
-        // At self.re = 0, inv = ±Inf. Skip the chain for eps = 0 so the
-        // tangent is 0 (the "constant zero" convention) rather than the
-        // IEEE `0 * Inf = NaN` we'd otherwise propagate. Non-zero eps at
-        // the singularity keeps the Inf (the true derivative is unbounded).
-        let eps = if self.eps == F::zero() {
-            F::zero()
-        } else {
-            self.eps * (-inv * inv)
-        };
-        Dual { re: inv, eps }
+        self.chain(inv, -inv * inv)
     }
 
     /// Square root.
@@ -125,7 +131,7 @@ impl<F: Float> Dual<F> {
         // This avoids computing `ln(x)` for `x < 0` where stdlib returns NaN —
         // that NaN would poison `eps` via `NaN * 0 = NaN` in IEEE 754, even
         // though `dy` is algebraically zero for a constant exponent.
-        if n.eps == F::zero() {
+        if n.eps.is_all_zero() {
             if let Some(ni) = n.re.to_i32() {
                 if F::from(ni).unwrap() == n.re {
                     return self.powi(ni);
@@ -145,18 +151,29 @@ impl<F: Float> Dual<F> {
             };
         }
         let val = self.re.powf(n.re);
-        let dx =
-            if self.re == F::zero() || val == F::zero() || !self.re.is_finite() || !val.is_finite()
-            {
-                // Use n*x^(n-1) form to avoid 0/0 when x=0, to handle underflow
-                // when x^n underflows to 0 but x != 0, and to avoid Inf/Inf = NaN
-                // at an infinite base (e.g. Inf^2 has derivative Inf, not NaN) —
-                // matching `Reverse`/`opcode`.
-                n.re * self.re.powf(n.re - F::one()) * self.eps
-            } else {
-                n.re * val / self.re * self.eps
-            };
-        let dy = if val == F::zero() || self.re <= F::zero() {
+        let dx = if self.eps.is_all_zero() {
+            // Structural-zero base tangent contributes nothing, even where the
+            // base-direction partial is unbounded (e.g. x^0.5 at x = 0, where
+            // 0.5·x^(-0.5) = Inf and `Inf * 0` would be NaN).
+            F::zero()
+        } else if self.re == F::zero()
+            || val == F::zero()
+            || !self.re.is_finite()
+            || !val.is_finite()
+        {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0, to handle underflow
+            // when x^n underflows to 0 but x != 0, and to avoid Inf/Inf = NaN
+            // at an infinite base (e.g. Inf^2 has derivative Inf, not NaN) —
+            // matching `Reverse`/`opcode`.
+            n.re * self.re.powf(n.re - F::one()) * self.eps
+        } else {
+            n.re * val / self.re * self.eps
+        };
+        let dy = if n.eps.is_all_zero() || val == F::zero() || self.re <= F::zero() {
+            // Structural-zero exponent tangent contributes nothing — guarded
+            // explicitly because `val` can overflow to Inf for a finite base
+            // (e.g. 1e200^2.5), where `Inf * ln(x) * 0` would otherwise be NaN
+            // while the base-direction derivative is still finite.
             // `lim_{x→0+} x^y·ln(x) = 0` for y > 0; and for a negative base
             // `ln(x)` is undefined (complex), so the exponent direction is
             // treated as locally constant — matching `Reverse`/`opcode`. The
@@ -247,17 +264,10 @@ impl<F: Float> Dual<F> {
     /// Simultaneous sine and cosine.
     #[inline]
     pub fn sin_cos(self) -> (Self, Self) {
+        // Delegate to `chain` so the structural-zero tangent convention
+        // cannot drift from `sin`/`cos`.
         let (s, c) = self.re.sin_cos();
-        (
-            Dual {
-                re: s,
-                eps: self.eps * c,
-            },
-            Dual {
-                re: c,
-                eps: self.eps * (-s),
-            },
-        )
+        (self.chain(s, c), self.chain(c, -s))
     }
 
     /// Arcsine.

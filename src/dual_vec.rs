@@ -74,11 +74,25 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     }
 
     /// Apply the chain rule: given `f(self.re)` and `f'(self.re)`, produce the dual result.
+    ///
+    /// A structurally zero tangent lane short-circuits to exactly zero: the
+    /// derivative of a constant is 0 regardless of where `f` is evaluated,
+    /// even where `f_deriv` is ±Inf (domain boundaries like `sqrt`/`ln` at 0,
+    /// `atanh` at ±1) or NaN (out-of-domain primals) — IEEE `0 * Inf` would
+    /// otherwise poison the lane with NaN. Matches `Dual::chain`; the check
+    /// uses `is_all_zero()` rather than `==` (primal-only) so nested lanes like
+    /// `DualVec<Dual<F>, N>` with live second-order components are kept.
     #[inline(always)]
     fn chain(self, f_val: F, f_deriv: F) -> Self {
         DualVec {
             re: f_val,
-            eps: std::array::from_fn(|k| self.eps[k] * f_deriv),
+            eps: std::array::from_fn(|k| {
+                if self.eps[k].is_all_zero() {
+                    F::zero()
+                } else {
+                    self.eps[k] * f_deriv
+                }
+            }),
         }
     }
 
@@ -87,20 +101,10 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Reciprocal (1/x).
     #[inline]
     pub fn recip(self) -> Self {
+        // See `Dual::recip` — `chain`'s structural-zero short-circuit keeps
+        // constant lanes at exactly 0 at the x = 0 singularity.
         let inv = F::one() / self.re;
-        // See `Dual::recip` — skip the chain for zero eps lanes at the
-        // singularity to avoid NaN from `0 * Inf`.
-        let factor = -inv * inv;
-        DualVec {
-            re: inv,
-            eps: std::array::from_fn(|k| {
-                if self.eps[k] == F::zero() {
-                    F::zero()
-                } else {
-                    self.eps[k] * factor
-                }
-            }),
-        }
+        self.chain(inv, -inv * inv)
     }
 
     /// Square root.
@@ -143,7 +147,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         // Constant integer exponent fast path (see `Dual::powf` for rationale):
         // avoids `ln(x)` NaN-poisoning the tangent when the exponent is a
         // constant and `x < 0`.
-        if n.eps.iter().all(|&e| e == F::zero()) {
+        if n.eps.iter().all(|e| e.is_all_zero()) {
             if let Some(ni) = n.re.to_i32() {
                 if F::from(ni).unwrap() == n.re {
                     return self.powi(ni);
@@ -159,7 +163,18 @@ impl<F: Float, const N: usize> DualVec<F, N> {
             };
             return DualVec {
                 re: F::one(),
-                eps: std::array::from_fn(|k| dy * n.eps[k]),
+                eps: std::array::from_fn(|k| {
+                    // Per-lane structural-zero short-circuit: dy = ln(a) is
+                    // +Inf at an infinite base, and a constant lane must stay
+                    // exactly 0 rather than Inf·0 = NaN. (The all-constant
+                    // exponent is already captured by the powi fast path
+                    // above; this branch is reached only with mixed lanes.)
+                    if n.eps[k].is_all_zero() {
+                        F::zero()
+                    } else {
+                        dy * n.eps[k]
+                    }
+                }),
             };
         }
         let val = self.re.powf(n.re);
@@ -183,7 +198,22 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         };
         DualVec {
             re: val,
-            eps: std::array::from_fn(|k| dx_factor * self.eps[k] + dy_factor * n.eps[k]),
+            eps: std::array::from_fn(|k| {
+                // Per-lane structural-zero short-circuits (see `Dual::powf`):
+                // a constant lane contributes nothing even where its factor is
+                // non-finite (x^0.5 at x = 0 for dx; overflowed `val` for dy).
+                let dx = if self.eps[k].is_all_zero() {
+                    F::zero()
+                } else {
+                    dx_factor * self.eps[k]
+                };
+                let dy = if n.eps[k].is_all_zero() {
+                    F::zero()
+                } else {
+                    dy_factor * n.eps[k]
+                };
+                dx + dy
+            }),
         }
     }
 
@@ -263,17 +293,10 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// Simultaneous sine and cosine.
     #[inline]
     pub fn sin_cos(self) -> (Self, Self) {
+        // Delegate to `chain` so the structural-zero tangent convention
+        // cannot drift from `sin`/`cos`.
         let (s, c) = self.re.sin_cos();
-        (
-            DualVec {
-                re: s,
-                eps: std::array::from_fn(|k| self.eps[k] * c),
-            },
-            DualVec {
-                re: c,
-                eps: std::array::from_fn(|k| self.eps[k] * (-s)),
-            },
-        )
+        (self.chain(s, c), self.chain(c, -s))
     }
 
     /// Arcsine.

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (echidna)
+
+- Nested second-order tangents (`Dual<Dual<F>>`, `DualVec<Dual<F>, N>`) are no
+  longer dropped by the zero-tangent guards in `recip` and the `powf`
+  constant-integer fast path. The guards now inspect the whole tangent rather
+  than only its primal component, so second derivatives such as
+  `d²/dx² 1/(x²+1)` at `x = 0` (previously `0`) are now correct (`-2`), and
+  `.recip()` agrees with the `1/g` spelling.
+- `powf` no longer produces a NaN derivative when the primal overflows under a
+  constant exponent (e.g. `x^2.5` at `x = 1e200` now yields the representable
+  `2.5e300`), and reverse mode now matches the other AD modes at an infinite
+  base (`Inf` derivative instead of NaN).
+
+### Changed (echidna)
+
+- Division primals for `Dual`, `DualVec`, and `Reverse` are now the correctly
+  rounded IEEE quotient `a / b` (previously the double-rounded `a · (1/b)`,
+  up to 1 ULP off), matching plain `f64` arithmetic and the bytecode tape
+  bit-for-bit. Derivative terms still reuse the reciprocal; the eager
+  reverse-mode divisor partial now uses the same `-(a/b)/b` form as the
+  bytecode opcode. Division now performs two hardware divisions instead of
+  one division plus multiplies.
+- Forward-mode elementals routed through the chain rule (`sqrt`, `cbrt`,
+  `recip`, `powi`, `ln`, `log2`, `log10`, `ln_1p`, `asin`, `acos`, `acosh`,
+  `atanh`, and the `powf` direction terms) now short-circuit structurally-zero
+  tangents to exactly `0` at points where the derivative is unbounded or NaN:
+  a constant stays a constant (e.g. the tangent of `sqrt(x²+y²)` at the origin
+  is now `0`, matching `hypot`) instead of becoming NaN via IEEE `0 × Inf`.
+  Live tangents keep the non-finite derivative. The `-0.0` behaviour of the
+  logarithm derivative family (`-Inf`, following the IEEE reciprocal sign) is
+  unchanged, now documented and pinned by tests.
+
 ## [0.13.0] - 2026-07-06
 
 **Coordinated release:** `echidna` 0.13.0 and `echidna-optim` 0.13.3.
