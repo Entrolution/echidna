@@ -793,7 +793,7 @@ fn step_forward_primal<F: Float + BtapeThreadLocal>(
         .iter()
         .map(|&val| {
             let idx = tape.new_input(val);
-            BReverse::from_tape(val, idx)
+            BReverse::from_tape_of(&tape, val, idx)
         })
         .collect();
 
@@ -821,7 +821,7 @@ fn vjp_step<F: Float + BtapeThreadLocal>(
         .iter()
         .map(|&val| {
             let idx = tape.new_input(val);
-            BReverse::from_tape(val, idx)
+            BReverse::from_tape_of(&tape, val, idx)
         })
         .collect();
 

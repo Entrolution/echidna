@@ -33,10 +33,7 @@ fn brev_unary<F: Float + BtapeThreadLocal>(x: BReverse<F>, op: OpCode, f_val: F)
         let xi = ensure_on_tape(&x, t);
         t.push_op(op, xi, UNUSED, f_val)
     });
-    BReverse {
-        value: f_val,
-        index,
-    }
+    BReverse::from_active_recording(f_val, index)
 }
 
 /// Record a binary opcode, promoting constants if needed.
@@ -52,10 +49,7 @@ fn brev_binary<F: Float + BtapeThreadLocal>(
         let yi = ensure_on_tape(&y, t);
         t.push_op(op, xi, yi, f_val)
     });
-    BReverse {
-        value: f_val,
-        index,
-    }
+    BReverse::from_active_recording(f_val, index)
 }
 
 // ══════════════════════════════════════════════
@@ -319,7 +313,7 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
             let xi = ensure_on_tape(&self, t);
             t.push_powi(xi, n, val)
         });
-        BReverse { value: val, index }
+        BReverse::from_active_recording(val, index)
     }
 
     fn powf(self, n: Self) -> Self {
@@ -457,7 +451,7 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
             let fi = t.push_const(factor);
             t.push_op(OpCode::Mul, xi, fi, val)
         });
-        BReverse { value: val, index }
+        BReverse::from_active_recording(val, index)
     }
 
     fn to_radians(self) -> Self {
@@ -468,6 +462,6 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
             let fi = t.push_const(factor);
             t.push_op(OpCode::Mul, xi, fi, val)
         });
-        BReverse { value: val, index }
+        BReverse::from_active_recording(val, index)
     }
 }

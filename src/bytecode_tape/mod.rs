@@ -34,6 +34,8 @@ mod serde_support;
 mod taylor;
 
 mod thread_local;
+#[cfg(debug_assertions)]
+pub(crate) use self::thread_local::active_btape_id;
 pub use self::thread_local::{with_active_btape, BtapeGuard, BtapeThreadLocal};
 
 /// Sentinel index for constant entries (not tracked).
@@ -132,6 +134,22 @@ pub struct BytecodeTape<F: Float> {
     /// Second operand index for binary custom ops (sparse side table).
     /// Maps tape index → second operand index.
     pub(crate) custom_second_args: HashMap<u32, u32>,
+    /// Debug-only tape identity, used to catch `BReverse` values recorded on
+    /// one tape being used while a different tape is active (nested
+    /// recordings capturing outer variables, values stashed across
+    /// recordings, cross-thread reuse). Zero release-build cost.
+    #[cfg(debug_assertions)]
+    pub(crate) tape_id: u64,
+}
+
+/// Debug-only source of unique tape identities (0 is reserved for
+/// "untracked" `BReverse` values whose provenance is unknown).
+#[cfg(debug_assertions)]
+static NEXT_TAPE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(debug_assertions)]
+pub(crate) fn next_tape_id() -> u64 {
+    NEXT_TAPE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl<F: Float> BytecodeTape<F> {
@@ -148,6 +166,8 @@ impl<F: Float> BytecodeTape<F> {
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
             custom_second_args: HashMap::new(),
+            #[cfg(debug_assertions)]
+            tape_id: next_tape_id(),
         }
     }
 
@@ -164,6 +184,8 @@ impl<F: Float> BytecodeTape<F> {
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
             custom_second_args: HashMap::new(),
+            #[cfg(debug_assertions)]
+            tape_id: next_tape_id(),
         }
     }
 
@@ -696,6 +718,8 @@ mod validate_tests {
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
             custom_second_args: HashMap::new(),
+            #[cfg(debug_assertions)]
+            tape_id: next_tape_id(),
         }
     }
 

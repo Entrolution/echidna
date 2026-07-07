@@ -111,6 +111,27 @@ pub fn with_active_btape<F: BtapeThreadLocal, R>(f: impl FnOnce(&mut BytecodeTap
     })
 }
 
+/// Debug-only: the identity of the thread-local active tape, or
+/// [`crate::breverse::TAPE_ID_UNTRACKED`] when no recording is active. Reads
+/// only the `tape_id` field through the raw pointer (no `&mut` is formed),
+/// so it is safe to call between operations of an active recording. Do NOT
+/// call from inside a `with_active_btape` closure: the closure's `&mut`
+/// reborrow would alias this read.
+#[cfg(debug_assertions)]
+pub(crate) fn active_btape_id<F: BtapeThreadLocal>() -> u64 {
+    F::btape_cell().with(|cell| {
+        let ptr = cell.get();
+        if ptr.is_null() {
+            crate::breverse::TAPE_ID_UNTRACKED
+        } else {
+            // SAFETY: non-null implies a live guard whose tape outlives it
+            // (same invariant `with_active_btape` relies on); `addr_of!`
+            // avoids materializing a reference to the whole tape.
+            unsafe { std::ptr::addr_of!((*ptr).tape_id).read() }
+        }
+    })
+}
+
 /// RAII guard that sets a bytecode tape as the thread-local active tape.
 ///
 /// The `'a` lifetime ties the guard to the borrow of the tape it was

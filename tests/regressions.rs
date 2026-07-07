@@ -1646,3 +1646,39 @@ mod btape_guard_lifo {
         drop(g2);
     }
 }
+
+/// BReverse values are bound to the recording that produced them; using one
+/// while a different tape is active must panic in debug builds (release
+/// builds omit the tag and the check).
+#[cfg(all(feature = "bytecode", debug_assertions))]
+mod breverse_tape_identity {
+    use echidna::{record, BReverse};
+
+    #[test]
+    #[should_panic(expected = "another recording")]
+    fn stashed_value_across_recordings_panics() {
+        let stash = std::cell::Cell::new(None);
+        let _ = record(
+            |x: &[BReverse<f64>]| {
+                stash.set(Some(x[0]));
+                x[0] * 2.0
+            },
+            &[1.0],
+        );
+        let stale = stash.get().unwrap();
+        let _ = record(move |x: &[BReverse<f64>]| x[0] + stale, &[1.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "another recording")]
+    fn nested_recording_capturing_outer_variable_panics() {
+        let _ = record(
+            |x: &[BReverse<f64>]| {
+                let outer = x[0];
+                let _ = record(move |y: &[BReverse<f64>]| y[0] * outer, &[2.0]);
+                x[0]
+            },
+            &[1.0],
+        );
+    }
+}

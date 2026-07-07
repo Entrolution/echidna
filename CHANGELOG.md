@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `x - (-0.0)` stay on the tape (they are not IEEE identities for a
   `-0.0` operand). `x * 1`, `x / 1`, and the `powi` fast paths are
   unchanged.
+- Debug builds now tag each `BReverse` with the identity of the tape that
+  recorded it and panic when a value crosses into a different recording
+  (capturing an outer variable inside a nested `record`, stashing values
+  across recordings, or moving them between recording threads) — misuse
+  that previously either panicked out-of-range or silently recorded a
+  dependency on an unrelated tape slot. Release builds are unchanged in
+  layout, behaviour, and cost; the invariant is now documented on
+  `record` and `BReverse`.
 - Dropping `BtapeGuard`s out of LIFO order now panics in every build
   profile (previously a debug-only assertion): an out-of-order drop
   installs a stale tape pointer that can dangle, so the violation is a

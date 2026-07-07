@@ -177,6 +177,12 @@ pub fn jacobian<F: Float>(
 /// (`if x > 0 { ... } else { ... }`), re-evaluating at inputs that take a
 /// different branch produces **incorrect results**.
 ///
+/// `BReverse` values are bound to the recording that produced them: do not
+/// capture them in a nested `record`, stash them for use in a later
+/// recording, or move them across recording threads — their tape indices
+/// are only meaningful on their own tape. Debug builds panic on such
+/// cross-tape use; release builds do not check.
+///
 /// # Example
 ///
 /// ```ignore
@@ -203,7 +209,7 @@ pub fn record<F: Float + BtapeThreadLocal>(
         .iter()
         .map(|&val| {
             let idx = tape.new_input(val);
-            BReverse::from_tape(val, idx)
+            BReverse::from_tape_of(&tape, val, idx)
         })
         .collect();
 
@@ -244,7 +250,7 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
         .iter()
         .map(|&val| {
             let idx = tape.new_input(val);
-            BReverse::from_tape(val, idx)
+            BReverse::from_tape_of(&tape, val, idx)
         })
         .collect();
 
@@ -398,7 +404,7 @@ where
         .zip(v.iter())
         .map(|(&xi, &vi)| {
             let idx = tape.new_input(xi);
-            let re = BReverse::from_tape(xi, idx);
+            let re = BReverse::from_tape_of(&tape, xi, idx);
             let eps = BReverse::constant(vi);
             Dual::new(re, eps)
         })
