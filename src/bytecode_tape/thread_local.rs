@@ -129,8 +129,11 @@ pub fn with_active_btape<F: BtapeThreadLocal, R>(f: impl FnOnce(&mut BytecodeTap
 /// Guards must be dropped in LIFO order (last activated, first deactivated).
 /// `record()` and the borrow checker enforce this for nested recording scopes;
 /// direct `BtapeGuard` users must uphold it too — dropping out of order would
-/// restore a stale pointer into the thread-local cell. A debug assertion in
-/// `Drop` catches violations.
+/// restore a stale (possibly dangling) pointer into the thread-local cell.
+/// `Drop` enforces the LIFO contract with a hard assertion in all build
+/// profiles: the violation would otherwise be a use-after-free reachable
+/// from safe code, so it must be a deterministic panic rather than a
+/// debug-only check.
 pub struct BtapeGuard<'a, F: BtapeThreadLocal> {
     prev: *mut BytecodeTape<F>,
     current: *mut BytecodeTape<F>,
@@ -159,9 +162,13 @@ impl<'a, F: BtapeThreadLocal> Drop for BtapeGuard<'a, F> {
     fn drop(&mut self) {
         F::btape_cell().with(|cell| {
             // LIFO contract: this guard must be the active tape when it drops.
-            // Out-of-order drops (only reachable via direct `BtapeGuard` misuse)
-            // would install a stale pointer.
-            debug_assert!(
+            // Out-of-order drops (only reachable via direct `BtapeGuard`
+            // misuse) would install a stale pointer that can dangle once the
+            // earlier tape is freed — a use-after-free on the next
+            // `with_active_btape` deref. A hard assert turns that UB into a
+            // deterministic panic in every build profile; the happy path
+            // costs one pointer compare.
+            assert!(
                 cell.get() == self.current,
                 "BtapeGuard dropped out of LIFO order — the active tape is not this guard's"
             );

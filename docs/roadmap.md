@@ -236,11 +236,16 @@ Key files: `src/float.rs`, `src/api.rs`, `tests/composed_nesting.rs`. 12 new tes
 Recording-time algebraic simplification and targeted multi-output DCE.
 
 **Algebraic simplification** (recording-time, in `push_op` and `push_powi`):
-- Identity patterns: `x + 0 → x`, `0 + x → x`, `x * 1 → x`, `1 * x → x`, `x - 0 → x`, `x / 1 → x`
-- Absorbing patterns (value-guarded for NaN/Inf): `x * 0 → 0`, `0 * x → 0`, `x - x → 0`, `x / x → 1`
+- Identity patterns exact under IEEE 754 for every input: `x * 1 → x`,
+  `1 * x → x`, `x / 1 → x`, `x + (-0.0) → x`, `(-0.0) + x → x`,
+  `x - (+0.0) → x` (adding `+0.0` or subtracting `-0.0` is NOT the
+  identity for a `-0.0` operand and stays on the tape)
+- Absorbing/self patterns (`x * 0`, `x - x`, `x / x`) are deliberately not
+  folded: the tape's contract is re-evaluation at new inputs, and a frozen
+  recording-time constant would mask singularities on replay (`x / x` at
+  `x = 0` must be NaN, not 1)
 - Powi patterns: `x^0 → 1` (guarded), `x^1 → x`, `x^(-1) → Recip(x)`
-- Uses `push_const(value)` (not `push_const(F::zero())`) to preserve IEEE 754 signed zero semantics
-- Helper methods (`try_algebraic_simplify`, `try_same_index_simplify`) are `#[inline(never)]` to keep `push_op` hot path lean
+- Helper method (`try_algebraic_simplify`) is `#[inline(never)]` to keep the `push_op` hot path lean
 
 **Targeted multi-output DCE** (`dead_code_elimination_for_outputs`):
 - Seeds reachability only from specified active outputs

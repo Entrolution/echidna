@@ -1626,3 +1626,23 @@ mod div_primal_rounding {
         assert!((g[1] - (-0.03)).abs() < 1e-16);
     }
 }
+
+/// Dropping BtapeGuards out of LIFO order would install a stale (possibly
+/// dangling) tape pointer in the thread-local cell — the contract violation
+/// must be a deterministic panic in every build profile, not a debug-only
+/// check.
+#[cfg(feature = "bytecode")]
+mod btape_guard_lifo {
+    use echidna::bytecode_tape::{BtapeGuard, BytecodeTape};
+
+    #[test]
+    #[should_panic(expected = "LIFO")]
+    fn out_of_order_guard_drop_panics() {
+        let mut t1 = BytecodeTape::<f64>::new();
+        let mut t2 = BytecodeTape::<f64>::new();
+        let g1 = BtapeGuard::new(&mut t1);
+        let g2 = BtapeGuard::new(&mut t2);
+        drop(g1);
+        drop(g2);
+    }
+}

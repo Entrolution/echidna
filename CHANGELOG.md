@@ -52,6 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   states per segment; gradient values are unchanged, and
   `grad_checkpointed_online` was already well spaced.
 
+- Recording-time algebraic folds that froze a value the tape could not
+  reproduce at other inputs have been removed: `x * 0`, `x - x`, and
+  `x / x` now stay on the tape, so re-evaluating at a singular or
+  non-finite point yields the true IEEE result (`x / x` replayed at
+  `x = 0` is now NaN in both the value and the gradient instead of a
+  spurious finite `1`). Identity folds are now signed-zero-exact:
+  `x + (-0.0)` and `x - (+0.0)` alias the operand, while `x + (+0.0)`
+  and `x - (-0.0)` stay on the tape (they are not IEEE identities for a
+  `-0.0` operand). `x * 1`, `x / 1`, and the `powi` fast paths are
+  unchanged.
+- Dropping `BtapeGuard`s out of LIFO order now panics in every build
+  profile (previously a debug-only assertion): an out-of-order drop
+  installs a stale tape pointer that can dangle, so the violation is a
+  hard error rather than release-mode undefined behaviour.
+
 ### Changed (echidna)
 
 - Division primals for `Dual`, `DualVec`, and `Reverse` are now the correctly
