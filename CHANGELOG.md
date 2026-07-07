@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (echidna)
+
+- `BytecodeTape::forward_tangent_dual2`: a `Dual<Dual<F>>` forward sweep
+  that routes custom operations through `CustomOp::eval_dual` and
+  `CustomOp::partials_dual`, carrying exact first- and second-order
+  information through custom ops at the current evaluation point.
+
+### Added (echidna-optim)
+
+- `line_search::backtracking_armijo_with_evals`: `backtracking_armijo`
+  with an evaluation accumulator that survives the failure paths, so
+  callers accounting for total objective work can include the
+  evaluations a failed search spent. `backtracking_armijo` now delegates
+  to it and is unchanged.
+
+### Fixed (echidna-optim)
+
+- `implicit_hvp` and `implicit_hessian` now compute exact second-order
+  derivatives through residual tapes containing custom operations (for
+  ops that implement `eval_dual`/`partials_dual`). Previously the nested
+  pass linearized custom ops to first order around recording-time
+  primals, silently dropping their curvature — and, away from the
+  recording point, evaluating the linearization at stale primals. Ops
+  relying on the trait's default dual implementations still contribute
+  constant partials, but now at the current evaluation point.
+- `lbfgs` and `newton` results terminating with `LineSearchFailed` now
+  include the failed line search's objective evaluations in
+  `func_evals`; previously those evaluations were silently dropped from
+  the reported count.
+
 ### Fixed (echidna)
 
 - Nested second-order tangents (`Dual<Dual<F>>`, `DualVec<Dual<F>, N>`) are no

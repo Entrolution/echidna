@@ -389,7 +389,7 @@ pub fn implicit_hvp<F: Float>(
     }
 
     let mut buf = Vec::new();
-    tape.forward_tangent(&dd_inputs, &mut buf);
+    tape.forward_tangent_dual2(&dd_inputs, &mut buf);
 
     // Extract second-order correction: buf[out_idx].eps.eps for each output
     let out_indices = tape.all_output_indices();
@@ -465,7 +465,7 @@ pub fn implicit_hessian<F: Float>(
                 dd_inputs.push(Dual::new(Dual::new(x_l, p_l), Dual::new(w_l, F::zero())));
             }
 
-            tape.forward_tangent(&dd_inputs, &mut buf);
+            tape.forward_tangent_dual2(&dd_inputs, &mut buf);
 
             // Extract RHS and solve
             let mut rhs = Vec::with_capacity(m);
