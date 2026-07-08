@@ -199,3 +199,19 @@ fn tape_sparse_hessian_faer_rosenbrock() {
     assert!(pattern.nnz() > 0);
     assert_eq!(pattern.nnz(), values.len());
 }
+
+#[test]
+fn faer_wrappers_return_none_on_length_mismatch() {
+    // A pattern/values length mismatch is a caller inconsistency and must
+    // surface as None (the functions' Option contract), not a panic.
+    let xs: Vec<f64> = vec![1.0, 2.0];
+    let (tape, _) = echidna::record(rosenbrock_br, &xs);
+    let x = Col::from_fn(2, |i| xs[i]);
+    let (_, _, pattern, values) = tape_sparse_hessian_faer(&tape, &x);
+    let short = &values[..values.len() - 1];
+
+    assert!(echidna::faer_support::sparsity_to_faer_symmetric(&pattern, short).is_none());
+    let b = Col::from_fn(2, |_| 1.0_f64);
+    assert!(echidna::faer_support::solve_sparse_cholesky_faer(&pattern, short, &b).is_none());
+    assert!(echidna::faer_support::solve_sparse_lu_faer(&pattern, short, &b).is_none());
+}

@@ -1682,3 +1682,44 @@ mod breverse_tape_identity {
         );
     }
 }
+
+/// Structural conventions pinned as contracts: hypot's origin short-circuit,
+/// primal-only classification predicates, and copysign's composed sign rule.
+mod contract_pins {
+    use echidna::{grad, Dual};
+    use num_traits::Float as _;
+
+    #[test]
+    fn hypot_origin_survives_nonfinite_adjoint() {
+        // sqrt'(0) = Inf routes an infinite adjoint into the hypot node's
+        // backward sweep. With hypot recording a (0, 0)-partial node at the
+        // origin, 0 · Inf = NaN poisoned both gradients; the origin
+        // short-circuit makes hypot a tape-free constant there instead.
+        let g = grad(|v| v[0].hypot(v[1]).sqrt(), &[0.0_f64, 0.0]);
+        assert_eq!(
+            g[0], 0.0,
+            "structural zero through the origin, got {}",
+            g[0]
+        );
+        assert_eq!(g[1], 0.0);
+    }
+
+    #[test]
+    fn hypot_away_from_origin_unchanged() {
+        let g = grad(|v| v[0].hypot(v[1]), &[3.0_f64, 4.0]);
+        assert!((g[0] - 0.6).abs() < 1e-12);
+        assert!((g[1] - 0.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn classification_predicates_inspect_primal_only() {
+        let finite_value_inf_tangent = Dual::new(1.0_f64, f64::INFINITY);
+        assert!(finite_value_inf_tangent.is_finite());
+        assert!(!finite_value_inf_tangent.is_nan());
+        assert!(!finite_value_inf_tangent.is_infinite());
+
+        let nan_value_finite_tangent = Dual::new(f64::NAN, 1.0_f64);
+        assert!(nan_value_finite_tangent.is_nan());
+        assert!(!nan_value_finite_tangent.is_finite());
+    }
+}

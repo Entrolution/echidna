@@ -66,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (echidna)
 
+- `Reverse::hypot` at the origin no longer records a zero-partial tape
+  node: it returns a tape-free constant (mirroring `atan2`'s origin
+  short-circuit and forward mode's structural-zero convention), so a
+  non-finite adjoint arriving from downstream — e.g. through
+  `sqrt'(0) = Inf` — no longer turns both gradients into NaN.
+- The faer sparse wrappers (`sparsity_to_faer_symmetric`,
+  `solve_sparse_cholesky_faer`, `solve_sparse_lu_faer`) now return `None`
+  on a pattern/values length mismatch instead of panicking, matching
+  their `Option` contracts.
+
 - Nested second-order tangents (`Dual<Dual<F>>`, `DualVec<Dual<F>, N>`) are no
   longer dropped by the zero-tangent guards in `recip` and the `powf`
   constant-integer fast path. The guards now inspect the whole tangent rather
