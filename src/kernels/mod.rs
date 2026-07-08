@@ -44,7 +44,12 @@
 //!    and regular zeros (mul by a zero operand, signum away from 0) are
 //!    indistinguishable at sweep time, and the convention is correct for
 //!    all of them. This completes the long-documented zero-ADJOINT skip
-//!    (the JAX-style `0 × NaN → 0` trade-off noted in `tape.rs`).
+//!    (the JAX-style `0 × NaN → 0` trade-off noted in `tape.rs`). A
+//!    corollary shared by both skips: reverse mode does not preserve a
+//!    derivative's NEGATIVE zero — adjoint accumulation starts at `+0.0`
+//!    and IEEE `+0.0 + (-0.0) = +0.0` — while forward mode's direct
+//!    products do. Signed zeros of derivatives are a forward-mode-only
+//!    guarantee.
 //!
 //! 3. **Singular-primal partials.** Kernels return a defined convention at
 //!    non-differentiable points rather than raw IEEE fallout: `hypot` and
