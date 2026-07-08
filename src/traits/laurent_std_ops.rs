@@ -19,6 +19,15 @@ use crate::taylor_ops;
 /// truncated to fit the fixed-size `[F; K]` array. This is inherent to the
 /// fixed-width Laurent representation and cannot be avoided without dynamic
 /// allocation.
+///
+/// # Panics
+///
+/// Panics when the pole-order gap is `K` or more: every coefficient of one
+/// operand would be silently discarded, so the sum would just be the other
+/// operand — a structural misalignment, not a numeric edge. `Mul`/`Div`
+/// return a NaN series on pole-order *arithmetic* overflow instead, where
+/// NaN has its usual "result not representable" meaning; a panicking sum
+/// makes the alignment failure loud at its source.
 impl<F: Float, const K: usize> Add for Laurent<F, K> {
     type Output = Self;
     #[inline]
@@ -74,6 +83,8 @@ impl<F: Float, const K: usize> Add for Laurent<F, K> {
     }
 }
 
+/// See `Add` for the truncation behavior and the `# Panics` contract
+/// (pole-order gap ≥ `K` panics; `Mul`/`Div` return NaN series instead).
 impl<F: Float, const K: usize> Sub for Laurent<F, K> {
     type Output = Self;
     #[inline]

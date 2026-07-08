@@ -66,8 +66,12 @@ pub fn taylor_mul<F: Float>(a: &[F], b: &[F], c: &mut [F]) {
 #[inline]
 pub fn taylor_div<F: Float>(a: &[F], b: &[F], c: &mut [F]) {
     let n = c.len();
+    // Primal: one correctly-rounded division (a·(1/b) double-rounds).
+    // Higher coefficients keep the reciprocal-multiply recurrence — one
+    // multiply per term, at most 1 ULP from the divide form.
+    c[0] = a[0] / b[0];
     let inv_b0 = F::one() / b[0];
-    for k in 0..n {
+    for k in 1..n {
         let mut sum = a[k];
         for j in 1..=k {
             sum = sum - b[j] * c[k - j];
@@ -492,6 +496,39 @@ pub fn taylor_powf<F: Float>(
                 return;
             }
         }
+    }
+    if a[0] == F::zero() {
+        // Branch point at a zero base. A CONSTANT integer exponent already
+        // took the powi fast path above, so the exponent here is either
+        // non-integer or live.
+        let b0 = b[0];
+        let b0_is_integer = b0.to_i32().is_some_and(|ni| F::from(ni).unwrap() == b0);
+        if b0_is_integer {
+            // Live integer exponent at a zero base: the true jet mixes
+            // finite entries (k ≤ b0) with ln(0)-driven unbounded ones
+            // (k > b0). Emit a consistent all-NaN jet, matching the
+            // negative-base arm below, rather than a finite primal beside
+            // garbage derivatives.
+            for ck in c.iter_mut() {
+                *ck = F::nan();
+            }
+            return;
+        }
+        // Non-integer exponent: the k-th derivative of x^b0 at 0 vanishes
+        // for k < b0 and is unbounded for k > b0 (the exponent jet's
+        // ln(0)-driven terms vanish at the same x^b0·ln x → 0 rate, so the
+        // rule also covers live exponents). Mirrors taylor_sqrt/taylor_cbrt's
+        // [0, Inf, ...] convention (b0 = 1/2, 1/3 are the k > b0 case) and,
+        // like those, assumes the generic vertical-tangent case (a[1] ≠ 0).
+        c[0] = a[0].powf(b0);
+        for (k, ck) in c.iter_mut().enumerate().skip(1) {
+            *ck = if F::from(k).unwrap() < b0 {
+                F::zero()
+            } else {
+                F::infinity()
+            };
+        }
+        return;
     }
     // scratch1 = ln(a)
     taylor_ln(a, scratch1);

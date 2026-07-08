@@ -66,6 +66,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (echidna)
 
+- `taylor_powf` at a zero base now follows the branch-point convention of
+  `taylor_sqrt`/`taylor_cbrt` on every backend (CPU, wgpu, CUDA): with a
+  non-integer exponent `b0`, coefficients of order `k < b0` are exactly 0
+  and orders `k > b0` are `+Inf`; a negative exponent gives an `Inf`
+  primal. Previously the jet was a finite primal beside NaN derivative
+  coefficients. A live (non-constant) integer exponent at a zero base now
+  yields a consistent all-NaN jet.
+- `taylor_div`'s primal is now the correctly rounded `a₀ / b₀` (a single
+  division) instead of `a₀ · (1/b₀)`; higher coefficients keep the
+  reciprocal-multiply recurrence.
+- `Laurent::normalize` no longer rebases the pole order when every
+  surviving coefficient is subnormal: leading exact zeros in a globally
+  collapsed (flushed-to-zero) series are plausibly underflow artifacts,
+  and shifting would misattribute the pole order. Structural leading
+  zeros ahead of normally scaled coefficients rebase as before.
+- Laurent `Add`/`Sub` document their pole-order-gap panic (`# Panics`)
+  and why the gap is a loud structural failure where `Mul`/`Div` return a
+  NaN series.
 - `Reverse::hypot` at the origin no longer records a zero-partial tape
   node: it returns a tape-free constant (mirroring `atan2`'s origin
   short-circuit and forward mode's structural-zero convention), so a

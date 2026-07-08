@@ -265,3 +265,129 @@ fn laurent_atanh_ln_1p_domain_nan() {
         &Laurent::<f64, 4>::new([-2.0, 1.0, 0.0, 0.0], 0).ln_1p()
     ));
 }
+
+// ── normalize(): structural trim vs global scale collapse ──
+
+#[test]
+fn normalize_trims_structural_leading_zero() {
+    let l = Laurent::<f64, 4>::new([0.0, 2.0, 3.0, 0.0], 0);
+    assert_eq!(l.pole_order(), 1, "structural leading zero rebases");
+    assert_eq!(l.coeff(1), 2.0);
+}
+
+#[test]
+fn normalize_keeps_pole_order_on_scale_collapse() {
+    // Every surviving coefficient is subnormal: the leading exact zero is
+    // plausibly a flush-to-zero artifact of the same collapse, so the pole
+    // order must not drift.
+    let l = Laurent::<f64, 4>::new([0.0, 1e-310, 0.0, 0.0], 0);
+    assert_eq!(
+        l.pole_order(),
+        0,
+        "subnormal-only series must not be rebased"
+    );
+
+    // A normal coefficient anywhere in the surviving window restores the
+    // structural interpretation.
+    let l2 = Laurent::<f64, 4>::new([0.0, 1e-310, 1.0, 0.0], 0);
+    assert_eq!(l2.pole_order(), 1);
+}
+
+// ── Add/Sub pole-order-gap panic contract ──
+
+#[test]
+#[should_panic(expected = "pole-order gap")]
+fn laurent_add_gap_of_k_panics() {
+    let a = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], -4);
+    let b = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], 0);
+    let _ = a + b;
+}
+
+#[test]
+#[should_panic(expected = "pole-order gap")]
+fn laurent_sub_gap_of_k_panics() {
+    let a = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], -4);
+    let b = Laurent::<f64, 4>::new([1.0, 0.0, 0.0, 0.0], 0);
+    let _ = a - b;
+}
+
+// ── taylor_powf at a zero base ──
+
+#[test]
+fn taylor_powf_zero_base_matches_sqrt_convention() {
+    let a = [0.0_f64, 1.0, 0.0, 0.0];
+    let b = [0.5_f64, 0.0, 0.0, 0.0];
+    let mut c = [0.0_f64; 4];
+    let (mut s1, mut s2) = ([0.0_f64; 4], [0.0_f64; 4]);
+    echidna::taylor_ops::taylor_powf(&a, &b, &mut c, &mut s1, &mut s2);
+
+    let mut sqrt_ref = [0.0_f64; 4];
+    echidna::taylor_ops::taylor_sqrt(&a, &mut sqrt_ref);
+    assert_eq!(c[0], 0.0);
+    for k in 1..4 {
+        assert_eq!(
+            c[k].is_infinite(),
+            sqrt_ref[k].is_infinite(),
+            "b0 = 1/2 must match taylor_sqrt's [0, Inf, ...] convention at k = {k}"
+        );
+        assert!(c[k].is_infinite(), "k > 1/2 ⇒ unbounded, got {}", c[k]);
+    }
+}
+
+#[test]
+fn taylor_powf_zero_base_high_exponent_finite_low_orders() {
+    // x^2.5 at 0: derivatives of order k < 2.5 vanish; k > 2.5 unbounded.
+    let a = [0.0_f64, 1.0, 0.0, 0.0, 0.0];
+    let b = [2.5_f64, 0.0, 0.0, 0.0, 0.0];
+    let mut c = [0.0_f64; 5];
+    let (mut s1, mut s2) = ([0.0_f64; 5], [0.0_f64; 5]);
+    echidna::taylor_ops::taylor_powf(&a, &b, &mut c, &mut s1, &mut s2);
+    assert_eq!(c[0], 0.0);
+    assert_eq!(c[1], 0.0);
+    assert_eq!(c[2], 0.0);
+    assert!(c[3].is_infinite());
+    assert!(c[4].is_infinite());
+}
+
+#[test]
+fn taylor_powf_zero_base_negative_exponent_infinite_primal() {
+    let a = [0.0_f64, 1.0, 0.0];
+    let b = [-0.5_f64, 0.0, 0.0];
+    let mut c = [0.0_f64; 3];
+    let (mut s1, mut s2) = ([0.0_f64; 3], [0.0_f64; 3]);
+    echidna::taylor_ops::taylor_powf(&a, &b, &mut c, &mut s1, &mut s2);
+    assert!(c[0].is_infinite(), "0^-0.5 = Inf, got {}", c[0]);
+    assert!(c[1].is_infinite());
+}
+
+#[test]
+fn taylor_powf_zero_base_live_integer_exponent_is_all_nan() {
+    // A LIVE integer exponent at a zero base mixes finite and unbounded
+    // true coefficients; the jet is emitted as consistently NaN.
+    let a = [0.0_f64, 1.0, 0.0];
+    let b = [2.0_f64, 1.0, 0.0];
+    let mut c = [0.0_f64; 3];
+    let (mut s1, mut s2) = ([0.0_f64; 3], [0.0_f64; 3]);
+    echidna::taylor_ops::taylor_powf(&a, &b, &mut c, &mut s1, &mut s2);
+    assert!(c.iter().all(|x| x.is_nan()), "expected all-NaN, got {c:?}");
+}
+
+// ── taylor_div correctly-rounded primal ──
+
+#[test]
+fn taylor_div_primal_is_correctly_rounded() {
+    // 3/5 discriminates in f64: 3.0/5.0 and 3.0*(1.0/5.0) differ by one ULP
+    // (0x…33 vs 0x…34); 3/7 does not.
+    let a = [3.0_f64, 1.0, 0.0];
+    let b = [5.0_f64, 1.0, 0.0];
+    let mut c = [0.0_f64; 3];
+    echidna::taylor_ops::taylor_div(&a, &b, &mut c);
+    assert_eq!(
+        c[0].to_bits(),
+        (3.0_f64 / 5.0).to_bits(),
+        "primal must be the single correctly-rounded division"
+    );
+    // c1 = (a1 − b1·c0)/b0 within tolerance of the reference expansion.
+    let c1_ref = (1.0 - 1.0 * (3.0 / 5.0)) / 5.0;
+    assert!((c[1] - c1_ref).abs() < 1e-15);
+}

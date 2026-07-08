@@ -1965,6 +1965,56 @@ fn cuda_taylor_powi_zero_base_high_exponent() {
     check_taylor_powi_zero_base_high_exponent(&ctx, "cuda");
 }
 
+/// powf at a zero base with a non-integer constant exponent: the jet
+/// follows the branch-point convention — coefficients of order k < b0 are
+/// exactly 0 and orders k > b0 are +Inf — matching CPU `taylor_powf`.
+#[cfg(all(any(feature = "gpu-wgpu", feature = "gpu-cuda"), feature = "stde"))]
+fn check_taylor_powf_zero_base(ctx: &impl GpuBackend, label: &str) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].powf(echidna::BReverse::constant(2.5));
+    let x = [1.0_f64];
+    let (tape, _) = record(f, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &[0.0f32], &[1.0f32], 1, 5)
+        .unwrap();
+    for k in 0..3 {
+        let got = result.coefficients[k][0];
+        assert!(
+            got == 0.0,
+            "{label}: x^2.5 at 0, c{k} must be exactly 0, got {got}"
+        );
+    }
+    for k in 3..5 {
+        let got = result.coefficients[k][0];
+        assert!(
+            got.is_infinite() && got > 0.0,
+            "{label}: x^2.5 at 0, c{k} must be +Inf, got {got}"
+        );
+    }
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn wgpu_taylor_powf_zero_base_branch_point() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_powf_zero_base(&ctx, "wgpu");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn cuda_taylor_powf_zero_base_branch_point() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_taylor_powf_zero_base(&ctx, "cuda");
+}
+
 /// Pins on the generated source itself — CI-safe (no GPU needed): the
 /// truncation-based fract and full-precision 1/k weights must be present in
 /// both emitters. The 1/3 weight first appears at coefficient order 3, so

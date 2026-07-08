@@ -898,30 +898,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .unwrap();
     }
     writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
-    writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
+    // Zero base (a < 0 was handled above). Mirrors CPU `taylor_powf`: a
+    // LIVE integer exponent mixes finite and unbounded true coefficients →
+    // consistent all-NaN jet; a non-integer exponent is a branch point —
+    // the k-th derivative of x^b0 at 0 vanishes for k < b0 and is
+    // unbounded for k > b0 (the sqrt/cbrt [0, Inf, ...] convention).
+    // Range-guarded like the fast path: a constant integer exponent beyond
+    // i32 range must fall through to the branch-point rule, matching CPU
+    // to_i32()'s None.
     writeln!(
         s,
-        "                    let da = b.v[0] * pow(a.v[0], b.v[0] - 1.0);"
+        "                    if b.v[0] == round(b.v[0]) && abs(b.v[0]) < 2147483648.0 {{"
     )
     .unwrap();
-    // Reached only for a non-integer or variable exponent at a <= 0, where
-    // a^b is genuinely NaN (real result undefined) — the constant-integer
-    // case was routed to the powi jet above. db = 0 matches CPU OpCode::Powf.
-    writeln!(s, "                    let db = 0.0;").unwrap();
-    writeln!(s, "                    r.v[0] = val;").unwrap();
-    if k > 1 {
-        writeln!(s, "                    r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
-    }
-    for i in 2..k {
-        // CPU powf with negative base produces NaN through exp(b*ln(negative)).
-        // `0.0 / 0.0` is an abstract-typed NaN that naga rejects as not-
-        // expressible in f32; use the canonical quiet-NaN bit pattern instead.
+    for i in 0..k {
         writeln!(
             s,
-            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+            "                        r.v[{i}] = bitcast<f32>(0x7fc00000u);"
         )
         .unwrap();
     }
+    writeln!(s, "                    }} else {{").unwrap();
+    writeln!(s, "                        r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(
+            s,
+            "                        r.v[{i}] = select(bitcast<f32>(0x7f800000u), 0.0, f32({i}) < b.v[0]);"
+        )
+        .unwrap();
+    }
+    writeln!(s, "                    }}").unwrap();
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
     writeln!(s, "                    let product = jet_mul(b, lna);").unwrap();
@@ -2038,25 +2044,29 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
     }
     writeln!(s, "            }} else if (a.v[0] <= F(0)) {{").unwrap();
-    writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
+    // Zero base (a < 0 was handled above) — see the WGSL twin: live integer
+    // exponent → all-NaN jet; non-integer exponent → the branch-point
+    // [0, ..., 0, Inf, ...] convention with the finite/unbounded split at
+    // k = b0.
+    // Range-guarded like the fast path — see the WGSL twin.
     writeln!(
         s,
-        "                F da = b.v[0] * pow(a.v[0], b.v[0] - F(1));"
+        "                if (b.v[0] == round(b.v[0]) && fabs(b.v[0]) < F(2147483648.0)) {{"
     )
     .unwrap();
-    // Reached only for a non-integer or variable exponent at a <= 0, where
-    // a^b is genuinely NaN — the constant-integer case is routed to the powi
-    // jet above. db = 0 matches CPU OpCode::Powf.
-    writeln!(s, "                F db = F(0);").unwrap();
-    writeln!(s, "                r.v[0] = val;").unwrap();
-    if k > 1 {
-        writeln!(s, "                r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
+    for i in 0..k {
+        writeln!(s, "                    r.v[{i}] = F(0.0/0.0);").unwrap();
     }
-    for i in 2..k {
-        // CPU powf with negative base produces NaN through exp(b*ln(negative)).
-        // Use explicit NaN to match CPU behavior regardless of whether val is finite.
-        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(
+            s,
+            "                    r.v[{i}] = (F({i}) < b.v[0]) ? F(0) : F(1.0/0.0);"
+        )
+        .unwrap();
     }
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }} else {{").unwrap();
     writeln!(s, "                JetK lna = jet_ln(a);").unwrap();
     writeln!(s, "                JetK product = jet_mul(b, lna);").unwrap();
