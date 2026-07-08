@@ -1,0 +1,8 @@
+# cargo-audit configuration (the CI Security Audit job runs `cargo audit`
+# in addition to cargo-deny; both need the same justified ignores).
+[advisories]
+ignore = [
+    # rand 0.8.5 unsoundness — dev-only via the ad_trait comparison benches;
+    # no fixed 0.8.x exists; see deny.toml for the full rationale.
+    "RUSTSEC-2026-0097",
+]
