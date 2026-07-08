@@ -92,6 +92,6 @@ pub fn stde_sparse<F: Float + TaylorArenaLocal>(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: sampled_indices.len(),
+        num_samples: acc.contributing(),
     }
 }

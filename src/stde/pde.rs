@@ -36,7 +36,7 @@ fn stde_2nd_inner<F: Float>(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: z_vectors.len(),
+        num_samples: acc.contributing(),
     }
 }
 
@@ -112,7 +112,7 @@ pub fn divergence<F: Float>(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: directions.len(),
+        num_samples: acc.contributing(),
     }
 }
 
@@ -215,7 +215,7 @@ pub fn parabolic_diffusion_stochastic<F: Float>(
         estimate: mean * scale,
         sample_variance: sample_variance * scale * scale,
         standard_error: standard_error * scale,
-        num_samples: sampled_indices.len(),
+        num_samples: acc.contributing(),
     }
 }
 
@@ -471,6 +471,6 @@ pub fn dense_stde_2nd_indefinite(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: z_vectors.len(),
+        num_samples: acc.contributing(),
     }
 }

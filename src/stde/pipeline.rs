@@ -9,6 +9,9 @@ use crate::Float;
 /// Evaluates the tape at `x` for each direction, computes the estimator's sample
 /// from the Taylor jet, and aggregates with running mean and variance.
 ///
+/// Non-finite samples are skipped and excluded from `num_samples`; if every
+/// sample is non-finite the estimate is NaN.
+///
 /// # Panics
 ///
 /// Panics if `directions` is empty or any direction's length does not match
@@ -38,7 +41,7 @@ pub fn estimate<F: Float>(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: directions.len(),
+        num_samples: acc.contributing(),
     }
 }
 
@@ -49,10 +52,15 @@ pub fn estimate<F: Float>(
 /// the reliability-weight Bessel correction: `M2 / (W - W2/W)` where
 /// `W = Σw_s` and `W2 = Σw_s²`.
 ///
+/// Non-finite samples are skipped and excluded from `num_samples` (a NaN
+/// or Inf sample carries no usable magnitude); zero-weight directions
+/// contribute nothing to the statistics but still count as samples.
+///
 /// # Panics
 ///
 /// Panics if `directions` is empty, `weights.len() != directions.len()`,
-/// or any direction's length does not match `tape.num_inputs()`.
+/// any weight is negative or NaN (West's algorithm requires non-negative
+/// weights), or any direction's length does not match `tape.num_inputs()`.
 pub fn estimate_weighted<F: Float>(
     estimator: &impl Estimator<F>,
     tape: &BytecodeTape<F>,
@@ -76,17 +84,30 @@ pub fn estimate_weighted<F: Float>(
     let mut mean = F::zero();
     let mut m2 = F::zero();
 
+    let mut nonfinite_skips = 0usize;
     for (k, v) in directions.iter().enumerate() {
         let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
-        // Skip zero-weight directions before the finiteness check: a direction
-        // that contributes nothing shouldn't be able to panic the estimate.
+        // A negative (or NaN) weight is a caller error, not sample data:
+        // West's update assumes non-negative weights (w_sum must stay
+        // positive and monotone). The positive-form predicate rejects NaN.
         let w = weights[k];
+        assert!(
+            w >= F::zero(),
+            "estimate_weighted: weights must be non-negative and non-NaN"
+        );
+        // Skip zero-weight directions before evaluating the sample: a
+        // direction that contributes nothing shouldn't affect the estimate
+        // even if its sample would be non-finite.
         if w == F::zero() {
             continue;
         }
         let s = estimator.sample(c0, c1, c2);
-        assert!(s.is_finite(), "weighted estimator sample must be finite");
+        // Non-finite sample: skip and count (data condition, not an error).
+        if !s.is_finite() {
+            nonfinite_skips += 1;
+            continue;
+        }
 
         w_sum = w_sum + w;
         w_sum2 = w_sum2 + w * w;
@@ -113,9 +134,17 @@ pub fn estimate_weighted<F: Float>(
 
     EstimatorResult {
         value,
-        estimate: mean,
+        // Non-finite skips exhausting every weighted sample leave the
+        // estimator with no information — surface NaN rather than the
+        // accumulator-neutral 0. (All-zero weights, with nothing skipped,
+        // keep the documented neutral-0 estimate.)
+        estimate: if w_sum > F::zero() || nonfinite_skips == 0 {
+            mean
+        } else {
+            F::nan()
+        },
         sample_variance,
         standard_error,
-        num_samples: n,
+        num_samples: n - nonfinite_skips,
     }
 }

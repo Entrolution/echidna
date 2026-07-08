@@ -46,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `func_evals`; previously those evaluations were silently dropped from
   the reported count.
 
+### Changed (echidna, STDE)
+
+- STDE estimators no longer panic on a non-finite sample: samples whose
+  estimator value is NaN or Inf (singular jets, overflowed higher-order
+  coefficients) are skipped, `num_samples` now reports the finite
+  (contributing) sample count across every estimator entry point, and an
+  estimator left with zero contributing samples reports a NaN estimate
+  instead of a confident 0. Results for all-finite runs are unchanged.
+  `estimate_weighted` now panics on negative or NaN weights (West's
+  algorithm requires non-negative weights); zero-weight directions still
+  count as samples.
+- `diagonal_kth_order_const` now enforces the same `k ≤ 18` factorial
+  bound as the dynamic path (previously unguarded — `ORDER ≥ 20` silently
+  lost exactness), recovers the primal for zero-input (constant) tapes
+  like `hessian_diagonal` (previously returned 0), and its precision docs
+  match the actual guards (f32 bound is `ORDER ≤ 13`, not 14; the f64
+  factorial bound is 18, not 20).
+
 ### Fixed (echidna)
 
 - Nested second-order tangents (`Dual<Dual<F>>`, `DualVec<Dual<F>, N>`) are no

@@ -17,7 +17,7 @@ use crate::Float;
 ///
 /// # Panics
 ///
-/// Panics if `k < 2`, `k > 20` (factorial overflow guard for f64), or if
+/// Panics if `k < 2`, `k > 18` (`k!` is exact in f64 only through `18!`), or if
 /// `x.len()` does not match `tape.num_inputs()`.
 pub fn diagonal_kth_order<F: Float + TaylorArenaLocal>(
     tape: &BytecodeTape<F>,
@@ -46,6 +46,17 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+    if n == 0 {
+        // Constant tape: recover the primal with an empty forward pass;
+        // there is nothing to differentiate.
+        let mut values_buf = Vec::new();
+        tape.forward_into(&[], &mut values_buf);
+        let mut value = F::zero();
+        if let Some(&v) = values_buf.get(tape.output_index()) {
+            value = v;
+        }
+        return (value, Vec::new());
+    }
 
     let order = k + 1; // number of Taylor coefficients
     let _guard = TaylorDynGuard::<F>::new(order);
@@ -89,15 +100,17 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
 ///
 /// # Precision Note
 ///
-/// For f32, `k! > 2^23` when k ≥ 13 (ORDER ≥ 14), causing precision loss.
-/// The existing [`diagonal_kth_order`] has a runtime guard `k ≤ 20` for f64;
-/// the const-generic version has no such guard but users should be aware
-/// that for f32, ORDER ≤ 14 is the practical limit.
+/// `k!` must be exactly representable in the working precision. The runtime
+/// guards require `k ≤ 18` (`ORDER ≤ 19`) for f64 — `19!` exceeds 2^53 —
+/// and `k ≤ 12` (`ORDER ≤ 13`) for f32, a conservative bound (f32 `k!`
+/// exactness degrades from `14!`; the guard leaves one order of margin),
+/// matching [`diagonal_kth_order`]'s f64 guard.
 ///
 /// # Panics
 ///
 /// Compile-time error if `ORDER < 3` (i.e., k < 2).
-/// Runtime panic if `x.len()` does not match `tape.num_inputs()`.
+/// Runtime panic if `k > 18`, if `F` is f32 with `k > 12`, or if `x.len()`
+/// does not match `tape.num_inputs()`.
 pub fn diagonal_kth_order_const<F: Float, const ORDER: usize>(
     tape: &BytecodeTape<F>,
     x: &[F],
@@ -115,13 +128,29 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
     const { assert!(ORDER >= 3, "ORDER must be >= 3 (k=ORDER-1 >= 2)") }
 
     let k = ORDER - 1;
-    // f32 mantissa (23 bits) cannot represent k! exactly for k >= 13
+    assert!(
+        k <= 18,
+        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
+    );
+    // Conservative f32 bound: k! exactness degrades from 14! (the guard
+    // leaves one order of margin below that).
     assert!(
         k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
+        "k must be <= 12 for f32 (k! exactness degrades; use f64)"
     );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
+    if n == 0 {
+        // Constant tape: recover the primal with an empty forward pass;
+        // there is nothing to differentiate.
+        let mut values_buf = Vec::new();
+        tape.forward_into(&[], &mut values_buf);
+        let mut value = F::zero();
+        if let Some(&v) = values_buf.get(tape.output_index()) {
+            value = v;
+        }
+        return (value, Vec::new());
+    }
 
     let mut k_factorial = F::one();
     for i in 2..=k {
@@ -160,7 +189,7 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
 ///
 /// # Panics
 ///
-/// Panics if `sampled_indices` is empty, `k < 2`, `k > 20`, or if
+/// Panics if `sampled_indices` is empty, `k < 2`, `k > 18`, or if
 /// `x.len()` does not match `tape.num_inputs()`.
 pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
     tape: &BytecodeTape<F>,
@@ -229,7 +258,7 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
         estimate: mean * nf,
         sample_variance: sample_variance * nf * nf,
         standard_error: standard_error * nf,
-        num_samples: sampled_indices.len(),
+        num_samples: acc.contributing(),
     }
 }
 
