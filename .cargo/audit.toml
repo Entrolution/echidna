@@ -2,7 +2,12 @@
 # in addition to cargo-deny; both need the same justified ignores).
 [advisories]
 ignore = [
-    # rand 0.8.5 unsoundness — dev-only via the ad_trait comparison benches;
-    # no fixed 0.8.x exists; see deny.toml for the full rationale.
+    # rand 0.8.5 unsoundness (custom-logger + global-RNG interaction). Reaches
+    # the graph two ways: the ad_trait dev-dependency (comparison benches) and,
+    # with the optional `faer` feature, the published graph via
+    # faer -> num-complex -> rand ^0.8. No fixed 0.8.x exists anywhere in the
+    # chain (num-complex 0.4.6, the latest, requires rand ^0.8). The advisory's
+    # trigger is not exercised by echidna, faer's numerics, or the benches.
+    # Remove when num-complex moves to rand 0.9.
     "RUSTSEC-2026-0097",
 ]

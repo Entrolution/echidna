@@ -4,10 +4,14 @@
 
 | Crate           | Version    | Supported |
 |-----------------|------------|-----------|
-| `echidna`       | >= 0.14.0  | Yes       |
-| `echidna-optim` | >= 0.14.0  | Yes       |
-| `echidna`       | < 0.14.0   | No        |
-| `echidna-optim` | < 0.14.0   | No        |
+| `echidna`       | >= 0.14.1  | Yes       |
+| `echidna-optim` | >= 0.14.1  | Yes       |
+| `echidna`       | < 0.14.1   | No        |
+| `echidna-optim` | < 0.14.1   | No        |
+
+Only the latest patch of the current minor is supported; 0.14.0 shipped an
+inaccurate security note about RUSTSEC-2026-0097's reachability (corrected
+in 0.14.1's changelog).
 
 Only the latest release of each crate receives security updates.
 `echidna` 0.13.0 and `echidna-optim` 0.13.3 are a coordinated release
