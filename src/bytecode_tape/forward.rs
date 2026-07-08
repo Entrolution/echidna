@@ -116,7 +116,11 @@ impl<F: Float> super::BytecodeTape<F> {
                         tape_index: i as u32,
                         opcode: op,
                         switching_value: a - b,
-                        branch: if a >= b { 1 } else { -1 },
+                        // First-wins under NaN: the value and partials paths
+                        // route max(a, NaN) to a, so the recorded branch
+                        // label must agree — forced-sign reverse sweeps
+                        // attribute the gradient by this label.
+                        branch: if a >= b || b.is_nan() { 1 } else { -1 },
                     });
                 }
                 OpCode::Min => {
@@ -125,7 +129,8 @@ impl<F: Float> super::BytecodeTape<F> {
                         tape_index: i as u32,
                         opcode: op,
                         switching_value: a - b,
-                        branch: if a <= b { 1 } else { -1 },
+                        // First-wins under NaN — see Max above.
+                        branch: if a <= b || b.is_nan() { 1 } else { -1 },
                     });
                 }
                 OpCode::Signum => {

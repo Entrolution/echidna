@@ -66,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (echidna)
 
+- `Max`/`Min` kink entries now record the first-wins branch label when
+  the second operand is NaN, matching the value and partials paths:
+  forced-sign Clarke sweeps attribute the gradient by this label, and the
+  stale label sent it to the NaN operand.
+- `mixed_partial` on a zero-input (constant) tape returns the constant in
+  both slots (∂⁰f = f) instead of panicking; the `DiffOp` convenience
+  constructors (`laplacian`, `biharmonic`, `diagonal`) now panic with a
+  clear message for `n == 0` (a zero-variable operator specification is
+  malformed, unlike a zero-input tape) instead of building a silently
+  invalid empty operator; and the factorial-extraction degradation beyond
+  `18!` (log-domain, `+Inf` saturation) is documented and pinned.
 - `taylor_powf` at a zero base now follows the branch-point convention of
   `taylor_sqrt`/`taylor_cbrt` on every backend (CPU, wgpu, CUDA): with a
   non-integer exponent `b0`, coefficients of order `k < b0` are exactly 0

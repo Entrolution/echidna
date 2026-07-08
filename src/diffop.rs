@@ -213,6 +213,12 @@ fn partitions_recurse(
 /// `exp(sum(log(i)))` would introduce for small orders, while the fallback
 /// ensures that high-order calls return a clean `+inf` instead of NaN from
 /// `inf * 1` or similar intermediate patterns.
+///
+/// Degradation contract: beyond 18! the prefactor is no longer exact (log
+/// domain, sub-ULP noise) and once it exceeds f64 range the extraction
+/// saturates to `+inf` — extracted derivatives at such orders are `+inf`
+/// or `NaN`, never a silently wrong finite value. There is no order
+/// ceiling assert; the saturation IS the defined behavior.
 fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
     let mut prefactor = F::one();
     for &(slot, order) in slot_assignments {
@@ -617,6 +623,18 @@ pub fn mixed_partial<F: Float + TaylorArenaLocal>(
         orders.len(),
         tape.num_inputs(),
     );
+    if orders.is_empty() {
+        // Zero-input (constant) tape: the empty multi-index is the
+        // zeroth-derivative operator, and ∂⁰f = f. Recover the primal with
+        // an empty forward pass and return it in both slots.
+        let mut values_buf = Vec::new();
+        tape.forward_into(&[], &mut values_buf);
+        let value = values_buf
+            .get(tape.output_index())
+            .copied()
+            .unwrap_or_else(F::zero);
+        return (value, value);
+    }
     let mi = MultiIndex::new(orders);
     let plan = JetPlan::plan(orders.len(), &[mi]);
     let result = eval_dyn(&plan, tape, x);
@@ -761,8 +779,14 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// Laplacian: `Σ_j ∂²/∂x_j²`.
+    /// # Panics
+    ///
+    /// Panics if `n == 0` (a differential operator needs at least one
+    /// variable; a zero-variable operator specification is malformed, while
+    /// a zero-input TAPE is a valid constant — see `mixed_partial`).
     #[must_use]
     pub fn laplacian(n: usize) -> Self {
+        assert!(n >= 1, "laplacian requires at least one variable (n >= 1)");
         let terms = (0..n)
             .map(|j| (F::one(), MultiIndex::diagonal(n, j, 2)))
             .collect();
@@ -777,8 +801,12 @@ impl<F: Float> DiffOp<F> {
     /// Evaluation via [`eval`] uses exact jet arithmetic. Stochastic estimation
     /// via `stde_sparse` requires importance sampling (full deterministic sampling
     /// is biased when coefficients are non-uniform).
+    /// # Panics
+    ///
+    /// Panics if `n == 0` — see [`laplacian`](Self::laplacian).
     #[must_use]
     pub fn biharmonic(n: usize) -> Self {
+        assert!(n >= 1, "biharmonic requires at least one variable (n >= 1)");
         let two = F::one() + F::one();
         let mut terms: Vec<(F, MultiIndex)> = (0..n)
             .map(|j| (F::one(), MultiIndex::diagonal(n, j, 4)))
@@ -795,8 +823,13 @@ impl<F: Float> DiffOp<F> {
     }
 
     /// k-th order diagonal: `Σ_j ∂^k/∂x_j^k`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n == 0` or `k == 0` — see [`laplacian`](Self::laplacian).
     #[must_use]
     pub fn diagonal(n: usize, k: u8) -> Self {
+        assert!(n >= 1, "diagonal requires at least one variable (n >= 1)");
         assert!(k >= 1, "diagonal order must be >= 1");
         let terms = (0..n)
             .map(|j| (F::one(), MultiIndex::diagonal(n, j, k)))
