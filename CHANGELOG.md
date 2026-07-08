@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (echidna)
 
+- The wgpu forward kernel's `signum` now tests NaN by bit inspection like
+  its sibling shaders; the bare self-inequality test could be folded away
+  under Metal fast-math, misclassifying NaN inputs. (CUDA is compiled
+  IEEE-strict and is unaffected.)
 - Reverse sweeps on every backend (bytecode, eager, tangent-carrying
   second-order, wgpu, CUDA) now follow the zero-multiplier convention: an
   exactly-zero partial absorbs any adjoint, so an Inf/NaN adjoint arriving

@@ -174,11 +174,12 @@ fn log10_f32(x: f32) -> f32 {
 }
 
 fn signum_f32(x: f32) -> f32 {
-    // Match Rust's f32::signum: returns ±1 for all finite values (including ±0),
-    // NaN for NaN. Use bitcast to check sign bit for -0.0 handling.
-    if x != x { return x; }  // NaN passthrough
-    if (bitcast<u32>(x) & 0x80000000u) != 0u { return -1.0; }
-    return 1.0;
+    // Rust f32::signum: -1 for -0.0 (sign bit), +1 for +0.0/positive, NaN at NaN.
+    // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit. Bitcast NaN test
+    // since `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
 }
 
 fn is_nan_f32(x: f32) -> bool {
