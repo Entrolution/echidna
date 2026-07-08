@@ -512,9 +512,14 @@ macro_rules! opcode_tests_for_backend {
                 let (tape, _) = record(f_exp_m1, &[90.0_f64]);
                 let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
                 let tape_buf = ctx.upload_tape(&gpu_data);
-                let r = ctx
-                    .taylor_forward_2nd_batch(&tape_buf, &[90.0f32], &[1.0f32], 1)
-                    .unwrap();
+                let r = echidna::gpu::GpuBackend::taylor_forward_2nd_batch(
+                    &ctx,
+                    &tape_buf,
+                    &[90.0f32],
+                    &[1.0f32],
+                    1,
+                )
+                .unwrap();
                 assert!(
                     r.values[0].is_infinite() && r.values[0] > 0.0,
                     "expm1(90) primal must be +Inf, got {}",
@@ -688,9 +693,14 @@ macro_rules! opcode_tests_for_backend {
                 let (tape, _) = record(f_sqrt, &[0.0_f64]);
                 let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
                 let tape_buf = ctx.upload_tape(&gpu_data);
-                let r = ctx
-                    .taylor_forward_2nd_batch(&tape_buf, &[0.0f32], &[1.0f32], 1)
-                    .unwrap();
+                let r = echidna::gpu::GpuBackend::taylor_forward_2nd_batch(
+                    &ctx,
+                    &tape_buf,
+                    &[0.0f32],
+                    &[1.0f32],
+                    1,
+                )
+                .unwrap();
                 assert_eq!(r.values[0], 0.0, "sqrt(0) primal must be 0");
                 assert!(
                     r.c1s[0].is_infinite() && r.c1s[0] > 0.0,
@@ -716,9 +726,14 @@ macro_rules! opcode_tests_for_backend {
                 let (tape, _) = record(f_ln_1p, &[-1.0_f64]);
                 let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
                 let tape_buf = ctx.upload_tape(&gpu_data);
-                let r = ctx
-                    .taylor_forward_2nd_batch(&tape_buf, &[-1.0f32], &[1.0f32], 1)
-                    .unwrap();
+                let r = echidna::gpu::GpuBackend::taylor_forward_2nd_batch(
+                    &ctx,
+                    &tape_buf,
+                    &[-1.0f32],
+                    &[1.0f32],
+                    1,
+                )
+                .unwrap();
                 assert!(
                     r.values[0].is_infinite() && r.values[0] < 0.0,
                     "ln1p(-1) primal must be -Inf, got {}",
