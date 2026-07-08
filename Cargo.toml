@@ -3,7 +3,7 @@ members = [".", "echidna-optim"]
 
 [package]
 name = "echidna"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2021"
 rust-version = "1.93"
 description = "A high-performance automatic differentiation library for Rust"
@@ -39,7 +39,7 @@ serde_json = "1"
 ciborium = "0.2"
 nalgebra = "0.35"
 num-dual = "0.14"
-ad_trait = "0.3.0"
+ad_trait = "0.3.1"
 tempfile = "3"
 
 [features]

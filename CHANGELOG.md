@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-07-08
+
+**Coordinated release:** `echidna` 0.14.1 and `echidna-optim` 0.14.1.
+
+### Security
+
+- Corrects the 0.14.0 security note about RUSTSEC-2026-0097 (`rand` 0.8.5
+  unsoundness): the advisory is reachable not only through
+  dev-dependencies but also in the published dependency graph when the
+  optional `faer` feature is enabled (`faer` → `num-complex` →
+  `rand ^0.8`). No fixed 0.8.x release exists anywhere in that chain
+  (`num-complex` 0.4.6, the latest, requires `rand ^0.8`), so no version
+  bump can clear it; the advisory's trigger — a custom logger interacting
+  with rand's global RNG — is not exercised by echidna, faer's numerics,
+  or the benchmarks. The audit-configuration rationale is corrected
+  accordingly and the ignore will be removed when `num-complex` moves to
+  `rand` 0.9.
+
+### Changed (echidna)
+
+- The `ad_trait` benchmark dev-dependency is refreshed to 0.3.1.
+
 ## [0.14.0] - 2026-07-08
 
 **Coordinated release:** `echidna` 0.14.0 and `echidna-optim` 0.14.0.
@@ -1218,7 +1240,8 @@ types changed; the bump reflects the wgpu API-break that downstream
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/Entrolution/echidna/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/Entrolution/echidna/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Entrolution/echidna/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/Entrolution/echidna/compare/v0.11.0...v0.12.0
