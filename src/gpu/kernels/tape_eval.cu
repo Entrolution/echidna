@@ -337,9 +337,10 @@ extern "C" __global__ void reverse_sweep(
             default: break;
         }
 
-        adjoints[a_base + ai] += da * adj;
+// Zero-multiplier convention (see kernels/mod.rs).
+        if (da != F(0)) adjoints[a_base + ai] += da * adj;
         if (bi != UNUSED && op != OP_POWI) {
-            adjoints[a_base + bi] += db * adj;
+            if (db != F(0)) adjoints[a_base + bi] += db * adj;
         }
     }
 
@@ -892,9 +893,13 @@ extern "C" __global__ void tangent_reverse(
         bool unary_singular2 = op >= OP_NEG && op <= OP_FRACT; // all unary ops
         if (at == F(0) && unary_singular2) { da_eps = F(0); }
 
-        adj_re[base + ai] += da_re * ar;
-        adj_eps[base + ai] += da_re * ae + da_eps * ar;
-        if (bi != UNUSED && op != OP_POWI) {
+        // Zero-multiplier convention — pair guard mirroring the CPU
+        // is_all_zero(Dual) semantics; see the WGSL twin.
+        if (da_re != F(0) || da_eps != F(0)) {
+            adj_re[base + ai] += da_re * ar;
+            adj_eps[base + ai] += da_re * ae + da_eps * ar;
+        }
+        if (bi != UNUSED && op != OP_POWI && (db_re != F(0) || db_eps != F(0))) {
             adj_re[base + bi] += db_re * ar;
             adj_eps[base + bi] += db_re * ae + db_eps * ar;
         }

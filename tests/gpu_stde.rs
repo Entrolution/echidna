@@ -2015,6 +2015,66 @@ fn cuda_taylor_powf_zero_base_branch_point() {
     check_taylor_powf_zero_base(&ctx, "cuda");
 }
 
+/// Reverse-mode zero-multiplier convention on the GPU gradient kernel: a
+/// chained singularity (sqrt'(0) = Inf) sends an infinite adjoint into
+/// hypot's origin node, whose partials are exactly (0, 0) — the gradient
+/// must be [0, 0], matching the CPU sweeps (see kernels/mod.rs).
+#[cfg(all(any(feature = "gpu-wgpu", feature = "gpu-cuda"), feature = "stde"))]
+fn check_gradient_zero_multiplier_absorbs_inf_adjoint(ctx: &impl GpuBackend, label: &str) {
+    use num_traits::Float as _;
+    let f = |v: &[echidna::BReverse<f64>]| v[0].hypot(v[1]).sqrt();
+    let (tape, _) = record(f, &[3.0_f64, 4.0]);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+    let (_, grads) = ctx.gradient_batch(&tape_buf, &[0.0f32, 0.0], 1).unwrap();
+    assert_eq!(
+        grads[0], 0.0,
+        "{label}: zero partial must absorb the Inf adjoint, got {}",
+        grads[0]
+    );
+    assert_eq!(grads[1], 0.0, "{label}: got {}", grads[1]);
+
+    // Replay integrity away from the origin.
+    let (_, g) = ctx.gradient_batch(&tape_buf, &[3.0f32, 4.0], 1).unwrap();
+    let expect_x = (3.0f32 / 5.0) * 0.5 / 5.0f32.sqrt();
+    assert!(
+        (g[0] - expect_x).abs() < 1e-5,
+        "{label}: replay gradient x = {}, expected {expect_x}",
+        g[0]
+    );
+
+    // The second-order path shares the convention: hvp_batch at the same
+    // chained singularity must return zero gradients and HVP entries, like
+    // the CPU tape.hvp does — not NaN through the unguarded 0×Inf.
+    let (hg, hv) = ctx
+        .hvp_batch(&tape_buf, &[0.0f32, 0.0], &[1.0f32, 0.0], 1)
+        .unwrap();
+    assert_eq!(hg[0], 0.0, "{label}: hvp grad[0], got {}", hg[0]);
+    assert_eq!(hg[1], 0.0, "{label}: hvp grad[1], got {}", hg[1]);
+    assert_eq!(hv[0], 0.0, "{label}: hvp[0], got {}", hv[0]);
+    assert_eq!(hv[1], 0.0, "{label}: hvp[1], got {}", hv[1]);
+}
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn wgpu_gradient_zero_multiplier_convention() {
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_gradient_zero_multiplier_absorbs_inf_adjoint(&ctx, "wgpu");
+}
+
+#[cfg(all(feature = "gpu-cuda", feature = "stde"))]
+#[test]
+fn cuda_gradient_zero_multiplier_convention() {
+    let ctx = match cuda_context() {
+        Some(c) => c,
+        None => return,
+    };
+    check_gradient_zero_multiplier_absorbs_inf_adjoint(&ctx, "cuda");
+}
+
 /// Pins on the generated source itself — CI-safe (no GPU needed): the
 /// truncation-based fract and full-precision 1/k weights must be present in
 /// both emitters. The 1/3 weight first appears at coefficient order 3, so

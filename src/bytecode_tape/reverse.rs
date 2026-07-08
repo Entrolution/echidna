@@ -52,9 +52,17 @@ impl<F: Float> super::BytecodeTape<F> {
                     let b = b_idx_opt.map(|bi| values[bi as usize]).unwrap_or(F::zero());
                     let r = values[i];
                     let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                    // Zero-multiplier convention: an exactly-zero partial
+                    // absorbs any adjoint (see kernels/mod.rs) — the input
+                    // does not move the output locally, so an Inf/NaN
+                    // adjoint from a chained singularity contributes 0.
+                    if da != F::zero() {
+                        adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                    }
                     if let Some(bi) = b_idx_opt {
-                        adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
+                        if db != F::zero() {
+                            adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
+                        }
                     }
                 }
                 op => {
@@ -72,7 +80,9 @@ impl<F: Float> super::BytecodeTape<F> {
                             let n = F::from(exp).unwrap();
                             n * a.powi(exp - 1)
                         };
-                        adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                        if da != F::zero() {
+                            adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                        }
                         continue;
                     }
                     let b = if b_idx != UNUSED {
@@ -87,8 +97,11 @@ impl<F: Float> super::BytecodeTape<F> {
                         None => opcode::reverse_partials(op, a, b, r),
                     };
 
-                    adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED {
+                    // Zero-multiplier convention — see kernels/mod.rs.
+                    if da != F::zero() {
+                        adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                    }
+                    if b_idx != UNUSED && db != F::zero() {
                         adjoints[b_idx as usize] = adjoints[b_idx as usize] + db * adj;
                     }
                 }

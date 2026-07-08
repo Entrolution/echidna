@@ -519,11 +519,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             da_eps = 0.0;
         }
 
-        // Dual accumulation: adj[arg] += Dual(da_re, da_eps) * Dual(ar, ae)
-        adj_re[base + ai] += da_re * ar;
-        adj_eps[base + ai] += da_re * ae + da_eps * ar;
+        // Dual accumulation: adj[arg] += Dual(da_re, da_eps) * Dual(ar, ae).
+        // Zero-multiplier convention (see kernels/mod.rs): the PAIR guard
+        // mirrors the CPU sweep's is_all_zero(Dual(da_re, da_eps)) — an
+        // all-zero dual partial absorbs any adjoint, while a partial with
+        // zero primal but live second-order component still accumulates.
+        if da_re != 0.0 || da_eps != 0.0 {
+            adj_re[base + ai] += da_re * ar;
+            adj_eps[base + ai] += da_re * ae + da_eps * ar;
+        }
 
-        if bi != UNUSED && op != OP_POWI {
+        if bi != UNUSED && op != OP_POWI && (db_re != 0.0 || db_eps != 0.0) {
             adj_re[base + bi] += db_re * ar;
             adj_eps[base + bi] += db_re * ae + db_eps * ar;
         }

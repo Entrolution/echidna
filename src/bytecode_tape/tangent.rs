@@ -212,9 +212,14 @@ impl<F: Float> super::BytecodeTape<F> {
                     let [a_idx, _cb_idx] = self.arg_indices[i];
                     let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
                     let (da_t, db_t) = custom_partials(i);
-                    buf[a_idx as usize] = buf[a_idx as usize] + da_t * adj;
+                    // Zero-multiplier convention (see kernels/mod.rs).
+                    if !da_t.is_all_zero() {
+                        buf[a_idx as usize] = buf[a_idx as usize] + da_t * adj;
+                    }
                     if let Some(bi) = b_idx_opt {
-                        buf[bi as usize] = buf[bi as usize] + db_t * adj;
+                        if !db_t.is_all_zero() {
+                            buf[bi as usize] = buf[bi as usize] + db_t * adj;
+                        }
                     }
                 }
                 op => {
@@ -237,7 +242,9 @@ impl<F: Float> super::BytecodeTape<F> {
                             let n = T::from(exp).unwrap();
                             n * a.powi(exp - 1)
                         };
-                        buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                        if !da.is_all_zero() {
+                            buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                        }
                         continue;
                     }
                     let b = if b_idx != UNUSED {
@@ -248,8 +255,13 @@ impl<F: Float> super::BytecodeTape<F> {
                     let r = tangent_vals[i];
                     let (da, db) = opcode::reverse_partials(op, a, b, r);
 
-                    buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED {
+                    // Zero-multiplier convention (see kernels/mod.rs).
+                    // is_all_zero, not ==: a partial with zero primal but
+                    // live tangent carries second-order information.
+                    if !da.is_all_zero() {
+                        buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                    }
+                    if b_idx != UNUSED && !db.is_all_zero() {
                         buf[b_idx as usize] = buf[b_idx as usize] + db * adj;
                     }
                 }

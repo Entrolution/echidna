@@ -17,6 +17,55 @@
 //! `asinh_deriv`, `acosh_deriv`, and the domain-guarded log / `atanh`
 //! derivatives below. Every new extraction must come with a call-site refactor
 //! so we don't add abstraction for its own sake.
+//!
+//! # The structural-zero convention
+//!
+//! Zero tangents, zero partials, and singular points are handled by ONE
+//! convention, applied symmetrically in both AD directions:
+//!
+//! 1. **Forward mode — zero tangents.** A structurally zero tangent
+//!    ([`IsAllZero`](crate::float::IsAllZero), every component exactly
+//!    zero) through any unary elemental stays exactly zero, even where the
+//!    derivative is unbounded (`sqrt`/`ln` at 0, `atanh` at ±1),
+//!    overflowed (`exp`/`sinh`/`cosh` at large arguments), or NaN
+//!    (out-of-domain primals). A constant is a constant; IEEE `0 × Inf =
+//!    NaN` must not leak into lanes that carry no derivative. Implemented
+//!    in `Dual`/`DualVec::chain` and, on the GPU, as blanket unary guards
+//!    in the tangent kernels.
+//!
+//! 2. **Reverse mode — zero multipliers.** An exactly-zero partial
+//!    (multiplier) absorbs ANY adjoint, including Inf/NaN adjoints from a
+//!    chained singularity downstream: a zero partial means this input does
+//!    not move the output locally, so the adjoint's magnitude is
+//!    irrelevant. Implemented as accumulation guards in every reverse
+//!    sweep (bytecode, eager, tangent-carrying, WGSL, CUDA). Note the
+//!    guard necessarily fires for every exact-zero partial — singular-point
+//!    zeros (hypot/atan2 at the origin), kink losing branches (max/min),
+//!    and regular zeros (mul by a zero operand, signum away from 0) are
+//!    indistinguishable at sweep time, and the convention is correct for
+//!    all of them. This completes the long-documented zero-ADJOINT skip
+//!    (the JAX-style `0 × NaN → 0` trade-off noted in `tape.rs`).
+//!
+//! 3. **Singular-primal partials.** Kernels return a defined convention at
+//!    non-differentiable points rather than raw IEEE fallout: `hypot` and
+//!    `atan2` return exact `(0, 0)` at the origin; `ln`/`log2`/`log10`
+//!    derivatives follow the IEEE reciprocal sign at ±0 (`1/-0 = -Inf`);
+//!    `sqrt`/`cbrt` derivatives are `+Inf` at 0; out-of-domain points give
+//!    NaN partials (which are NOT zero, so rule 2 does not absorb them —
+//!    NaN still propagates to signal the domain error).
+//!
+//! 4. **Two mechanisms for origin short-circuits.** The eager single-use
+//!    tape (`Reverse`) may short-circuit a singular-point op to a tape-free
+//!    constant (`hypot`/`atan2` at the origin) because that tape is never
+//!    re-evaluated. The re-evaluable bytecode tape must NOT do this — a
+//!    recording-point constant would be stale on replay at other inputs —
+//!    so it keeps the node and relies on rule 2 at sweep time. Both
+//!    mechanisms produce the same gradients; do not "unify" them, the
+//!    asymmetry is load-bearing.
+//!
+//! A live (nonzero) tangent or adjoint through a singular point keeps the
+//! non-finite result — the convention protects constants, never masks
+//! singularities.
 
 use num_traits::Float;
 

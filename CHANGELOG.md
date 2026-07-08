@@ -66,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed (echidna)
 
+- Reverse sweeps on every backend (bytecode, eager, tangent-carrying
+  second-order, wgpu, CUDA) now follow the zero-multiplier convention: an
+  exactly-zero partial absorbs any adjoint, so an Inf/NaN adjoint arriving
+  from a chained singularity (e.g. `sqrt'(0) = Inf`) no longer turns the
+  gradients of non-participating inputs into NaN — `hypot`/`atan2` at the
+  origin, kink losing branches, and multiplications by a zero operand all
+  contribute exactly 0. NaN partials from out-of-domain points are not
+  zero and still propagate. This completes the long-documented
+  zero-adjoint skip; the full structural-zero convention (forward and
+  reverse, all mechanisms) is now written down once in the kernels module
+  documentation.
 - `Max`/`Min` kink entries now record the first-wins branch label when
   the second operand is NaN, matching the value and partials paths:
   forced-sign Clarke sweeps attribute the gradient by this label, and the
