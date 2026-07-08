@@ -9,6 +9,10 @@ yanked = "deny"
 ignore = [
     "RUSTSEC-2024-0436", # paste (transitive dep of simba) — unmaintained, no alternative in simba yet
 ]
+# NOTE: RUSTSEC-2026-0097 (rand 0.8.5 unsoundness) reaches the graph only via
+# the ad_trait DEV-dependency (comparison benches) and surfaces as an allowed
+# "unsound" warning here; cargo-audit treats it as an error, so its justified
+# ignore lives in .cargo/audit.toml. Remove there when ad_trait moves to rand 0.9.
 
 [licenses]
 allow = [

@@ -4,10 +4,10 @@
 
 | Crate           | Version    | Supported |
 |-----------------|------------|-----------|
-| `echidna`       | >= 0.13.0  | Yes       |
-| `echidna-optim` | >= 0.13.3  | Yes       |
-| `echidna`       | < 0.13.0   | No        |
-| `echidna-optim` | < 0.13.3   | No        |
+| `echidna`       | >= 0.14.0  | Yes       |
+| `echidna-optim` | >= 0.14.0  | Yes       |
+| `echidna`       | < 0.14.0   | No        |
+| `echidna-optim` | < 0.14.0   | No        |
 
 Only the latest release of each crate receives security updates.
 `echidna` 0.13.0 and `echidna-optim` 0.13.3 are a coordinated release
