@@ -142,6 +142,22 @@ fn signum_f32(x: f32) -> f32 {
     return select(1.0, -1.0, (b & 0x80000000u) != 0u);
 }
 
+// Overflow-safe hypot with IEEE Inf handling — same helper as
+// forward.wgsl / tangent_forward.wgsl so the primal stays bit-matched
+// across kernels. The naive sqrt(a*a + b*b) overflows to Inf for |a| or
+// |b| above ~1.8e19 even where the true hypot is representable.
+fn hypot_f32(a: f32, b: f32) -> f32 {
+    let ax = abs(a);
+    let ay = abs(b);
+    let inf = bitcast<f32>(0x7f800000u);
+    if ax == inf || ay == inf { return inf; }
+    let mx = max(ax, ay);
+    let mn = min(ax, ay);
+    if mx == 0.0 { return 0.0; }
+    let r = mn / mx;
+    return mx * sqrt(1.0 + r * r);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bid = gid.x;
@@ -179,11 +195,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 2u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a+b; rt=at+bt; }
             case 3u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a-b; rt=at-bt; }
             case 4u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a*b; rt=b*at+a*bt; }
-            case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-a*inv*inv*bt; }
+            // DIV tangent factored as r*inv (r = a/b) to match
+            // tangent_forward.wgsl and the CUDA kernel. The prior a*inv*inv
+            // form was equivalent and equally overflow-safe — WGSL
+            // left-associativity makes it (a*inv)*inv, never forming
+            // inv*inv. Expression-consistency change only (<= 1 ULP).
+            case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-r*inv*bt; }
+            // REM is exact only for |a/b| < 2^24 (f32 mantissa) — see rem_f32 in
+            // forward.wgsl; CPU/CUDA use exact fmod.
             case 6u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=a-trunc(a/b)*b; rt=at-trunc(a/b)*bt; }
-            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0), 0.0, b==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0); rt=dx+dy; }
+            case 7u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=powf_real(a,b); let dx=select(select(b*r/a*at, b*powf_real(a,b-1.0)*at, a==0.0), 0.0, b==0.0 || at==0.0); let dy=select(r*log(a)*bt, 0.0, r==0.0 || a<=0.0 || bt==0.0); rt=dx+dy; }
             case 8u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=atan2(a,b); let mx=max(abs(a),abs(b)); if mx==0.0 {rt=0.0;} else {let au=a/mx; let bu=b/mx; let d=mx*(au*au+bu*bu); rt=(bu*at-au*bt)/d;} }
-            case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=sqrt(a*a+b*b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
+            // HYPOT primal via the overflow-safe helper; the tangent numerator
+            // a*at + b*bt is left un-rescaled (it overflows only when the true
+            // tangent magnitude does).
+            case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=hypot_f32(a,b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
             case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a>=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
             case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a<=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
             case 12u: { r=-a; rt=-at; }
@@ -224,6 +250,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             default: {}
         }
         primals[base + i] = r;
+        // Structural-zero tangent convention — see tangent_forward.wgsl
+        // (uniform across all unary ops, matching the CPU chain rule).
+        let unary_singular = op >= 12u && op <= 42u; // NEG..FRACT
+        if at == 0.0 && unary_singular {
+            rt = 0.0;
+        }
         tans[base + i] = rt;
     }
 
@@ -304,10 +336,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // ∂²/∂a∂b term carries ln(0), non-finite on CPU and GPU
                     // alike, so it is not asserted.) The a>0 branch is unchanged.
                     if a <= 0.0 {
-                        let daa = select(b*(b-1.0)*powf_real(a, b-2.0)*at, 0.0, b == 1.0);
-                        da_eps = bt*ab1 + daa;
+                        let daa = select(b*(b-1.0)*powf_real(a, b-2.0)*at, 0.0, b == 1.0 || at == 0.0);
+                        // Per-direction structural-zero guards: ab1 can be
+                        // non-finite at a singular base, so each term is
+                        // zeroed with its own direction component.
+                        da_eps = select(bt*ab1, 0.0, bt == 0.0) + daa;
                     } else {
-                        da_eps = bt*ab1 + b*ab1*((b-1.0)/a*at + log(a)*bt);
+                        da_eps = select(bt*ab1, 0.0, bt == 0.0)
+                            + select(b*ab1*((b-1.0)/a)*at, 0.0, at == 0.0)
+                            + select(b*ab1*log(a)*bt, 0.0, bt == 0.0);
                     }
                 }
                 let rr = primals[base+i]; // r = a^b from forward pass
@@ -318,7 +355,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let la = log(a);
                     let rt = tans[base+i];
                     db_re = rr * la;
-                    db_eps = rt*la + rr*at/a;
+                    // rt is direction-consistent from phase 1 (zero for a
+                    // fully-constant direction); the at-term needs its own
+                    // guard because rr can be non-finite on overflow.
+                    db_eps = rt*la + select(rr*at/a, 0.0, at == 0.0);
                 }
             }
             case 8u /* ATAN2 */: {
@@ -358,13 +398,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     db_re=b/r; db_eps=(bt*r-b*rt2)/(r2);
                 }
             }
+            // NaN routing uses the bit-pattern test (as Phase 1 above and every
+            // other kernel): `b != b` can be folded to false under Metal
+            // fast-math, which would route the adjoint to the wrong operand.
             case 10u /* MAX */: {
                 let b=primals[base+bi];
-                if a>=b || b!=b { da_re=1.0; } else { db_re=1.0; }
+                let bb=bitcast<u32>(b);
+                let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u;
+                if a>=b || bn { da_re=1.0; } else { db_re=1.0; }
             }
             case 11u /* MIN */: {
                 let b=primals[base+bi];
-                if a<=b || b!=b { da_re=1.0; } else { db_re=1.0; }
+                let bb=bitcast<u32>(b);
+                let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u;
+                if a<=b || bn { da_re=1.0; } else { db_re=1.0; }
             }
 
             // Unary ops: da_re = f'(a), da_eps = f''(a)*at
@@ -461,11 +508,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             default: {}
         }
 
-        // Dual accumulation: adj[arg] += Dual(da_re, da_eps) * Dual(ar, ae)
-        adj_re[base + ai] += da_re * ar;
-        adj_eps[base + ai] += da_re * ae + da_eps * ar;
+        // Structural-zero direction component: for the unary arms da_eps is
+        // f''(a)·at, so a zero direction keeps the second-order contribution
+        // exactly zero even at singular primals (0/0 or 0*Inf otherwise).
+        // Mirrors the forward-phase guard; POWF is guarded per-term in its
+        // arm. The first-order multiplier da_re does not involve the
+        // direction and is untouched.
+        let unary_singular2 = op >= 12u && op <= 42u; // NEG..FRACT
+        if at == 0.0 && unary_singular2 {
+            da_eps = 0.0;
+        }
 
-        if bi != UNUSED && op != OP_POWI {
+        // Dual accumulation: adj[arg] += Dual(da_re, da_eps) * Dual(ar, ae).
+        // Zero-multiplier convention (see kernels/mod.rs): the PAIR guard
+        // mirrors the CPU sweep's is_all_zero(Dual(da_re, da_eps)) — an
+        // all-zero dual partial absorbs any adjoint, while a partial with
+        // zero primal but live second-order component still accumulates.
+        if da_re != 0.0 || da_eps != 0.0 {
+            adj_re[base + ai] += da_re * ar;
+            adj_eps[base + ai] += da_re * ae + da_eps * ar;
+        }
+
+        if bi != UNUSED && op != OP_POWI && (db_re != 0.0 || db_eps != 0.0) {
             adj_re[base + bi] += db_re * ar;
             adj_eps[base + bi] += db_re * ae + db_eps * ar;
         }

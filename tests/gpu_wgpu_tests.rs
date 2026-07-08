@@ -835,3 +835,224 @@ mod hvp_opcode_parity {
         );
     }
 }
+
+#[cfg(feature = "gpu-wgpu")]
+mod hvp_edge_parity {
+    use super::*;
+    use echidna::gpu::GpuTapeData;
+    use echidna::record;
+
+    fn approx_eq(a: f32, b: f64, rel: f64, abs: f64) -> bool {
+        let a = a as f64;
+        (a - b).abs() <= abs || (a - b).abs() <= rel * b.abs()
+    }
+
+    /// HYPOT at magnitudes where a naive sqrt(a*a + b*b) primal overflows
+    /// f32 (a*a = 4e38 > f32::MAX) while the true hypot ≈ 2.2e19 is
+    /// representable: the HVP kernel's forward phase must stay finite and
+    /// its gradient must match the CPU reference.
+    #[test]
+    fn hvp_parity_hypot_large_magnitude() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        use num_traits::Float as _;
+        let f = |v: &[echidna::BReverse<f32>]| v[0].hypot(v[1]);
+        let (tape, _) = record(f, &[3.0_f32, 4.0]);
+        let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+        let x = [2e19_f32, 1e19];
+        let v = [1.0_f32, 0.0];
+        let (gpu_grad, gpu_hvp) = ctx.hvp_batch(&gpu_tape, &x, &v, 1).unwrap();
+        let (cpu_grad, cpu_hvp) = tape.hvp(&x, &[1.0, 0.0]);
+        for i in 0..2 {
+            assert!(
+                approx_eq(gpu_grad[i], cpu_grad[i] as f64, 1e-3, 1e-3),
+                "hypot-large grad[{i}]: gpu={}, cpu={}",
+                gpu_grad[i],
+                cpu_grad[i]
+            );
+            assert!(
+                approx_eq(gpu_hvp[i], cpu_hvp[i] as f64, 1e-3, 1e-3),
+                "hypot-large hvp[{i}]: gpu={}, cpu={}",
+                gpu_hvp[i],
+                cpu_hvp[i]
+            );
+        }
+    }
+
+    /// MAX/MIN with a NaN second operand: the adjoint must route to the
+    /// first operand (IEEE maxNum drops the NaN). Pins the bit-pattern NaN
+    /// test in the HVP kernel's reverse phase — a bare `b != b` can fold to
+    /// false under fast-math backends and route the adjoint to the wrong
+    /// operand.
+    #[test]
+    fn hvp_max_min_nan_second_operand_routes_to_first() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        use num_traits::Float as _;
+        for (name, f) in [
+            (
+                "max",
+                (|v: &[echidna::BReverse<f32>]| v[0].max(v[1]))
+                    as fn(&[echidna::BReverse<f32>]) -> echidna::BReverse<f32>,
+            ),
+            ("min", |v: &[echidna::BReverse<f32>]| v[0].min(v[1])),
+        ] {
+            let (tape, _) = record(f, &[1.0_f32, 2.0]);
+            let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+            let gpu_tape = ctx.upload_tape(&gpu_data);
+            let x = [1.0_f32, f32::NAN];
+            let v = [1.0_f32, 0.0];
+            let (gpu_grad, _) = ctx.hvp_batch(&gpu_tape, &x, &v, 1).unwrap();
+            assert_eq!(
+                gpu_grad[0], 1.0,
+                "{name}(1, NaN): adjoint must route to the first operand"
+            );
+            assert_eq!(
+                gpu_grad[1], 0.0,
+                "{name}(1, NaN): no adjoint may reach the NaN operand"
+            );
+        }
+    }
+
+    /// Singular primal with a structurally-zero direction component: the
+    /// zero lane's tangent and HVP contributions stay exactly zero (the
+    /// CPU chain-rule convention) instead of NaN from 0·Inf / 0/0, while
+    /// the live lane and the first-order multipliers are untouched.
+    #[test]
+    fn hvp_singular_primal_zero_direction_lane() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        use num_traits::Float as _;
+        // sqrt(x)·y + ln(y) at x = 0: the sqrt node's forward tangent is
+        // structurally zero for direction (0, 1) — without the guard it is
+        // 0/0 = NaN and poisons the y-lane HVP through the product rule.
+        let f = |v: &[echidna::BReverse<f32>]| v[0].sqrt() * v[1] + v[1].ln();
+        let (tape, _) = record(f, &[1.0_f32, 2.0]);
+        let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+        let x = [0.0_f32, 2.0];
+        let v = [0.0_f32, 1.0];
+        let (gpu_grad, gpu_hvp) = ctx.hvp_batch(&gpu_tape, &x, &v, 1).unwrap();
+        let (cpu_grad, cpu_hvp) = tape.hvp(&x, &[0.0, 1.0]);
+
+        // Live lane: grad = sqrt(0) + 1/y = 0.5; hvp = -1/y² = -0.25.
+        assert!(
+            approx_eq(gpu_grad[1], cpu_grad[1] as f64, 1e-4, 1e-6)
+                && (cpu_grad[1] - 0.5).abs() < 1e-6,
+            "live-lane gradient: gpu={}, cpu={}",
+            gpu_grad[1],
+            cpu_grad[1]
+        );
+        assert!(
+            approx_eq(gpu_hvp[1], cpu_hvp[1] as f64, 1e-4, 1e-6)
+                && (cpu_hvp[1] - (-0.25)).abs() < 1e-6,
+            "live-lane hvp must stay finite (guarded sqrt tangent): gpu={}, cpu={}",
+            gpu_hvp[1],
+            cpu_hvp[1]
+        );
+        // Singular lane: the first-order multiplier is genuinely +Inf
+        // (y·(1/(2·sqrt(0)))), on both backends.
+        assert!(
+            gpu_grad[0].is_infinite() && cpu_grad[0].is_infinite(),
+            "singular-lane gradient stays +Inf on both: gpu={}, cpu={}",
+            gpu_grad[0],
+            cpu_grad[0]
+        );
+        // The singular lane's HVP is genuinely non-finite (the second
+        // derivative of sqrt at 0 is unbounded and the direction moves its
+        // adjoint). The two backends currently reach different non-finite
+        // kinds — GPU +Inf via its explicit second-derivative arm, CPU NaN
+        // via the Dual division product rule — so pin non-finiteness, not
+        // the kind. Unifying reverse-accumulation semantics at singular
+        // points is a separate convention decision.
+        assert!(
+            !gpu_hvp[0].is_finite() && !cpu_hvp[0].is_finite(),
+            "singular-lane hvp must be non-finite on both: gpu={}, cpu={}",
+            gpu_hvp[0],
+            cpu_hvp[0]
+        );
+    }
+
+    /// Overflowed derivative with a constant seed lane through the JVP
+    /// kernel: exp(100) is Inf in f32, so the exp node's tangent under the
+    /// y-column seed (x component zero) is Inf·0 — the uniform unary guard
+    /// keeps it exactly 0, so the ∂f/∂y Jacobian entry stays finite instead
+    /// of being poisoned to NaN.
+    #[test]
+    fn jvp_overflowed_derivative_zero_seed_lane() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        use num_traits::Float as _;
+        let f = |v: &[echidna::BReverse<f32>]| v[0].exp() + v[1].ln();
+        let (mut tape, _) = record(f, &[1.0_f32, 2.0]);
+        let gpu_data = GpuTapeData::from_tape(&tape).unwrap();
+        let gpu_tape = ctx.upload_tape(&gpu_data);
+        let (_vals, _pat, jac) = ctx
+            .sparse_jacobian(&gpu_tape, &mut tape, &[100.0, 2.0])
+            .unwrap();
+        assert!(
+            jac.iter().any(|v| (v - 0.5).abs() < 1e-4),
+            "∂f/∂y = 1/y = 0.5 must survive the overflowed exp lane: {jac:?}"
+        );
+        assert!(
+            !jac.iter().any(|v| v.is_nan()),
+            "no Jacobian entry may be NaN (∂f/∂x is a legitimate +Inf): {jac:?}"
+        );
+    }
+}
+
+/// Degenerate batched inputs must surface as recoverable errors, not
+/// zero-sized-buffer panics deep inside the backend.
+#[cfg(feature = "gpu-wgpu")]
+mod degenerate_inputs {
+    use super::*;
+    use echidna::gpu::GpuTapeData;
+    use echidna::record;
+
+    #[test]
+    fn zero_batch_and_zero_input_tapes_error_cleanly() {
+        let ctx = match super::gpu_context() {
+            Some(c) => c,
+            None => return,
+        };
+        // Normal tape, zero batch size.
+        let (tape, _) = record(|x: &[echidna::BReverse<f32>]| x[0] * x[0], &[2.0_f32]);
+        let gd = GpuTapeData::from_tape(&tape).unwrap();
+        let gt = ctx.upload_tape(&gd);
+        assert!(ctx.forward_batch(&gt, &[], 0).is_err());
+        assert!(ctx.gradient_batch(&gt, &[], 0).is_err());
+        assert!(ctx.hvp_batch(&gt, &[2.0], &[], 0).is_err());
+
+        // Zero-input (constant-function) tape with a non-zero batch.
+        let (ctape, _) = record(
+            |_: &[echidna::BReverse<f32>]| echidna::BReverse::constant(3.0),
+            &[],
+        );
+        let cgd = GpuTapeData::from_tape(&ctape).unwrap();
+        let cgt = ctx.upload_tape(&cgd);
+        assert!(ctx.forward_batch(&cgt, &[], 4).is_err());
+        assert!(ctx.gradient_batch(&cgt, &[], 4).is_err());
+
+        // STDE entry point with empty x.
+        #[cfg(feature = "stde")]
+        assert!(echidna::gpu::stde_gpu::hessian_diagonal_gpu(&ctx, &gt, &[]).is_err());
+
+        // Taylor batch entry points share the exposure: zero batch on a
+        // normal tape, and a non-zero batch on a zero-input tape.
+        #[cfg(feature = "stde")]
+        {
+            use echidna::gpu::GpuBackend as _;
+            assert!(ctx.taylor_forward_2nd_batch(&gt, &[], &[], 0).is_err());
+            assert!(ctx.taylor_forward_2nd_batch(&cgt, &[], &[], 4).is_err());
+        }
+    }
+}

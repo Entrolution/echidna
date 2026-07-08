@@ -34,6 +34,8 @@ mod serde_support;
 mod taylor;
 
 mod thread_local;
+#[cfg(debug_assertions)]
+pub(crate) use self::thread_local::active_btape_id;
 pub use self::thread_local::{with_active_btape, BtapeGuard, BtapeThreadLocal};
 
 /// Sentinel index for constant entries (not tracked).
@@ -132,6 +134,22 @@ pub struct BytecodeTape<F: Float> {
     /// Second operand index for binary custom ops (sparse side table).
     /// Maps tape index → second operand index.
     pub(crate) custom_second_args: HashMap<u32, u32>,
+    /// Debug-only tape identity, used to catch `BReverse` values recorded on
+    /// one tape being used while a different tape is active (nested
+    /// recordings capturing outer variables, values stashed across
+    /// recordings, cross-thread reuse). Zero release-build cost.
+    #[cfg(debug_assertions)]
+    pub(crate) tape_id: u64,
+}
+
+/// Debug-only source of unique tape identities (0 is reserved for
+/// "untracked" `BReverse` values whose provenance is unknown).
+#[cfg(debug_assertions)]
+static NEXT_TAPE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(debug_assertions)]
+pub(crate) fn next_tape_id() -> u64 {
+    NEXT_TAPE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl<F: Float> BytecodeTape<F> {
@@ -148,6 +166,8 @@ impl<F: Float> BytecodeTape<F> {
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
             custom_second_args: HashMap::new(),
+            #[cfg(debug_assertions)]
+            tape_id: next_tape_id(),
         }
     }
 
@@ -164,6 +184,8 @@ impl<F: Float> BytecodeTape<F> {
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
             custom_second_args: HashMap::new(),
+            #[cfg(debug_assertions)]
+            tape_id: next_tape_id(),
         }
     }
 
@@ -205,10 +227,15 @@ impl<F: Float> BytecodeTape<F> {
     /// **Constant folding**: if all operands point to `Const` entries (not `Input`),
     /// the operation is replaced by a single `Const` with the already-computed value.
     ///
-    /// **Algebraic simplification**: identity patterns (`x + 0 → x`, `x * 1 → x`,
-    /// etc.) and absorbing patterns (`x * 0 → 0`, `x - x → 0`, `x / x → 1`) are
-    /// detected and short-circuited. Absorbing patterns are guarded by a value check
-    /// to handle NaN/Inf edge cases correctly.
+    /// **Algebraic simplification**: identity patterns that are exact under
+    /// IEEE 754 for *every* future re-evaluation point (`x * 1 → x`,
+    /// `x / 1 → x`, `x + (-0.0) → x`, `x - (+0.0) → x`) alias the live
+    /// operand. Patterns whose result depends on the re-evaluable operand's
+    /// future value (`x * 0`, `x - x`, `x / x`, `x + (+0.0)`) are **not**
+    /// folded: the tape's defining contract is re-evaluation at new inputs,
+    /// and freezing a recording-time result would silently mask
+    /// singularities (`x / x` replayed at `x = 0` is `NaN`, not `1`) or
+    /// flip signed zeros.
     #[inline]
     pub fn push_op(&mut self, op: OpCode, arg0: u32, arg1: u32, value: F) -> u32 {
         // Constant folding: if both args (when present) are Const, emit Const instead.
@@ -227,13 +254,6 @@ impl<F: Float> BytecodeTape<F> {
             }
         }
 
-        // Same-index simplification: x - x → 0, x / x → 1.
-        if arg0 == arg1 && arg1 != UNUSED {
-            if let Some(idx) = self.try_same_index_simplify(op, value) {
-                return idx;
-            }
-        }
-
         debug_assert!(
             self.num_variables < u32::MAX,
             "tape variable count overflow"
@@ -248,11 +268,22 @@ impl<F: Float> BytecodeTape<F> {
 
     /// Try to simplify a binary op where exactly one argument is a known constant.
     ///
-    /// Identity patterns (`x + 0`, `x * 1`, etc.) are always safe — they return
-    /// the original index whose value is correct. Absorbing patterns (`x * 0`)
-    /// use `push_const(value)` (not `push_const(F::zero())`) to preserve IEEE 754
-    /// signed zero semantics, and are guarded by `value == expected` to handle
-    /// NaN/Inf correctly (e.g., `NaN * 0 = NaN`, not `0`).
+    /// Only identities that hold bit-for-bit under IEEE 754 for **every**
+    /// value of the live operand are folded, because the surviving operand is
+    /// re-evaluable (a both-`Const` op is fully folded before this runs) and
+    /// the alias must stay correct at every future input:
+    ///
+    /// - `x * 1 → x` and `x / 1 → x` are exact for all `x` (±0, ±Inf, NaN).
+    /// - `x + c` is the identity only for `c = -0.0` (`x + (-0.0) = x` for
+    ///   all `x`, while `(-0.0) + (+0.0) = +0.0` flips the zero's sign).
+    /// - `x - c` is the identity only for `c = +0.0` (dually,
+    ///   `(-0.0) - (-0.0) = +0.0`).
+    ///
+    /// Absorbing/self patterns (`x * 0`, `x - x`, `x / x`) are deliberately
+    /// NOT folded: their record-time result does not determine the result at
+    /// other inputs (`x / x` at `x = 0` is `0/0 = NaN`; `x * 0` and `x - x`
+    /// at `x = ±Inf` are `NaN`), and freezing them would silently mask a
+    /// genuine singularity in both the replayed primal and its gradient.
     #[inline(never)]
     fn try_algebraic_simplify(
         &mut self,
@@ -261,21 +292,30 @@ impl<F: Float> BytecodeTape<F> {
         arg1: u32,
         arg0_const: bool,
         arg1_const: bool,
-        value: F,
+        _value: F,
     ) -> Option<u32> {
         let zero = F::zero();
         let one = F::one();
         match op {
             OpCode::Add => {
-                if arg1_const && self.values[arg1 as usize] == zero {
-                    return Some(arg0);
+                if arg1_const {
+                    let c = self.values[arg1 as usize];
+                    if c == zero && c.is_sign_negative() {
+                        return Some(arg0);
+                    }
                 }
-                if arg0_const && self.values[arg0 as usize] == zero {
-                    return Some(arg1);
+                if arg0_const {
+                    let c = self.values[arg0 as usize];
+                    if c == zero && c.is_sign_negative() {
+                        return Some(arg1);
+                    }
                 }
             }
-            OpCode::Sub if arg1_const && self.values[arg1 as usize] == zero => {
-                return Some(arg0);
+            OpCode::Sub if arg1_const => {
+                let c = self.values[arg1 as usize];
+                if c == zero && c.is_sign_positive() {
+                    return Some(arg0);
+                }
             }
             OpCode::Mul => {
                 // Identity: x * 1 → x, 1 * x → x
@@ -285,13 +325,6 @@ impl<F: Float> BytecodeTape<F> {
                 if arg0_const && self.values[arg0 as usize] == one {
                     return Some(arg1);
                 }
-                // Absorbing: x * 0 → const (guarded: NaN * 0 = NaN, not 0)
-                if arg1_const && self.values[arg1 as usize] == zero && value == zero {
-                    return Some(self.push_const(value));
-                }
-                if arg0_const && self.values[arg0 as usize] == zero && value == zero {
-                    return Some(self.push_const(value));
-                }
             }
             OpCode::Div if arg1_const && self.values[arg1 as usize] == one => {
                 return Some(arg0);
@@ -299,19 +332,6 @@ impl<F: Float> BytecodeTape<F> {
             _ => {}
         }
         None
-    }
-
-    /// Try to simplify a binary op where both arguments are the same index.
-    ///
-    /// `x - x → 0` is guarded (Inf - Inf = NaN, not 0).
-    /// `x / x → 1` is guarded (0/0 = NaN, not 1).
-    #[inline(never)]
-    fn try_same_index_simplify(&mut self, op: OpCode, value: F) -> Option<u32> {
-        match op {
-            OpCode::Sub if value == F::zero() => Some(self.push_const(value)),
-            OpCode::Div if value == F::one() => Some(self.push_const(value)),
-            _ => None,
-        }
     }
 
     /// Record a powi operation. The `i32` exponent is stored in `arg_indices[1]`.
@@ -698,6 +718,8 @@ mod validate_tests {
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
             custom_second_args: HashMap::new(),
+            #[cfg(debug_assertions)]
+            tape_id: next_tape_id(),
         }
     }
 

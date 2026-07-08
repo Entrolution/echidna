@@ -337,9 +337,10 @@ extern "C" __global__ void reverse_sweep(
             default: break;
         }
 
-        adjoints[a_base + ai] += da * adj;
+// Zero-multiplier convention (see kernels/mod.rs).
+        if (da != F(0)) adjoints[a_base + ai] += da * adj;
         if (bi != UNUSED && op != OP_POWI) {
-            adjoints[a_base + bi] += db * adj;
+            if (db != F(0)) adjoints[a_base + bi] += db * adj;
         }
     }
 
@@ -412,8 +413,8 @@ extern "C" __global__ void tangent_forward(
                 // Guard: at a=0, b/a and log(a) are -inf/inf; split dx/dy.
                 // At a<=0, log(a) is NaN; set dy=0 (matches CPU convention).
                 // b==0: base-direction derivative is 0 (avoids 0*Inf at a==0).
-                F dx = (b == F(0)) ? F(0) : ((a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at);
-                F dy = (r == F(0) || a <= F(0)) ? F(0) : r*log(a)*bt;
+                F dx = (b == F(0) || at == F(0)) ? F(0) : ((a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at);
+                F dy = (r == F(0) || a <= F(0) || bt == F(0)) ? F(0) : r*log(a)*bt;
                 rt = dx + dy; break;
             }
             case OP_ATAN2: {
@@ -491,6 +492,12 @@ extern "C" __global__ void tangent_forward(
             case OP_FRACT:  r=_fract(a); rt=at; break;
             default: break;
         }
+        // Structural-zero tangent convention — see the WGSL kernels: a zero
+        // tangent through ANY unary op stays exactly zero even where the
+        // derivative is unbounded, overflowed, or NaN (matches the CPU chain
+        // rule); POWF is guarded per-direction.
+        bool unary_singular = op >= OP_NEG && op <= OP_FRACT; // all unary ops
+        if (at == F(0) && unary_singular) { rt = F(0); }
         primals[base + i] = r;
         tangents[base + i] = rt;
     }
@@ -563,8 +570,8 @@ extern "C" __global__ void tangent_reverse(
                 F b=primals[base+bi]; F bt=tans[base+bi];
                 r=pow(a,b);
                 // b==0: base-direction derivative is 0 (avoids 0*Inf at a==0).
-                F dx = (b == F(0)) ? F(0) : ((a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at);
-                F dy = (r == F(0) || a <= F(0)) ? F(0) : r*log(a)*bt;
+                F dx = (b == F(0) || at == F(0)) ? F(0) : ((a == F(0)) ? b*pow(a, b-F(1))*at : b*r/a*at);
+                F dy = (r == F(0) || a <= F(0) || bt == F(0)) ? F(0) : r*log(a)*bt;
                 rt = dx + dy; break;
             }
             case OP_ATAN2: {
@@ -642,6 +649,12 @@ extern "C" __global__ void tangent_reverse(
             case OP_FRACT:  r=_fract(a); rt=at; break;
             default: break;
         }
+        // Structural-zero tangent convention — see the WGSL kernels: a zero
+        // tangent through ANY unary op stays exactly zero even where the
+        // derivative is unbounded, overflowed, or NaN (matches the CPU chain
+        // rule); POWF is guarded per-direction.
+        bool unary_singular = op >= OP_NEG && op <= OP_FRACT; // all unary ops
+        if (at == F(0) && unary_singular) { rt = F(0); }
         primals[base + i] = r;
         tans[base + i] = rt;
     }
@@ -713,10 +726,17 @@ extern "C" __global__ void tangent_reverse(
                     // degenerate; the mixed d²/dadb term carries log(0),
                     // non-finite on CPU and GPU alike, so it is not asserted.)
                     if (a <= F(0)) {
-                        F daa = (b == F(1)) ? F(0) : b*(b-F(1))*pow(a, b-F(2))*at;
-                        da_eps = bt*ab1 + daa;
+                        F daa = (b == F(1) || at == F(0)) ? F(0) : b*(b-F(1))*pow(a, b-F(2))*at;
+                        // Per-direction structural-zero guards — see the
+                        // WGSL kernel: ab1 can be non-finite at a singular
+                        // base, so each term is zeroed with its own direction.
+                        da_eps = ((bt == F(0)) ? F(0) : bt*ab1) + daa;
                     }
-                    else { da_eps = bt*ab1 + b*ab1*((b-F(1))/a*at + log(a)*bt); }
+                    else {
+                        da_eps = ((bt == F(0)) ? F(0) : bt*ab1)
+                            + ((at == F(0)) ? F(0) : b*ab1*((b-F(1))/a)*at)
+                            + ((bt == F(0)) ? F(0) : b*ab1*log(a)*bt);
+                    }
                 }
                 F rr = primals[base+i];
                 if (rr == F(0) || a <= F(0)) {
@@ -725,7 +745,9 @@ extern "C" __global__ void tangent_reverse(
                     F la = log(a);
                     F rt2 = tans[base+i];
                     db_re = rr * la;
-                    db_eps = rt2*la + rr*at/a;
+                    // rt2 is direction-consistent from phase 1; the at-term
+                    // needs its own guard (rr can be non-finite on overflow).
+                    db_eps = rt2*la + ((at == F(0)) ? F(0) : rr*at/a);
                 }
                 break;
             }
@@ -865,9 +887,19 @@ extern "C" __global__ void tangent_reverse(
             default: break;
         }
 
-        adj_re[base + ai] += da_re * ar;
-        adj_eps[base + ai] += da_re * ae + da_eps * ar;
-        if (bi != UNUSED && op != OP_POWI) {
+        // Structural-zero direction component — see tangent_reverse.wgsl:
+        // unary da_eps is f''(a)*at, so a zero direction keeps the
+        // second-order contribution exactly zero at singular primals.
+        bool unary_singular2 = op >= OP_NEG && op <= OP_FRACT; // all unary ops
+        if (at == F(0) && unary_singular2) { da_eps = F(0); }
+
+        // Zero-multiplier convention — pair guard mirroring the CPU
+        // is_all_zero(Dual) semantics; see the WGSL twin.
+        if (da_re != F(0) || da_eps != F(0)) {
+            adj_re[base + ai] += da_re * ar;
+            adj_eps[base + ai] += da_re * ae + da_eps * ar;
+        }
+        if (bi != UNUSED && op != OP_POWI && (db_re != F(0) || db_eps != F(0))) {
             adj_re[base + bi] += db_re * ar;
             adj_eps[base + bi] += db_re * ae + db_eps * ar;
         }

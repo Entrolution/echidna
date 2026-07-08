@@ -37,6 +37,13 @@ pub fn laplacian_gpu<B: GpuBackend>(
         )));
     }
     let n = x.len();
+    if n == 0 {
+        return Err(GpuError::Other(
+            "laplacian_gpu requires a non-empty x (a zero-input tape has no \
+             Laplacian); zero-sized GPU buffers would panic"
+                .into(),
+        ));
+    }
     let s = directions.len();
     if s == 0 {
         return Err(GpuError::Other("no directions provided".into()));
@@ -68,18 +75,33 @@ fn aggregate_laplacian(result: &TaylorBatchResult<f32>, s: usize) -> EstimatorRe
     let value = result.values[0]; // All batch elements share the same primal
     let mut mean = 0.0f32;
     let mut m2 = 0.0f32;
+    // Skip-and-count non-finite samples, matching the CPU estimators: a NaN
+    // or Inf sample (overflowed f32 jet) carries no usable magnitude and
+    // must not poison the running statistics.
+    let mut count = 0usize;
     for i in 0..s {
         let sample = 2.0 * result.c2s[i]; // v^T H v
-        let count = (i + 1) as f32;
+        if !sample.is_finite() {
+            continue;
+        }
+        count += 1;
         let delta = sample - mean;
-        mean += delta / count;
+        mean += delta / count as f32;
         let delta2 = sample - mean;
         m2 += delta * delta2;
     }
+    if count == 0 {
+        // No contributing samples: surface NaN, not a confident 0.
+        mean = f32::NAN;
+    }
 
-    let sample_variance = if s > 1 { m2 / (s - 1) as f32 } else { 0.0 };
-    let standard_error = if s > 1 {
-        (sample_variance / s as f32).sqrt()
+    let sample_variance = if count > 1 {
+        m2 / (count - 1) as f32
+    } else {
+        0.0
+    };
+    let standard_error = if count > 1 {
+        (sample_variance / count as f32).sqrt()
     } else {
         0.0
     };
@@ -89,7 +111,7 @@ fn aggregate_laplacian(result: &TaylorBatchResult<f32>, s: usize) -> EstimatorRe
         estimate: mean,
         sample_variance,
         standard_error,
-        num_samples: s,
+        num_samples: count,
     }
 }
 
@@ -113,6 +135,13 @@ pub fn hessian_diagonal_gpu<B: GpuBackend>(
         )));
     }
     let n = x.len();
+    if n == 0 {
+        return Err(GpuError::Other(
+            "hessian_diagonal_gpu requires a non-empty x (a zero-input tape \
+             has no Hessian diagonal); zero-sized GPU buffers would panic"
+                .into(),
+        ));
+    }
 
     // Build n basis directions
     let mut primals = Vec::with_capacity(n * n);
@@ -153,6 +182,13 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
         )));
     }
     let n = x.len();
+    if n == 0 {
+        return Err(GpuError::Other(
+            "laplacian_with_control_gpu requires a non-empty x; zero-sized \
+             GPU buffers would panic"
+                .into(),
+        ));
+    }
     let s = directions.len();
     assert_eq!(
         control_diagonal.len(),
@@ -184,6 +220,9 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
     let value = result.values[0];
     let mut mean = 0.0f32;
     let mut m2 = 0.0f32;
+    // Skip-and-count non-finite COMBINED samples (residual after the
+    // control variate), matching the CPU laplacian_with_control.
+    let mut count = 0usize;
     for (i, dir) in directions.iter().enumerate() {
         let vhv = 2.0 * result.c2s[i]; // v^T H v
                                        // v^T diag(H) v = Σ_j diag[j] * v[j]²
@@ -193,17 +232,27 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
             .map(|(&vj, &dj)| dj * vj * vj)
             .sum();
         let sample = vhv - v_diag_v; // residual (off-diagonal contribution)
-        let count = (i + 1) as f32;
+        if !sample.is_finite() {
+            continue;
+        }
+        count += 1;
         let delta = sample - mean;
-        mean += delta / count;
+        mean += delta / count as f32;
         let delta2 = sample - mean;
         m2 += delta * delta2;
     }
+    if count == 0 {
+        mean = f32::NAN;
+    }
 
     let estimate = trace_diag + mean;
-    let sample_variance = if s > 1 { m2 / (s - 1) as f32 } else { 0.0 };
-    let standard_error = if s > 1 {
-        (sample_variance / s as f32).sqrt()
+    let sample_variance = if count > 1 {
+        m2 / (count - 1) as f32
+    } else {
+        0.0
+    };
+    let standard_error = if count > 1 {
+        (sample_variance / count as f32).sqrt()
     } else {
         0.0
     };
@@ -213,7 +262,7 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: s,
+        num_samples: count,
     })
 }
 

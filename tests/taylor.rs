@@ -871,3 +871,103 @@ fn taylor_powi_positive_base_still_works() {
     // f'(0) = 10 * 2^9 = 5120
     assert_relative_eq!(result.coeffs[1], 5120.0, epsilon = 1e-6);
 }
+
+// ══════════════════════════════════════════════
+//  hypot of identically-zero operands
+// ══════════════════════════════════════════════
+
+/// hypot of two identically-zero series is the constant 0 — every Taylor
+/// coefficient must be zero, not the singular [0, Inf, …] jet (there is no
+/// branch point when the composite function is identically zero). All three
+/// series types must agree; `Laurent::hypot` pins the same convention in
+/// tests/laurent.rs.
+#[test]
+fn hypot_both_identically_zero_is_all_zero() {
+    use num_traits::Zero;
+    let a = Taylor::<f64, 5>::zero();
+    let b = Taylor::<f64, 5>::zero();
+    let r = a.hypot(b);
+    for k in 0..5 {
+        assert_eq!(
+            r.coeffs[k], 0.0,
+            "Taylor hypot(zero, zero) coeff({k}) must be 0, got {}",
+            r.coeffs[k]
+        );
+    }
+
+    let _guard = TaylorDynGuard::<f64>::new(5);
+    let da = TaylorDyn::<f64>::constant(0.0);
+    let db = TaylorDyn::<f64>::constant(0.0);
+    let dr = da.hypot(db);
+    let dc = dr.coeffs();
+    for k in 0..5 {
+        assert_eq!(
+            dc[k], 0.0,
+            "TaylorDyn hypot(zero, zero) coeff({k}) must be 0, got {}",
+            dc[k]
+        );
+    }
+}
+
+/// Zeros produced by cancellation (x − x) must behave identically to
+/// literal zeros through hypot.
+#[test]
+fn hypot_cancellation_zero_is_all_zero() {
+    let x = Taylor::<f64, 4>::variable(3.0);
+    let y = Taylor::<f64, 4>::variable(-1.5);
+    let r = (x - x).hypot(y - y);
+    for k in 0..4 {
+        assert_eq!(
+            r.coeffs[k], 0.0,
+            "hypot(x-x, y-y) coeff({k}) must be 0, got {}",
+            r.coeffs[k]
+        );
+    }
+}
+
+/// The peel-and-recurse branch is unaffected: a leading zero WITH
+/// higher-order signal still produces the true expansion.
+#[test]
+fn hypot_deeper_zero_with_signal_unchanged() {
+    // hypot(t², 0) = t²: coefficients [0, 0, 1, 0, 0].
+    let t = Taylor::<f64, 5>::variable(0.0);
+    let r = (t * t).hypot(Taylor::constant(0.0));
+    let expected = [0.0, 0.0, 1.0, 0.0, 0.0];
+    for k in 0..5 {
+        assert_eq!(
+            r.coeffs[k], expected[k],
+            "hypot(t², 0) coeff({k}): expected {}, got {}",
+            expected[k], r.coeffs[k]
+        );
+    }
+}
+
+/// A NaN leading coefficient must propagate through hypot even when the
+/// co-operand is identically zero: IEEE maxNum drops NaN (max(NaN, 0) == 0),
+/// so this input reaches the zero-scale branch, which must not swallow it.
+#[test]
+fn hypot_nan_leading_coefficient_propagates() {
+    let mut a = Taylor::<f64, 3>::constant(0.0);
+    a.coeffs[0] = f64::NAN;
+    let b = Taylor::<f64, 3>::constant(0.0);
+    let r = a.hypot(b);
+    for k in 0..3 {
+        assert!(
+            r.coeffs[k].is_nan(),
+            "hypot(NaN-jet, zero) coeff({k}) must be NaN, got {}",
+            r.coeffs[k]
+        );
+    }
+
+    // NaN alongside a higher-order signal (would otherwise be dropped by
+    // the peel-and-recurse shift).
+    let mut a2 = Taylor::<f64, 3>::constant(0.0);
+    a2.coeffs[0] = f64::NAN;
+    a2.coeffs[1] = 1.0;
+    let r2 = a2.hypot(b);
+    assert!(
+        r2.coeffs[0].is_nan(),
+        "hypot([NaN,1,0], zero) coeff(0) must be NaN, got {}",
+        r2.coeffs[0]
+    );
+}

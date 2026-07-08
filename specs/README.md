@@ -103,7 +103,7 @@ source files.
 
 | TLA+ Invariant | Anchor site | How the Rust code upholds it |
 |---------------|-------------|------------------------------|
-| `BudgetInvariant` | `src/checkpoint.rs` | `all_positions.truncate(num_checkpoints)` caps the stored set |
+| `BudgetInvariant` | `src/checkpoint.rs` | `spread_positions` returns at most `num_checkpoints` positions |
 | `PositionRangeInvariant` | `src/checkpoint.rs` | `next_step < num_steps` guard during forward pass |
 | `SortedCheckpoints` | `src/checkpoint.rs` | `revolve_schedule` sorts + dedups before returning |
 | `InitialStateStored` | `src/checkpoint.rs` | `checkpoints.push((0, x0.to_vec()))` is the first insert |

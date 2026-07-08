@@ -404,3 +404,27 @@ fn regression_25_fract_is_nonsmooth() {
         "OpCode::Fract should be nonsmooth"
     );
 }
+
+// ── NaN-operand branch labels ──
+
+#[test]
+fn max_min_with_nan_operand_record_first_wins_branch() {
+    // max(x, NaN): the value and partials paths take the first operand
+    // (first-wins), so the recorded kink label must be +1 — forced-sign
+    // sweeps attribute the gradient by this label, and a stale -1 label
+    // would send the gradient to the NaN operand.
+    let (mut tape, _) = record(|x| x[0].max(echidna::BReverse::constant(f64::NAN)), &[2.0]);
+    let info = tape.forward_nonsmooth(&[2.0]);
+    assert_eq!(info.kinks.len(), 1);
+    assert_eq!(info.kinks[0].branch, 1, "max(a, NaN) takes a");
+
+    // Sweeping along the recorded branch must reproduce the value path's
+    // attribution: ∂max/∂x = 1.
+    let idx = info.kinks[0].tape_index;
+    let jac = tape.jacobian_limiting(&[2.0], &[(idx, info.kinks[0].branch)]);
+    assert_eq!(jac[0][0], 1.0, "recorded-branch sweep must attribute to x");
+
+    let (mut tape2, _) = record(|x| x[0].min(echidna::BReverse::constant(f64::NAN)), &[2.0]);
+    let info2 = tape2.forward_nonsmooth(&[2.0]);
+    assert_eq!(info2.kinks[0].branch, 1, "min(a, NaN) takes a");
+}

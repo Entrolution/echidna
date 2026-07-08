@@ -498,3 +498,28 @@ mod gpu {
     );
     backend_tests!(check_powf_zero_hvp, wgpu_powf_zero_hvp, cuda_powf_zero_hvp);
 }
+
+// Signed zero at the ln boundary: the derivative kernel is 1/x and the sign
+// of the zero flows through the reciprocal unchanged (1/-0.0 = -Inf) on the
+// CPU paths; the GPU shaders share the same `1/a` formula, with the ±0 sign
+// following each backend's IEEE division (see the `ln_deriv` doc). Unlike
+// `abs_deriv`, ±0 is deliberately NOT collapsed — the primal ln(-0.0) = -Inf
+// already signals the degenerate limit, and special-casing -0 would have to
+// touch every backend for no informational gain. This pins the choice so it
+// can only be changed deliberately.
+#[test]
+fn ln_negative_zero_keeps_ieee_reciprocal_sign() {
+    let (_, t) = jvp(|x: &[Dual<f64>]| vec![x[0].ln()], &[-0.0], &[1.0]);
+    assert!(
+        t[0].is_infinite() && t[0] < 0.0,
+        "ln dual tangent at x=-0 must be -Inf, got {}",
+        t[0]
+    );
+
+    let g = grad(|x: &[Reverse<f64>]| x[0].ln(), &[-0.0]);
+    assert!(
+        g[0].is_infinite() && g[0] < 0.0,
+        "ln reverse grad at x=-0 must be -Inf, got {}",
+        g[0]
+    );
+}

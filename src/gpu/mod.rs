@@ -479,9 +479,27 @@ impl GpuTapeData {
     }
 }
 
+/// Reject batched-entry-point inputs that would reach zero-sized GPU
+/// buffer creation: wgpu panics on zero-size buffers and CUDA's
+/// `clone_htod(&[])` panics, so an empty batch or a zero-input (constant)
+/// tape must surface as a recoverable error instead — matching the guards
+/// the STDE helpers carry.
+pub(crate) fn validate_batch_args(num_inputs: u32, batch_size: u32) -> Result<(), GpuError> {
+    if batch_size == 0 {
+        return Err(GpuError::Other("batch_size must be non-zero".into()));
+    }
+    if num_inputs == 0 {
+        return Err(GpuError::Other(
+            "tape has no inputs (constant function); evaluate it on the CPU instead".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Metadata for the tape, uploaded as a uniform buffer to GPU shaders.
 ///
-/// Layout matches the WGSL `TapeMeta` struct (4 × u32 = 16 bytes).
+/// Layout matches the WGSL `TapeMeta` struct: 5 fields + 3 padding words =
+/// 8 × u32 = 32 bytes (mirrored in all four WGSL shaders — keep in sync).
 #[cfg(feature = "gpu-wgpu")]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]

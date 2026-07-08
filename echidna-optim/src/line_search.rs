@@ -58,6 +58,10 @@ pub struct LineSearchResult<F> {
 /// Returns `None` if `alpha` falls below `alpha_min` (line search failure),
 /// which includes the case where every trial point returned a non-finite
 /// objective value or gradient — treated as infeasible and backtracked past.
+///
+/// On failure the evaluations spent are discarded with the `None`; use
+/// [`backtracking_armijo_with_evals`] when the caller accounts for every
+/// objective evaluation (as the solvers do).
 pub fn backtracking_armijo<F: Float, O: Objective<F>>(
     obj: &mut O,
     x: &[F],
@@ -65,6 +69,27 @@ pub fn backtracking_armijo<F: Float, O: Objective<F>>(
     f_x: F,
     grad_x: &[F],
     params: &ArmijoParams<F>,
+) -> Option<LineSearchResult<F>> {
+    let mut discarded = 0;
+    backtracking_armijo_with_evals(obj, x, d, f_x, grad_x, params, &mut discarded)
+}
+
+/// [`backtracking_armijo`] with an evaluation accumulator.
+///
+/// Every objective evaluation is added to `*func_evals` as it happens, so
+/// the count survives the failure paths — a search that backtracks all the
+/// way to `alpha_min` and returns `None` has still spent its evaluations,
+/// and a solver reporting total work must include them. On success,
+/// [`LineSearchResult::evals`] still carries this search's own count (for
+/// backtrack diagnostics); it is already included in `*func_evals`.
+pub fn backtracking_armijo_with_evals<F: Float, O: Objective<F>>(
+    obj: &mut O,
+    x: &[F],
+    d: &[F],
+    f_x: F,
+    grad_x: &[F],
+    params: &ArmijoParams<F>,
+    func_evals: &mut usize,
 ) -> Option<LineSearchResult<F>> {
     let n = x.len();
 
@@ -100,6 +125,7 @@ pub fn backtracking_armijo<F: Float, O: Objective<F>>(
 
         let (f_new, g_new) = obj.eval_grad(&x_new);
         evals += 1;
+        *func_evals += 1;
 
         // Reject infeasible trial points: `-Inf <= anything` is trivially
         // true, so the Armijo check would accept a step off the domain and

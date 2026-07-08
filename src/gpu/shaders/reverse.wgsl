@@ -298,9 +298,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             default: {}
         }
 
-        // Accumulate
-        adjoints[a_base + a_idx] = adjoints[a_base + a_idx] + da * adj;
-        if b_idx != UNUSED && op != OP_POWI {
+        // Accumulate. Zero-multiplier convention (see kernels/mod.rs): an
+        // exactly-zero partial absorbs any adjoint — a chained singularity's
+        // Inf/NaN adjoint contributes 0 through a non-participating input.
+        if da != 0.0 {
+            adjoints[a_base + a_idx] = adjoints[a_base + a_idx] + da * adj;
+        }
+        if b_idx != UNUSED && op != OP_POWI && db != 0.0 {
             adjoints[a_base + b_idx] = adjoints[a_base + b_idx] + db * adj;
         }
     }

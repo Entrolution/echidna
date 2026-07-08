@@ -16,7 +16,8 @@ pub struct EstimatorResult<F> {
     pub sample_variance: F,
     /// Standard error of the mean: `sqrt(sample_variance / num_samples)`.
     pub standard_error: F,
-    /// Number of direction samples used.
+    /// Number of finite (contributing) direction samples; non-finite
+    /// samples are skipped and do not enter the estimate.
     pub num_samples: usize,
 }
 
@@ -34,7 +35,8 @@ pub struct DivergenceResult<F> {
     pub sample_variance: F,
     /// Standard error of the mean.
     pub standard_error: F,
-    /// Number of direction samples used.
+    /// Number of finite (contributing) direction samples; non-finite
+    /// samples are skipped and do not enter the estimate.
     pub num_samples: usize,
 }
 
@@ -43,6 +45,7 @@ pub(super) struct WelfordAccumulator<F> {
     mean: F,
     m2: F,
     count: usize,
+    skipped: usize,
 }
 
 impl<F: Float> WelfordAccumulator<F> {
@@ -51,18 +54,20 @@ impl<F: Float> WelfordAccumulator<F> {
             mean: F::zero(),
             m2: F::zero(),
             count: 0,
+            skipped: 0,
         }
     }
 
-    /// # Precondition
-    ///
-    /// `sample` must be finite. A NaN or Inf sample will poison the running
-    /// mean and variance, producing NaN for all subsequent updates.
+    /// Accumulate one sample. Non-finite samples are skipped and counted
+    /// (see [`skipped`](Self::skipped)) rather than poisoning the running
+    /// mean and variance: a NaN or Inf sample carries no usable magnitude
+    /// information, and estimators report how many samples actually
+    /// contributed via `num_samples`.
     pub(super) fn update(&mut self, sample: F) {
-        assert!(
-            sample.is_finite(),
-            "WelfordAccumulator::update: sample must be finite"
-        );
+        if !sample.is_finite() {
+            self.skipped += 1;
+            return;
+        }
         self.count += 1;
         let k1 = F::from(self.count).unwrap();
         let delta = sample - self.mean;
@@ -71,7 +76,21 @@ impl<F: Float> WelfordAccumulator<F> {
         self.m2 = self.m2 + delta * delta2;
     }
 
+    /// Number of samples that contributed to the running statistics
+    /// (excludes skipped non-finite samples).
+    pub(super) fn contributing(&self) -> usize {
+        self.count
+    }
+
+    /// Finalize into `(mean, sample_variance, standard_error)`.
+    ///
+    /// With zero contributing samples the estimator has no information and
+    /// the mean is NaN (not the accumulator's neutral 0.0, which would
+    /// read as a confident estimate of zero).
     pub(super) fn finalize(&self) -> (F, F, F) {
+        if self.count == 0 {
+            return (F::nan(), F::zero(), F::zero());
+        }
         let nf = F::from(self.count).unwrap();
         if self.count > 1 {
             let var = (self.m2 / (nf - F::one())).max(F::zero());

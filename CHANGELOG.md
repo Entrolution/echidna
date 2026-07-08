@@ -7,6 +7,221 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (echidna)
+
+- `BytecodeTape::forward_tangent_dual2`: a `Dual<Dual<F>>` forward sweep
+  that routes custom operations through `CustomOp::eval_dual` and
+  `CustomOp::partials_dual`, carrying exact first- and second-order
+  information through custom ops at the current evaluation point. The
+  existing `Dual<F>` counterpart `forward_tangent_dual` is now public as
+  well.
+
+### Added (echidna-optim)
+
+- `line_search::backtracking_armijo_with_evals`: `backtracking_armijo`
+  with an evaluation accumulator that survives the failure paths, so
+  callers accounting for total objective work can include the
+  evaluations a failed search spent. `backtracking_armijo` now delegates
+  to it and is unchanged.
+
+### Fixed (echidna-optim)
+
+- `implicit_hvp` and `implicit_hessian` now compute exact second-order
+  derivatives through residual tapes containing custom operations (for
+  ops that implement `eval_dual`/`partials_dual`). Previously the nested
+  pass linearized custom ops to first order around recording-time
+  primals, silently dropping their curvature — and, away from the
+  recording point, evaluating the linearization at stale primals. Ops
+  relying on the trait's default dual implementations still contribute
+  constant partials, but now at the current evaluation point.
+- `piggyback_tangent_step` (and everything built on it, including
+  `piggyback_tangent_solve`) now evaluates custom operations' primals and
+  tangents at the current step point via `CustomOp::eval_dual`.
+  Previously custom ops were linearized around recording-time primals,
+  so both the stepped state and its tangent acquired
+  O(distance-from-recording-point) errors on tapes containing custom
+  ops.
+- `lbfgs` and `newton` results terminating with `LineSearchFailed` now
+  include the failed line search's objective evaluations in
+  `func_evals`; previously those evaluations were silently dropped from
+  the reported count.
+
+### Changed (echidna, STDE)
+
+- STDE estimators no longer panic on a non-finite sample: samples whose
+  estimator value is NaN or Inf (singular jets, overflowed higher-order
+  coefficients) are skipped, `num_samples` now reports the finite
+  (contributing) sample count across every estimator entry point, and an
+  estimator left with zero contributing samples reports a NaN estimate
+  instead of a confident 0. Results for all-finite runs are unchanged.
+  `estimate_weighted` now panics on negative or NaN weights (West's
+  algorithm requires non-negative weights); zero-weight directions still
+  count as samples.
+- `diagonal_kth_order_const` now enforces the same `k ≤ 18` factorial
+  bound as the dynamic path (previously unguarded — `ORDER ≥ 20` silently
+  lost exactness), recovers the primal for zero-input (constant) tapes
+  like `hessian_diagonal` (previously returned 0), and its precision docs
+  match the actual guards (f32 bound is `ORDER ≤ 13`, not 14; the f64
+  factorial bound is 18, not 20).
+
+### Fixed (echidna)
+
+- The wgpu forward kernel's `signum` now tests NaN by bit inspection like
+  its sibling shaders; the bare self-inequality test could be folded away
+  under Metal fast-math, misclassifying NaN inputs. (CUDA is compiled
+  IEEE-strict and is unaffected.)
+- Reverse sweeps on every backend (bytecode, eager, tangent-carrying
+  second-order, wgpu, CUDA) now follow the zero-multiplier convention: an
+  exactly-zero partial absorbs any adjoint, so an Inf/NaN adjoint arriving
+  from a chained singularity (e.g. `sqrt'(0) = Inf`) no longer turns the
+  gradients of non-participating inputs into NaN — `hypot`/`atan2` at the
+  origin, kink losing branches, and multiplications by a zero operand all
+  contribute exactly 0. NaN partials from out-of-domain points are not
+  zero and still propagate. This completes the long-documented
+  zero-adjoint skip; the full structural-zero convention (forward and
+  reverse, all mechanisms) is now written down once in the kernels module
+  documentation.
+- `Max`/`Min` kink entries now record the first-wins branch label when
+  the second operand is NaN, matching the value and partials paths:
+  forced-sign Clarke sweeps attribute the gradient by this label, and the
+  stale label sent it to the NaN operand.
+- `mixed_partial` on a zero-input (constant) tape returns the constant in
+  both slots (∂⁰f = f) instead of panicking; the `DiffOp` convenience
+  constructors (`laplacian`, `biharmonic`, `diagonal`) now panic with a
+  clear message for `n == 0` (a zero-variable operator specification is
+  malformed, unlike a zero-input tape) instead of building a silently
+  invalid empty operator; and the factorial-extraction degradation beyond
+  `18!` (log-domain, `+Inf` saturation) is documented and pinned.
+- `taylor_powf` at a zero base now follows the branch-point convention of
+  `taylor_sqrt`/`taylor_cbrt` on every backend (CPU, wgpu, CUDA): with a
+  non-integer exponent `b0`, coefficients of order `k < b0` are exactly 0
+  and orders `k > b0` are `+Inf`; a negative exponent gives an `Inf`
+  primal. Previously the jet was a finite primal beside NaN derivative
+  coefficients. A live (non-constant) integer exponent at a zero base now
+  yields a consistent all-NaN jet.
+- `taylor_div`'s primal is now the correctly rounded `a₀ / b₀` (a single
+  division) instead of `a₀ · (1/b₀)`; higher coefficients keep the
+  reciprocal-multiply recurrence.
+- `Laurent::normalize` no longer rebases the pole order when every
+  surviving coefficient is subnormal: leading exact zeros in a globally
+  collapsed (flushed-to-zero) series are plausibly underflow artifacts,
+  and shifting would misattribute the pole order. Structural leading
+  zeros ahead of normally scaled coefficients rebase as before.
+- Laurent `Add`/`Sub` document their pole-order-gap panic (`# Panics`)
+  and why the gap is a loud structural failure where `Mul`/`Div` return a
+  NaN series.
+- `Reverse::hypot` at the origin no longer records a zero-partial tape
+  node: it returns a tape-free constant (mirroring `atan2`'s origin
+  short-circuit and forward mode's structural-zero convention), so a
+  non-finite adjoint arriving from downstream — e.g. through
+  `sqrt'(0) = Inf` — no longer turns both gradients into NaN.
+- The faer sparse wrappers (`sparsity_to_faer_symmetric`,
+  `solve_sparse_cholesky_faer`, `solve_sparse_lu_faer`) now return `None`
+  on a pattern/values length mismatch instead of panicking, matching
+  their `Option` contracts.
+
+- Nested second-order tangents (`Dual<Dual<F>>`, `DualVec<Dual<F>, N>`) are no
+  longer dropped by the zero-tangent guards in `recip` and the `powf`
+  constant-integer fast path. The guards now inspect the whole tangent rather
+  than only its primal component, so second derivatives such as
+  `d²/dx² 1/(x²+1)` at `x = 0` (previously `0`) are now correct (`-2`), and
+  `.recip()` agrees with the `1/g` spelling.
+- `powf` no longer produces a NaN derivative when the primal overflows under a
+  constant exponent (e.g. `x^2.5` at `x = 1e200` now yields the representable
+  `2.5e300`), and reverse mode now matches the other AD modes at an infinite
+  base (`Inf` derivative instead of NaN).
+
+- The generated GPU Taylor kernels (wgpu and CUDA) now match the CPU jets
+  in four cases that previously diverged silently: `fract` uses the
+  truncation convention (`fract(-2.3)` = `-0.3`, previously `+0.7`);
+  `hypot` with leading zeros at any depth expands correctly
+  (`hypot(t², 0)` = `t²`, previously an `[0, Inf, …]` jet) and a NaN
+  operand yields an all-NaN jet; `powi` with a zero base uses binary
+  exponentiation for every positive exponent (previously exponents above 8
+  produced NaN coefficients instead of zeros). The `1/k` recurrence
+  weights in generated kernels now carry full `f64` precision (previously
+  10 decimal digits, a ~1e-10 relative error on fourth-order CUDA `f64`
+  coefficients), and CUDA jet-buffer indexing is 64-bit clean for very
+  large tapes.
+- The wgpu Hessian-vector-product kernel now computes the `hypot` primal
+  with the overflow-safe rescaled form used by every other kernel
+  (previously `sqrt(a² + b²)`, which overflowed to `Inf` for operands
+  above ~1.8e19 and zeroed the resulting gradient), routes `max`/`min`
+  adjoints past NaN operands with the bit-pattern NaN test used elsewhere
+  (a bare `x != x` can be folded away under fast-math shader compilers),
+  and shares the division-tangent factoring of the other kernels. The
+  wgpu `%` operator's domain (exact only for quotient ratios below 2^24;
+  WGSL has no exact `fmod`) is now documented on the backend.
+
+- `grad_checkpointed`, `grad_checkpointed_disk`, and
+  `grad_checkpointed_with_hints` now place stored checkpoints evenly across
+  the trajectory. Previously the schedule positions were capped by keeping
+  the smallest step indices, which clustered every checkpoint at the start
+  and let the backward pass hold up to the entire trajectory's states in
+  memory at once when `num_checkpoints` was much smaller than `num_steps`.
+  Peak memory is now bounded by roughly `num_steps / num_checkpoints`
+  states per segment; gradient values are unchanged, and
+  `grad_checkpointed_online` was already well spaced.
+
+- Recording-time algebraic folds that froze a value the tape could not
+  reproduce at other inputs have been removed: `x * 0`, `x - x`, and
+  `x / x` now stay on the tape, so re-evaluating at a singular or
+  non-finite point yields the true IEEE result (`x / x` replayed at
+  `x = 0` is now NaN in both the value and the gradient instead of a
+  spurious finite `1`). Identity folds are now signed-zero-exact:
+  `x + (-0.0)` and `x - (+0.0)` alias the operand, while `x + (+0.0)`
+  and `x - (-0.0)` stay on the tape (they are not IEEE identities for a
+  `-0.0` operand). `x * 1`, `x / 1`, and the `powi` fast paths are
+  unchanged.
+- The GPU batched entry points (`forward_batch`, `gradient_batch`,
+  `hvp_batch`, `taylor_forward_kth_batch`, and `taylor_forward_2nd_batch`
+  on both wgpu and CUDA backends, including the CUDA `_f64` variants) and
+  the STDE helpers (`laplacian_gpu`,
+  `laplacian_with_control_gpu`, `hessian_diagonal_gpu`) now reject empty
+  batches and zero-input (constant-function) tapes with a recoverable
+  `GpuError` instead of panicking on zero-sized GPU buffer creation deep
+  inside the backend.
+- Debug builds now tag each `BReverse` with the identity of the tape that
+  recorded it and panic when a value crosses into a different recording
+  (capturing an outer variable inside a nested `record`, stashing values
+  across recordings, or moving them between recording threads) — misuse
+  that previously either panicked out-of-range or silently recorded a
+  dependency on an unrelated tape slot. Release builds are unchanged in
+  layout, behaviour, and cost; the invariant is now documented on
+  `record` and `BReverse`.
+- Dropping `BtapeGuard`s out of LIFO order now panics in every build
+  profile (previously a debug-only assertion): an out-of-order drop
+  installs a stale tape pointer that can dangle, so the violation is a
+  hard error rather than release-mode undefined behaviour.
+
+### Changed (echidna)
+
+- Division primals for `Dual`, `DualVec`, and `Reverse` are now the correctly
+  rounded IEEE quotient `a / b` (previously the double-rounded `a · (1/b)`,
+  up to 1 ULP off), matching plain `f64` arithmetic and the bytecode tape
+  bit-for-bit. Derivative terms still reuse the reciprocal; the eager
+  reverse-mode divisor partial now uses the same `-(a/b)/b` form as the
+  bytecode opcode. Division now performs two hardware divisions instead of
+  one division plus multiplies.
+- Forward-mode elementals routed through the chain rule (`sqrt`, `cbrt`,
+  `recip`, `powi`, `ln`, `log2`, `log10`, `ln_1p`, `asin`, `acos`, `acosh`,
+  `atanh`, and the `powf` direction terms) now short-circuit structurally-zero
+  tangents to exactly `0` at points where the derivative is unbounded or NaN:
+  a constant stays a constant (e.g. the tangent of `sqrt(x²+y²)` at the origin
+  is now `0`, matching `hypot`) instead of becoming NaN via IEEE `0 × Inf`.
+  Live tangents keep the non-finite derivative. The GPU forward-tangent and
+  Hessian-vector-product kernels (wgpu and CUDA) apply the same convention
+  to their tangent and second-order direction slots, so constant direction
+  components no longer produce NaN at singular primals on the GPU either.
+  The `-0.0` behaviour of the logarithm derivative family (`-Inf`, following
+  the IEEE reciprocal sign) is unchanged, now documented and pinned by tests.
+- `hypot` of two identically-zero Taylor / TaylorDyn jets now returns the
+  all-zero jet (the composite function is the constant 0) instead of the
+  singular `[0, Inf, …]` jet, matching the existing `Laurent::hypot`
+  behaviour so all three series types agree. Deeper zeros with a
+  higher-order signal (e.g. `hypot(t², 0)`) are unchanged. The GPU Taylor
+  kernels follow the same convention.
+
 ## [0.13.0] - 2026-07-06
 
 **Coordinated release:** `echidna` 0.13.0 and `echidna-optim` 0.13.3.

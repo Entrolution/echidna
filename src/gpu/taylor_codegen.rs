@@ -370,7 +370,7 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * c.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 
@@ -398,7 +398,7 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
                 }
                 writeln!(
                     s,
-                    "    c.v[{i}] = (a.v[{i}] - {inv_i:.10} * ({})) * inv_a0;",
+                    "    c.v[{i}] = (a.v[{i}] - {inv_i:.17} * ({})) * inv_a0;",
                     terms.join(" + ")
                 )
                 .unwrap();
@@ -461,10 +461,10 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
             sterms.push(format!("{:.1} * a.v[{j}] * co.v[{}]", j as f64, i - j));
             cterms.push(format!("{:.1} * a.v[{j}] * sn.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    sn.v[{i}] = {inv_i:.10} * ({});", sterms.join(" + ")).unwrap();
+        writeln!(s, "    sn.v[{i}] = {inv_i:.17} * ({});", sterms.join(" + ")).unwrap();
         writeln!(
             s,
-            "    co.v[{i}] = -{inv_i:.10} * ({});",
+            "    co.v[{i}] = -{inv_i:.17} * ({});",
             cterms.join(" + ")
         )
         .unwrap();
@@ -487,13 +487,13 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
         }
         writeln!(
             s,
-            "    sh.v[{i}] = {inv_i:.10} * ({});",
+            "    sh.v[{i}] = {inv_i:.17} * ({});",
             shterms.join(" + ")
         )
         .unwrap();
         writeln!(
             s,
-            "    ch.v[{i}] = {inv_i:.10} * ({});",
+            "    ch.v[{i}] = {inv_i:.17} * ({});",
             chterms.join(" + ")
         )
         .unwrap();
@@ -522,7 +522,7 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * sc.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
         // Now update sc[i] = Σ c[j]*c[i-j]
         let mut sc_terms = Vec::new();
         for j in 0..=i {
@@ -544,7 +544,7 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * sc.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
         let mut sc_terms = Vec::new();
         for j in 0..=i {
             sc_terms.push(format!("c.v[{j}] * c.v[{}]", i - j));
@@ -571,7 +571,7 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * g.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 
@@ -598,7 +598,7 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * g.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 
@@ -623,7 +623,7 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * g.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = -{inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = -{inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 
@@ -643,7 +643,7 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * g.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 
@@ -677,7 +677,7 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * g.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 
@@ -706,7 +706,7 @@ fn write_wgsl_jet_inverse_trig(s: &mut String, k: usize) {
         for j in 1..=i {
             terms.push(format!("{:.1} * a.v[{j}] * g.v[{}]", j as f64, i - j));
         }
-        writeln!(s, "    c.v[{i}] = {inv_i:.10} * ({});", terms.join(" + ")).unwrap();
+        writeln!(s, "    c.v[{i}] = {inv_i:.17} * ({});", terms.join(" + ")).unwrap();
     }
     writeln!(s, "    return c;\n}}\n").unwrap();
 }
@@ -721,25 +721,32 @@ fn write_wgsl_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
     writeln!(s, "                let ni = {ni_expr};").unwrap();
     writeln!(s, "                if n == 0.0 {{ r = jet_const(1.0); }}").unwrap();
     writeln!(s, "                else if n == 1.0 {{ r = a; }}").unwrap();
-    // a.v[0] == 0 with small |n|: repeated squaring preserves the higher-order
-    // Taylor coefficients (the log|a| = log(0) = -inf path below poisons them
-    // with NaN). Chain matches CPU `taylor_powi_squaring`.
+    // a.v[0] == 0 with positive n: binary exponentiation with jet_mul
+    // preserves the higher-order Taylor coefficients (the log|a| = log(0)
+    // = -inf path below poisons them with NaN) and yields the exact
+    // all-zero retained jet for n >= K (the result's valuation exceeds
+    // the truncation order). The loop mirrors CPU `taylor_powi_squaring`'s
+    // accumulator/base multiplication order so coefficients agree.
+    writeln!(s, "                else if a.v[0] == 0.0 && ni >= 2 {{").unwrap();
+    writeln!(s, "                    var acc = jet_const(1.0);").unwrap();
+    writeln!(s, "                    var base_j = a;").unwrap();
+    writeln!(s, "                    var e = u32(ni);").unwrap();
+    writeln!(s, "                    while e > 0u {{").unwrap();
     writeln!(
         s,
-        "                else if a.v[0] == 0.0 && ni == 2 {{ r = jet_mul(a, a); }}"
+        "                        if (e & 1u) == 1u {{ acc = jet_mul(acc, base_j); }}"
     )
     .unwrap();
+    writeln!(s, "                        e = e >> 1u;").unwrap();
     writeln!(
         s,
-        "                else if a.v[0] == 0.0 && ni == 3 {{ r = jet_mul(jet_mul(a, a), a); }}"
+        "                        if e > 0u {{ base_j = jet_mul(base_j, base_j); }}"
     )
     .unwrap();
-    writeln!(s, "                else if a.v[0] == 0.0 && ni == 4 {{ let a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}").unwrap();
-    writeln!(s, "                else if a.v[0] == 0.0 && ni == 5 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}").unwrap();
-    writeln!(s, "                else if a.v[0] == 0.0 && ni == 6 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}").unwrap();
-    writeln!(s, "                else if a.v[0] == 0.0 && ni == 7 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}").unwrap();
-    writeln!(s, "                else if a.v[0] == 0.0 && ni == 8 {{ let a2 = jet_mul(a, a); let a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}").unwrap();
-    // Negative base (a.v[0] < 0) or a.v[0] == 0 with |n| > 8: sign(a)^n * |a|^n.
+    writeln!(s, "                    }}").unwrap();
+    writeln!(s, "                    r = acc;").unwrap();
+    writeln!(s, "                }}").unwrap();
+    // Negative base (a.v[0] < 0) or a.v[0] == 0 with n < 0: sign(a)^n * |a|^n.
     writeln!(s, "                else if a.v[0] <= 0.0 {{").unwrap();
     writeln!(
         s,
@@ -891,30 +898,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .unwrap();
     }
     writeln!(s, "                }} else if a.v[0] <= 0.0 {{").unwrap();
-    writeln!(s, "                    let val = pow(a.v[0], b.v[0]);").unwrap();
+    // Zero base (a < 0 was handled above). Mirrors CPU `taylor_powf`: a
+    // LIVE integer exponent mixes finite and unbounded true coefficients →
+    // consistent all-NaN jet; a non-integer exponent is a branch point —
+    // the k-th derivative of x^b0 at 0 vanishes for k < b0 and is
+    // unbounded for k > b0 (the sqrt/cbrt [0, Inf, ...] convention).
+    // Range-guarded like the fast path: a constant integer exponent beyond
+    // i32 range must fall through to the branch-point rule, matching CPU
+    // to_i32()'s None.
     writeln!(
         s,
-        "                    let da = b.v[0] * pow(a.v[0], b.v[0] - 1.0);"
+        "                    if b.v[0] == round(b.v[0]) && abs(b.v[0]) < 2147483648.0 {{"
     )
     .unwrap();
-    // Reached only for a non-integer or variable exponent at a <= 0, where
-    // a^b is genuinely NaN (real result undefined) — the constant-integer
-    // case was routed to the powi jet above. db = 0 matches CPU OpCode::Powf.
-    writeln!(s, "                    let db = 0.0;").unwrap();
-    writeln!(s, "                    r.v[0] = val;").unwrap();
-    if k > 1 {
-        writeln!(s, "                    r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
-    }
-    for i in 2..k {
-        // CPU powf with negative base produces NaN through exp(b*ln(negative)).
-        // `0.0 / 0.0` is an abstract-typed NaN that naga rejects as not-
-        // expressible in f32; use the canonical quiet-NaN bit pattern instead.
+    for i in 0..k {
         writeln!(
             s,
-            "                    r.v[{i}] = bitcast<f32>(0x7fc00000u);"
+            "                        r.v[{i}] = bitcast<f32>(0x7fc00000u);"
         )
         .unwrap();
     }
+    writeln!(s, "                    }} else {{").unwrap();
+    writeln!(s, "                        r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(
+            s,
+            "                        r.v[{i}] = select(bitcast<f32>(0x7f800000u), 0.0, f32({i}) < b.v[0]);"
+        )
+        .unwrap();
+    }
+    writeln!(s, "                    }}").unwrap();
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
     writeln!(s, "                    let product = jet_mul(b, lna);").unwrap();
@@ -961,18 +974,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     //   CPU's rescale path produces `Inf * 0 = NaN` in every
     //   coefficient past the primal; GPU now synthesises NaN via
     //   `inf - inf` (runtime) to match.
-    // - `hypot(0, 0)` with `a.v[1] != 0 || b.v[1] != 0` —
-    //   one-level shift-and-square unroll: compute `hypot(a/t, b/t)`
-    //   via the rescale path on the shifted jet (at least one leading
-    //   is now non-zero by construction), then shift result right by
-    //   1 to represent the `|t|` factor in
-    //   `t ↦ |t|·hypot(a/t, b/t)`. CPU recursion is at most one
-    //   level deep since the entry check guarantees `scale > 0` in
-    //   the recursive call.
-    // - `hypot(0, 0)` with all higher-order seeds also zero —
-    //   0 primal + Inf higher. Matches CPU's `taylor_sqrt` at a
-    //   zero leading coefficient (produces Inf per
-    //   `taylor_ops.rs:146-152`), then primal override gives 0.
+    // - `hypot(0, 0)` with a first non-zero coefficient pair at order
+    //   d ≥ 1 — depth-d shift-and-square: compute `hypot(a/t^d, b/t^d)`
+    //   via the rescale path on the d-shifted jets (their leading pair
+    //   is non-zero by construction), then shift the result right by d
+    //   for the `t^d` factor. Equivalent to the CPU kernel's
+    //   one-order-at-a-time recursion, which peels until a non-zero
+    //   leading coefficient appears (depth up to K-1 — e.g.
+    //   `hypot(t², 0)` peels twice).
+    // - `hypot(0, 0)` with all coefficient pairs zero — the composite
+    //   function is the constant 0, so the whole jet is zero (matches
+    //   the CPU kernel's identically-zero arm and `Laurent::hypot`).
     writeln!(s, "            case 9u: {{").unwrap();
     writeln!(s, "                let b = jet_load(j_base + b_idx * K);").unwrap();
     writeln!(s, "                let aa = abs(a.v[0]);").unwrap();
@@ -1014,100 +1026,104 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     // causing a `hypot(NaN, 0)` input to fall into the `h == 0` branch
     // and return the zero jet — silently swallowing the NaN that IEEE
     // `hypot` requires propagating.
+    // Every coefficient is NaN, matching the CPU kernel's NaN guard
+    // (a NaN operand makes the whole jet NaN, not just the primal).
     writeln!(s, "                    r.v[0] = a.v[0] + b.v[0];").unwrap();
     for i in 1..k {
-        writeln!(s, "                    r.v[{i}] = 0.0;").unwrap();
+        writeln!(s, "                    r.v[{i}] = a.v[0] + b.v[0];").unwrap();
     }
     writeln!(s, "                }} else {{").unwrap();
     writeln!(s, "                    let h = max(aa, bb);").unwrap();
-    // Zero branch (shift-and-square unroll).
+    // Zero branch (depth-d shift-and-square).
     writeln!(s, "                    if (h == 0.0) {{").unwrap();
     if k >= 2 {
-        // Build shifted jets: a_shifted.v[i] = a.v[i+1] for i < K-1,
-        // a_shifted.v[K-1] = 0. Same for b. At least one of
-        // a.v[1], b.v[1] is non-zero if we take the rescale branch;
-        // else we emit 0 primal + Inf higher (matching CPU's
-        // `taylor_sqrt` at a zero leading).
-        writeln!(s, "                        var a_shifted: JetK;").unwrap();
-        writeln!(s, "                        var b_shifted: JetK;").unwrap();
-        for i in 0..(k - 1) {
+        // Depth-d chain: with d leading zero coefficient pairs and a signal
+        // at order d, the composite t ↦ hypot(a(t), b(t)) is t^d·hypot(α, β)
+        // where α, β are the jets shifted left by d (α(0), β(0) not both
+        // zero). Shifting by d, running the ordinary rescale path, and
+        // shifting the result right by d reproduces the CPU kernel's
+        // one-order-at-a-time recursion exactly — each CPU level drops one
+        // trailing coefficient; the d-shift drops d. The chain is emitted
+        // statically per candidate depth (K is a compile-time constant), so
+        // no dynamic jet indexing is needed.
+        for d in 1..k {
+            let open = if d == 1 {
+                "                        if ("
+            } else {
+                "                        } else if ("
+            };
+            writeln!(s, "{open}a.v[{d}] != 0.0 || b.v[{d}] != 0.0) {{").unwrap();
+            writeln!(s, "                            var a_shifted: JetK;").unwrap();
+            writeln!(s, "                            var b_shifted: JetK;").unwrap();
+            for i in 0..k {
+                if i + d < k {
+                    writeln!(
+                        s,
+                        "                            a_shifted.v[{i}] = a.v[{src}];",
+                        src = i + d
+                    )
+                    .unwrap();
+                    writeln!(
+                        s,
+                        "                            b_shifted.v[{i}] = b.v[{src}];",
+                        src = i + d
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(s, "                            a_shifted.v[{i}] = 0.0;").unwrap();
+                    writeln!(s, "                            b_shifted.v[{i}] = 0.0;").unwrap();
+                }
+            }
             writeln!(
                 s,
-                "                        a_shifted.v[{i}] = a.v[{ip1}];",
-                ip1 = i + 1
+                "                            let h_d = max(abs(a_shifted.v[0]), abs(b_shifted.v[0]));"
+            )
+            .unwrap();
+            writeln!(s, "                            let inv_h_d = 1.0 / h_d;").unwrap();
+            writeln!(
+                s,
+                "                            let a_ss = jet_scale(a_shifted, inv_h_d);"
             )
             .unwrap();
             writeln!(
                 s,
-                "                        b_shifted.v[{i}] = b.v[{ip1}];",
-                ip1 = i + 1
+                "                            let b_ss = jet_scale(b_shifted, inv_h_d);"
             )
             .unwrap();
+            writeln!(
+                s,
+                "                            let sum_sq_s = jet_add(jet_mul(a_ss, a_ss), jet_mul(b_ss, b_ss));"
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "                            let r_s_inner = jet_sqrt(sum_sq_s);"
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "                            let inner = jet_scale(r_s_inner, h_d);"
+            )
+            .unwrap();
+            for i in 0..k {
+                if i < d {
+                    writeln!(s, "                            r.v[{i}] = 0.0;").unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "                            r.v[{i}] = inner.v[{im}];",
+                        im = i - d
+                    )
+                    .unwrap();
+                }
+            }
         }
-        writeln!(
-            s,
-            "                        a_shifted.v[{last}] = 0.0;",
-            last = k - 1
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                        b_shifted.v[{last}] = 0.0;",
-            last = k - 1
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                        let h_inner = max(abs(a_shifted.v[0]), abs(b_shifted.v[0]));"
-        )
-        .unwrap();
-        writeln!(s, "                        if (h_inner == 0.0) {{").unwrap();
-        // Deeper-order-zero: 0 primal + Inf higher.
-        writeln!(s, "                            r.v[0] = 0.0;").unwrap();
-        for i in 1..k {
-            writeln!(s, "                            r.v[{i}] = inf;").unwrap();
-        }
+        // All coefficient pairs zero: hypot of two identically-zero series
+        // is the constant 0 — every coefficient is zero (no branch point;
+        // matches the CPU kernel and Laurent::hypot).
         writeln!(s, "                        }} else {{").unwrap();
-        // Rescale + sum-of-squares + sqrt on the shifted jet.
-        writeln!(
-            s,
-            "                            let inv_h_inner = 1.0 / h_inner;"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                            let a_ss = jet_scale(a_shifted, inv_h_inner);"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                            let b_ss = jet_scale(b_shifted, inv_h_inner);"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                            let sum_sq_s = jet_add(jet_mul(a_ss, a_ss), jet_mul(b_ss, b_ss));"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                            let r_s_inner = jet_sqrt(sum_sq_s);"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                            let inner = jet_scale(r_s_inner, h_inner);"
-        )
-        .unwrap();
-        // Shift result right by 1: r.v[0] = 0, r.v[i] = inner.v[i-1].
-        writeln!(s, "                            r.v[0] = 0.0;").unwrap();
-        for i in 1..k {
-            writeln!(
-                s,
-                "                            r.v[{i}] = inner.v[{im1}];",
-                im1 = i - 1
-            )
-            .unwrap();
+        for i in 0..k {
+            writeln!(s, "                            r.v[{i}] = 0.0;").unwrap();
         }
         writeln!(s, "                        }}").unwrap();
     } else {
@@ -1341,7 +1357,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "            }}").unwrap();
 
     writeln!(s, "            case 42u: {{").unwrap();
-    writeln!(s, "                r.v[0] = fract(a.v[0]);").unwrap();
+    // WGSL's `fract` builtin is floor-based (x - floor(x)); Rust's
+    // `f32::fract` is truncation-based (x - trunc(x)), and the two differ
+    // by exactly 1.0 for negative non-integer x (fract(-1.3): -0.3 vs
+    // +0.7). Emit the trunc form to match the CPU and the hand-written
+    // forward/tangent kernels.
+    writeln!(s, "                r.v[0] = a.v[0] - trunc(a.v[0]);").unwrap();
     for i in 1..k {
         writeln!(s, "                r.v[{i}] = a.v[{i}];").unwrap();
     }
@@ -1430,7 +1451,7 @@ fn write_cuda_helpers(s: &mut String) {
         s,
         "__device__ F _sign(F x) {{ return (x != x) ? x : copysign((F)1, x); }}
 __device__ F _cbrt_f(F x) {{ return (x >= (F)0) ? pow(x, (F)(1.0/3.0)) : -pow(-x, (F)(1.0/3.0)); }}
-__device__ F _fract(F x) {{ return x - floor(x); }}
+__device__ F _fract(F x) {{ return x - trunc(x); }} // Rust fract: toward-zero, not floor
 "
     )
     .unwrap();
@@ -1545,7 +1566,7 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
         }
         writeln!(
             s,
-            "    c.v[{i}] = (F){inv_i:.10} * ({});",
+            "    c.v[{i}] = (F){inv_i:.17} * ({});",
             terms.join(" + ")
         )
         .unwrap();
@@ -1573,7 +1594,7 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
                 }
                 writeln!(
                     s,
-                    "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.10} * ({})) * inv_a0;",
+                    "    c.v[{i}] = (a.v[{i}] - (F){inv_i:.17} * ({})) * inv_a0;",
                     terms.join(" + ")
                 )
                 .unwrap();
@@ -1632,13 +1653,13 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
         }
         writeln!(
             s,
-            "    sn.v[{i}] = (F){inv_i:.10} * ({});",
+            "    sn.v[{i}] = (F){inv_i:.17} * ({});",
             sterms.join(" + ")
         )
         .unwrap();
         writeln!(
             s,
-            "    co.v[{i}] = -(F){inv_i:.10} * ({});",
+            "    co.v[{i}] = -(F){inv_i:.17} * ({});",
             cterms.join(" + ")
         )
         .unwrap();
@@ -1661,13 +1682,13 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
         }
         writeln!(
             s,
-            "    sh.v[{i}] = (F){inv_i:.10} * ({});",
+            "    sh.v[{i}] = (F){inv_i:.17} * ({});",
             shterms.join(" + ")
         )
         .unwrap();
         writeln!(
             s,
-            "    ch.v[{i}] = (F){inv_i:.10} * ({});",
+            "    ch.v[{i}] = (F){inv_i:.17} * ({});",
             chterms.join(" + ")
         )
         .unwrap();
@@ -1688,7 +1709,7 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
         }
         writeln!(
             s,
-            "    c.v[{i}] = (F){inv_i:.10} * ({});",
+            "    c.v[{i}] = (F){inv_i:.17} * ({});",
             terms.join(" + ")
         )
         .unwrap();
@@ -1713,7 +1734,7 @@ fn write_cuda_jet_transcendental(s: &mut String, k: usize) {
         }
         writeln!(
             s,
-            "    c.v[{i}] = (F){inv_i:.10} * ({});",
+            "    c.v[{i}] = (F){inv_i:.17} * ({});",
             terms.join(" + ")
         )
         .unwrap();
@@ -1794,7 +1815,7 @@ fn write_cuda_jet_inverse_trig(s: &mut String, k: usize) {
             }
             writeln!(
                 s,
-                "    c.v[{i}] = {sign_str}(F){inv_i:.10} * ({});",
+                "    c.v[{i}] = {sign_str}(F){inv_i:.17} * ({});",
                 terms.join(" + ")
             )
             .unwrap();
@@ -1813,25 +1834,29 @@ fn write_cuda_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
     writeln!(s, "            F n = {n_expr};").unwrap();
     writeln!(s, "            if (ni == 0) {{ r = jet_const((F)1); }}").unwrap();
     writeln!(s, "            else if (ni == 1) {{ r = a; }}").unwrap();
-    // a.v[0] == 0 with small |n|: repeated squaring preserves higher-order
-    // coefficients (the log|a| = log(0) = -inf path poisons them). Matches CPU
-    // `taylor_powi_squaring`.
+    // a.v[0] == 0 with positive n: binary exponentiation with jet_mul —
+    // see the WGSL emitter; mirrors CPU `taylor_powi_squaring` exactly and
+    // yields the all-zero retained jet for n >= K.
+    writeln!(s, "            else if (a.v[0] == F(0) && ni >= 2) {{").unwrap();
+    writeln!(s, "                JetK acc = jet_const((F)1);").unwrap();
+    writeln!(s, "                JetK base_j = a;").unwrap();
+    writeln!(s, "                unsigned int e = (unsigned int)ni;").unwrap();
+    writeln!(s, "                while (e > 0u) {{").unwrap();
     writeln!(
         s,
-        "            else if (a.v[0] == F(0) && ni == 2) {{ r = jet_mul(a, a); }}"
+        "                    if (e & 1u) {{ acc = jet_mul(acc, base_j); }}"
     )
     .unwrap();
+    writeln!(s, "                    e >>= 1;").unwrap();
     writeln!(
         s,
-        "            else if (a.v[0] == F(0) && ni == 3) {{ r = jet_mul(jet_mul(a, a), a); }}"
+        "                    if (e > 0u) {{ base_j = jet_mul(base_j, base_j); }}"
     )
     .unwrap();
-    writeln!(s, "            else if (a.v[0] == F(0) && ni == 4) {{ JetK a2 = jet_mul(a, a); r = jet_mul(a2, a2); }}").unwrap();
-    writeln!(s, "            else if (a.v[0] == F(0) && ni == 5) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a); }}").unwrap();
-    writeln!(s, "            else if (a.v[0] == F(0) && ni == 6) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a2); }}").unwrap();
-    writeln!(s, "            else if (a.v[0] == F(0) && ni == 7) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(jet_mul(a4, a2), a); }}").unwrap();
-    writeln!(s, "            else if (a.v[0] == F(0) && ni == 8) {{ JetK a2 = jet_mul(a, a); JetK a4 = jet_mul(a2, a2); r = jet_mul(a4, a4); }}").unwrap();
-    // Negative base (or a==0 with |n|>8): sign(a)^n * |a|^n. C `pow` handles a
+    writeln!(s, "                }}").unwrap();
+    writeln!(s, "                r = acc;").unwrap();
+    writeln!(s, "            }}").unwrap();
+    // Negative base (or a==0 with n<0): sign(a)^n * |a|^n. C `pow` handles a
     // negative base at an integer exponent (Annex F), so r.v[0] stays native.
     writeln!(s, "            else if (a.v[0] <= F(0)) {{").unwrap();
     writeln!(s, "                F sf = (ni % 2 == 0) ? F(1) : F(-1);").unwrap();
@@ -1889,7 +1914,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
 
     // Initialize
     writeln!(s, "    for (unsigned int i = 0; i < num_variables; i++) {{").unwrap();
-    writeln!(s, "        unsigned long long off = j_base + i * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long off = j_base + (unsigned long long)i * K;"
+    )
+    .unwrap();
     writeln!(s, "        jets[off] = constants[i];").unwrap();
     for c in 1..k {
         writeln!(s, "        jets[off + {c}] = (F)0;").unwrap();
@@ -1903,7 +1932,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     )
     .unwrap();
     writeln!(s, "    for (unsigned int i = 0; i < num_inputs; i++) {{").unwrap();
-    writeln!(s, "        unsigned long long off = j_base + i * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long off = j_base + (unsigned long long)i * K;"
+    )
+    .unwrap();
     writeln!(s, "        jets[off] = primal_inputs[in_base + i];").unwrap();
     if k > 1 {
         writeln!(s, "        jets[off + 1] = direction_seeds[in_base + i];").unwrap();
@@ -2011,25 +2044,29 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
     }
     writeln!(s, "            }} else if (a.v[0] <= F(0)) {{").unwrap();
-    writeln!(s, "                F val = pow(a.v[0], b.v[0]);").unwrap();
+    // Zero base (a < 0 was handled above) — see the WGSL twin: live integer
+    // exponent → all-NaN jet; non-integer exponent → the branch-point
+    // [0, ..., 0, Inf, ...] convention with the finite/unbounded split at
+    // k = b0.
+    // Range-guarded like the fast path — see the WGSL twin.
     writeln!(
         s,
-        "                F da = b.v[0] * pow(a.v[0], b.v[0] - F(1));"
+        "                if (b.v[0] == round(b.v[0]) && fabs(b.v[0]) < F(2147483648.0)) {{"
     )
     .unwrap();
-    // Reached only for a non-integer or variable exponent at a <= 0, where
-    // a^b is genuinely NaN — the constant-integer case is routed to the powi
-    // jet above. db = 0 matches CPU OpCode::Powf.
-    writeln!(s, "                F db = F(0);").unwrap();
-    writeln!(s, "                r.v[0] = val;").unwrap();
-    if k > 1 {
-        writeln!(s, "                r.v[1] = da * a.v[1] + db * b.v[1];").unwrap();
+    for i in 0..k {
+        writeln!(s, "                    r.v[{i}] = F(0.0/0.0);").unwrap();
     }
-    for i in 2..k {
-        // CPU powf with negative base produces NaN through exp(b*ln(negative)).
-        // Use explicit NaN to match CPU behavior regardless of whether val is finite.
-        writeln!(s, "                r.v[{i}] = F(0.0/0.0);").unwrap();
+    writeln!(s, "                }} else {{").unwrap();
+    writeln!(s, "                    r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    for i in 1..k {
+        writeln!(
+            s,
+            "                    r.v[{i}] = (F({i}) < b.v[0]) ? F(0) : F(1.0/0.0);"
+        )
+        .unwrap();
     }
+    writeln!(s, "                }}").unwrap();
     writeln!(s, "            }} else {{").unwrap();
     writeln!(s, "                JetK lna = jet_ln(a);").unwrap();
     writeln!(s, "                JetK product = jet_mul(b, lna);").unwrap();
@@ -2122,93 +2159,95 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     // — swallowing the NaN that IEEE `hypot` requires propagating.
     // `a.v[0] + b.v[0]` is the simplest NaN-propagator (NaN + anything
     // = NaN; both NaN: still NaN).
+    // Every coefficient is NaN, matching the CPU kernel's NaN guard.
     writeln!(s, "                r.v[0] = a.v[0] + b.v[0];").unwrap();
     for i in 1..k {
-        writeln!(s, "                r.v[{i}] = (F)0;").unwrap();
+        writeln!(s, "                r.v[{i}] = a.v[0] + b.v[0];").unwrap();
     }
     writeln!(s, "            }} else {{").unwrap();
     writeln!(s, "                F h = fmax(aa, bb);").unwrap();
-    // Zero branch (shift-and-square unroll).
+    // Zero branch (depth-d shift-and-square).
     writeln!(s, "                if (h == (F)0) {{").unwrap();
     if k >= 2 {
-        writeln!(s, "                    JetK a_shifted;").unwrap();
-        writeln!(s, "                    JetK b_shifted;").unwrap();
-        for i in 0..(k - 1) {
+        // Depth-d chain — see the WGSL emitter for the derivation. Emitted
+        // statically per candidate depth; the terminal arm (all coefficient
+        // pairs zero) is the constant-zero jet, matching the CPU kernel and
+        // Laurent::hypot.
+        for d in 1..k {
+            let open = if d == 1 {
+                "                    if ("
+            } else {
+                "                    } else if ("
+            };
+            writeln!(s, "{open}a.v[{d}] != (F)0 || b.v[{d}] != (F)0) {{").unwrap();
+            writeln!(s, "                        JetK a_shifted;").unwrap();
+            writeln!(s, "                        JetK b_shifted;").unwrap();
+            for i in 0..k {
+                if i + d < k {
+                    writeln!(
+                        s,
+                        "                        a_shifted.v[{i}] = a.v[{src}];",
+                        src = i + d
+                    )
+                    .unwrap();
+                    writeln!(
+                        s,
+                        "                        b_shifted.v[{i}] = b.v[{src}];",
+                        src = i + d
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(s, "                        a_shifted.v[{i}] = (F)0;").unwrap();
+                    writeln!(s, "                        b_shifted.v[{i}] = (F)0;").unwrap();
+                }
+            }
             writeln!(
                 s,
-                "                    a_shifted.v[{i}] = a.v[{ip1}];",
-                ip1 = i + 1
+                "                        F h_d = fmax(fabs(a_shifted.v[0]), fabs(b_shifted.v[0]));"
+            )
+            .unwrap();
+            writeln!(s, "                        F inv_h_d = (F)1 / h_d;").unwrap();
+            writeln!(
+                s,
+                "                        JetK a_ss = jet_scale(a_shifted, inv_h_d);"
             )
             .unwrap();
             writeln!(
                 s,
-                "                    b_shifted.v[{i}] = b.v[{ip1}];",
-                ip1 = i + 1
+                "                        JetK b_ss = jet_scale(b_shifted, inv_h_d);"
             )
             .unwrap();
-        }
-        writeln!(
-            s,
-            "                    a_shifted.v[{last}] = (F)0;",
-            last = k - 1
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                    b_shifted.v[{last}] = (F)0;",
-            last = k - 1
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                    F h_inner = fmax(fabs(a_shifted.v[0]), fabs(b_shifted.v[0]));"
-        )
-        .unwrap();
-        writeln!(s, "                    if (h_inner == (F)0) {{").unwrap();
-        // Deeper-order-zero: 0 primal + Inf higher. +Inf via (F)1/(F)0
-        // — NVRTC default rounding produces +Inf, not NaN. Using a
-        // runtime divide rather than a bitcast keeps us portable
-        // across NVRTC flag configurations.
-        writeln!(s, "                        F pos_inf = (F)1 / (F)0;").unwrap();
-        writeln!(s, "                        r.v[0] = (F)0;").unwrap();
-        for i in 1..k {
-            writeln!(s, "                        r.v[{i}] = pos_inf;").unwrap();
+            writeln!(
+                s,
+                "                        JetK sum_sq_s = jet_add(jet_mul(a_ss, a_ss), jet_mul(b_ss, b_ss));"
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "                        JetK r_s_inner = jet_sqrt(sum_sq_s);"
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "                        JetK inner = jet_scale(r_s_inner, h_d);"
+            )
+            .unwrap();
+            for i in 0..k {
+                if i < d {
+                    writeln!(s, "                        r.v[{i}] = (F)0;").unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "                        r.v[{i}] = inner.v[{im}];",
+                        im = i - d
+                    )
+                    .unwrap();
+                }
+            }
         }
         writeln!(s, "                    }} else {{").unwrap();
-        writeln!(s, "                        F inv_h_inner = (F)1 / h_inner;").unwrap();
-        writeln!(
-            s,
-            "                        JetK a_ss = jet_scale(a_shifted, inv_h_inner);"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                        JetK b_ss = jet_scale(b_shifted, inv_h_inner);"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                        JetK sum_sq_s = jet_add(jet_mul(a_ss, a_ss), jet_mul(b_ss, b_ss));"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                        JetK r_s_inner = jet_sqrt(sum_sq_s);"
-        )
-        .unwrap();
-        writeln!(
-            s,
-            "                        JetK inner = jet_scale(r_s_inner, h_inner);"
-        )
-        .unwrap();
-        writeln!(s, "                        r.v[0] = (F)0;").unwrap();
-        for i in 1..k {
-            writeln!(
-                s,
-                "                        r.v[{i}] = inner.v[{im1}];",
-                im1 = i - 1
-            )
-            .unwrap();
+        for i in 0..k {
+            writeln!(s, "                        r.v[{i}] = (F)0;").unwrap();
         }
         writeln!(s, "                    }}").unwrap();
     } else {
@@ -2411,7 +2450,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     writeln!(s, "        }}").unwrap();
 
     // Store result
-    writeln!(s, "        unsigned long long r_off = j_base + i * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long r_off = j_base + (unsigned long long)i * K;"
+    )
+    .unwrap();
     for c in 0..k {
         writeln!(s, "        jets[r_off + {c}] = r.v[{c}];").unwrap();
     }
@@ -2430,7 +2473,11 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
         "        unsigned long long src = j_base + (unsigned long long)oi * K;"
     )
     .unwrap();
-    writeln!(s, "        unsigned long long dst = out_base + j * K;").unwrap();
+    writeln!(
+        s,
+        "        unsigned long long dst = out_base + (unsigned long long)j * K;"
+    )
+    .unwrap();
     for c in 0..k {
         writeln!(s, "        jet_outputs[dst + {c}] = jets[src + {c}];").unwrap();
     }

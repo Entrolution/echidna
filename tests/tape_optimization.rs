@@ -365,7 +365,8 @@ fn optimize_preserves_multi_output_correctness() {
 
 #[test]
 fn algebraic_add_zero() {
-    // x + 0.0 and 0.0 + x should simplify to x.
+    // x + 0.0 is NOT folded (adding +0.0 flips a -0.0 operand), but the
+    // recorded ops must still evaluate correctly at any input.
     let (mut tape, val) = record(
         |x| {
             let a = x[0] + 0.0_f64;
@@ -421,7 +422,8 @@ fn algebraic_div_one() {
 
 #[test]
 fn algebraic_mul_zero() {
-    // x * 0.0 and 0.0 * x should fold to const zero, gradient is zero.
+    // x * 0.0 stays on tape (folding would freeze the record-time result
+    // and mask Inf*0=NaN on re-evaluation); value and gradient are still 0.
     let (mut tape, val) = record(
         |x| {
             let a = x[0] * 0.0_f64;
@@ -437,7 +439,8 @@ fn algebraic_mul_zero() {
 
 #[test]
 fn algebraic_sub_self() {
-    // x - x should fold to const zero.
+    // x - x stays on tape (Inf - Inf = NaN on re-evaluation); value and
+    // gradient are still 0 at finite inputs.
     let (mut tape, val) = record(|x| x[0] - x[0], &[5.0_f64]);
     assert_relative_eq!(val, 0.0, max_relative = 1e-12);
     let g = tape.gradient(&[5.0]);
@@ -446,7 +449,8 @@ fn algebraic_sub_self() {
 
 #[test]
 fn algebraic_div_self() {
-    // x / x should fold to const one.
+    // x / x stays on tape (0/0 = NaN on re-evaluation); value 1 and
+    // gradient 0 at regular inputs.
     let (mut tape, val) = record(|x| x[0] / x[0], &[3.0_f64]);
     assert_relative_eq!(val, 1.0, max_relative = 1e-12);
     let g = tape.gradient(&[3.0]);
@@ -551,15 +555,15 @@ fn algebraic_zero_div_self_guard() {
 
 #[test]
 fn algebraic_tape_size_reduction() {
-    // x + 0 + 0 + 0 should produce a smaller tape than without simplification.
-    let (tape, val) = record(|x| x[0] + 0.0_f64 + 0.0_f64 + 0.0_f64, &[5.0_f64]);
+    // Identities that are exact under IEEE for every input (x * 1) fold and
+    // shrink the tape. (Additive +0.0 chains no longer fold — adding +0.0
+    // is not the identity for a -0.0 operand — so multiplicative identities
+    // are the representative case here.)
+    let (tape, val) = record(|x| x[0] * 1.0_f64 * 1.0_f64 * 1.0_f64, &[5.0_f64]);
     assert_relative_eq!(val, 5.0, max_relative = 1e-12);
 
-    // Without algebraic simplification, we'd have 1 Input + 3 Const(0) + 3 Add = 7 ops.
-    // With simplification, the Adds are eliminated, leaving 1 Input + some orphaned Consts.
-    // The key point: no Add ops should remain.
-    // After DCE, orphaned consts would also be removed.
-    // We just check that the tape is smaller than 7 ops.
+    // Without simplification: 1 Input + 3 Const(1) + 3 Mul = 7 ops. With it,
+    // the Muls alias the input, leaving Input + orphaned Consts (< 7 ops).
     assert!(
         tape.num_ops() < 7,
         "algebraic simplification should reduce tape: got {} ops",
@@ -578,6 +582,68 @@ fn algebraic_reeval_after_simplify() {
 
     let g = tape.gradient(&[5.0]);
     assert_relative_eq!(g[0], 1.0, max_relative = 1e-12);
+}
+
+// ── Re-evaluation at singular points (folds must not mask these) ──
+
+#[test]
+fn div_self_reevaluated_at_zero_is_nan() {
+    // Record x / x at a regular point, replay at the singularity: the tape
+    // must reproduce 0/0 = NaN in both the primal and the gradient — a
+    // frozen Const(1) would report a spurious regular point to a solver.
+    let (mut tape, val) = record(|x| x[0] / x[0], &[2.0_f64]);
+    assert_relative_eq!(val, 1.0, max_relative = 1e-12);
+
+    tape.forward(&[0.0]);
+    assert!(
+        tape.output_value().is_nan(),
+        "x/x replayed at 0 must be NaN, got {}",
+        tape.output_value()
+    );
+    let g = tape.gradient(&[0.0]);
+    assert!(g[0].is_nan(), "gradient at the singularity must be NaN");
+}
+
+#[test]
+fn mul_zero_and_sub_self_reevaluated_at_inf_are_nan() {
+    let (mut tape, _) = record(|x| x[0] * 0.0_f64, &[3.0_f64]);
+    tape.forward(&[f64::INFINITY]);
+    assert!(
+        tape.output_value().is_nan(),
+        "Inf * 0 must be NaN on replay, got {}",
+        tape.output_value()
+    );
+
+    let (mut tape2, _) = record(|x| x[0] - x[0], &[3.0_f64]);
+    tape2.forward(&[f64::INFINITY]);
+    assert!(
+        tape2.output_value().is_nan(),
+        "Inf - Inf must be NaN on replay, got {}",
+        tape2.output_value()
+    );
+}
+
+#[test]
+fn add_zero_reevaluated_at_negative_zero_keeps_ieee_sign() {
+    // x + (+0.0) is not the IEEE identity: (-0.0) + (+0.0) = +0.0. The op
+    // must stay on tape so replay at -0.0 produces +0.0 (sign observable
+    // through 1/x).
+    let (mut tape, _) = record(|x| x[0] + 0.0_f64, &[3.0_f64]);
+    tape.forward(&[-0.0]);
+    let out = tape.output_value();
+    assert_eq!(out, 0.0);
+    assert!(
+        !out.is_sign_negative(),
+        "(-0.0) + (+0.0) must be +0.0 on replay, got {out:?}"
+    );
+
+    // x + (-0.0) IS the identity for every x and may alias the operand.
+    let (mut tape2, _) = record(|x| x[0] + (-0.0_f64), &[3.0_f64]);
+    tape2.forward(&[-0.0]);
+    assert!(
+        tape2.output_value().is_sign_negative(),
+        "x + (-0.0) must preserve -0.0"
+    );
 }
 
 // ── Composition with existing passes ──

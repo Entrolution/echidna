@@ -157,7 +157,11 @@ fn hypot_f32(a: f32, b: f32) -> f32 {
 }
 
 fn rem_f32(a: f32, b: f32) -> f32 {
-    // Rust's % is remainder (truncated), matching: a - trunc(a/b) * b
+    // Rust's % is remainder (truncated), matching: a - trunc(a/b) * b.
+    // WGSL has no exact fmod, so this is exact only while the quotient is
+    // exactly representable: |a/b| < 2^24 (f32 mantissa). Beyond that,
+    // trunc cannot recover the integer quotient and the result diverges
+    // from CPU/CUDA fmod (e.g. rem(1e8, 3) -> 0 instead of 1).
     return a - trunc(a / b) * b;
 }
 
@@ -170,11 +174,12 @@ fn log10_f32(x: f32) -> f32 {
 }
 
 fn signum_f32(x: f32) -> f32 {
-    // Match Rust's f32::signum: returns ±1 for all finite values (including ±0),
-    // NaN for NaN. Use bitcast to check sign bit for -0.0 handling.
-    if x != x { return x; }  // NaN passthrough
-    if (bitcast<u32>(x) & 0x80000000u) != 0u { return -1.0; }
-    return 1.0;
+    // Rust f32::signum: -1 for -0.0 (sign bit), +1 for +0.0/positive, NaN at NaN.
+    // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit. Bitcast NaN test
+    // since `x != x` is unreliable under Metal fast-math.
+    let b = bitcast<u32>(x);
+    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
 }
 
 fn is_nan_f32(x: f32) -> bool {

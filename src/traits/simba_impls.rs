@@ -1,6 +1,16 @@
 //! simba trait implementations for `Dual<F>`, `DualVec<F, N>` and `Reverse<F>`.
 //!
 //! Enables AD types inside nalgebra matrices and solvers.
+//!
+//! # Active-tape requirement for `Reverse<F>`
+//!
+//! `Reverse` arithmetic records to a thread-local tape, so any nalgebra or
+//! simba operation on `Reverse` values (matrix products, decompositions,
+//! solver steps) must run inside an active recording — e.g. within the
+//! closure passed to [`grad`](crate::grad) or another recording API.
+//! Outside a recording, the first arithmetic operation panics with
+//! "No active tape. Use echidna::grad() or similar API." `Dual` and
+//! `DualVec` are tape-free and have no such requirement.
 
 use approx::{AbsDiffEq, RelativeEq, UlpsEq};
 use num_traits::{Float as NumFloat, FloatConst, Zero};
@@ -773,6 +783,11 @@ macro_rules! impl_real_field_dual {
                 self.re.is_sign_negative()
             }
             #[inline]
+            // copysign = magnitude of self, sign of `sign`, composed as
+            // abs(self)·signum(sign) so the derivative follows the same
+            // composition (not a bit-level sign copy). For a NaN `sign` the
+            // result is NaN (signum(NaN) = NaN), unlike f64::copysign which
+            // reads NaN's sign bit.
             fn copysign(self, sign: Self) -> Self {
                 Dual::abs(self) * Dual::signum(sign)
             }
@@ -1101,6 +1116,11 @@ macro_rules! impl_real_field_dual_vec {
                 self.re.is_sign_negative()
             }
             #[inline]
+            // copysign = magnitude of self, sign of `sign`, composed as
+            // abs(self)·signum(sign) so the derivative follows the same
+            // composition (not a bit-level sign copy). For a NaN `sign` the
+            // result is NaN (signum(NaN) = NaN), unlike f64::copysign which
+            // reads NaN's sign bit.
             fn copysign(self, sign: Self) -> Self {
                 DualVec::abs(self) * DualVec::signum(sign)
             }
@@ -1425,6 +1445,11 @@ macro_rules! impl_real_field_reverse {
                 self.value.is_sign_negative()
             }
             #[inline]
+            // copysign = magnitude of self, sign of `sign`, composed as
+            // abs(self)·signum(sign) so the derivative follows the same
+            // composition (not a bit-level sign copy). For a NaN `sign` the
+            // result is NaN (signum(NaN) = NaN), unlike f64::copysign which
+            // reads NaN's sign bit.
             fn copysign(self, sign: Self) -> Self {
                 NumFloat::abs(self) * NumFloat::signum(sign)
             }

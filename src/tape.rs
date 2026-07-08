@@ -200,8 +200,14 @@ impl<F: Float> Tape<F> {
                 let start = self.statements[i - 1].end_plus_one as usize;
                 let end = stmt.end_plus_one as usize;
                 for j in start..end {
-                    adjoints[self.indices[j] as usize] =
-                        adjoints[self.indices[j] as usize] + self.multipliers[j] * a;
+                    // Zero-multiplier convention: a recorded 0 partial
+                    // absorbs any adjoint (see kernels/mod.rs), symmetric
+                    // with the zero-adjoint skip above.
+                    let m = self.multipliers[j];
+                    if m != F::zero() {
+                        adjoints[self.indices[j] as usize] =
+                            adjoints[self.indices[j] as usize] + m * a;
+                    }
                 }
             }
         }
@@ -223,8 +229,14 @@ impl<F: Float> Tape<F> {
                 let start = self.statements[i - 1].end_plus_one as usize;
                 let end = stmt.end_plus_one as usize;
                 for j in start..end {
-                    adjoints[self.indices[j] as usize] =
-                        adjoints[self.indices[j] as usize] + self.multipliers[j] * a;
+                    // Zero-multiplier convention: a recorded 0 partial
+                    // absorbs any adjoint (see kernels/mod.rs), symmetric
+                    // with the zero-adjoint skip above.
+                    let m = self.multipliers[j];
+                    if m != F::zero() {
+                        adjoints[self.indices[j] as usize] =
+                            adjoints[self.indices[j] as usize] + m * a;
+                    }
                 }
             }
         }

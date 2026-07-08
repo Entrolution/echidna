@@ -613,3 +613,50 @@ fn diffop_hessian_zero_input_tape_is_graceful() {
     assert_eq!(bg.len(), grad.len());
     assert_eq!(bh.len(), hess.len());
 }
+
+// ── Degenerate shapes ──
+
+#[test]
+fn mixed_partial_zero_input_tape_returns_constant() {
+    // ∂⁰f = f: the empty multi-index on a constant tape returns the
+    // primal in both slots.
+    let (tape, _) = echidna::record(
+        |_: &[echidna::BReverse<f64>]| echidna::BReverse::constant(3.5),
+        &[],
+    );
+    let (value, deriv) = echidna::diffop::mixed_partial(&tape, &[], &[]);
+    assert_eq!(value, 3.5);
+    assert_eq!(deriv, 3.5);
+}
+
+#[test]
+#[should_panic(expected = "at least one variable")]
+fn laplacian_zero_vars_panics() {
+    let _ = echidna::diffop::DiffOp::<f64>::laplacian(0);
+}
+
+#[test]
+#[should_panic(expected = "at least one variable")]
+fn diagonal_zero_vars_panics() {
+    let _ = echidna::diffop::DiffOp::<f64>::diagonal(0, 2);
+}
+
+#[test]
+#[should_panic(expected = "at least one variable")]
+fn biharmonic_zero_vars_panics() {
+    let _ = echidna::diffop::DiffOp::<f64>::biharmonic(0);
+}
+
+#[test]
+fn extraction_beyond_factorial_range_saturates_nonfinite() {
+    // Beyond ~170! the prefactor saturates to +Inf and the jet coefficient
+    // underflows: the extracted derivative is Inf or NaN — a loud,
+    // documented degradation, never a silently wrong finite value.
+    use num_traits::Float as _;
+    let (tape, _) = echidna::record(|x: &[echidna::BReverse<f64>]| x[0].exp(), &[0.0]);
+    let (_, deriv) = echidna::diffop::mixed_partial(&tape, &[0.0], &[200]);
+    assert!(
+        !deriv.is_finite(),
+        "order-200 extraction must saturate non-finite, got {deriv}"
+    );
+}

@@ -198,6 +198,12 @@ impl<F: Float> NumFloat for Dual<F> {
         Dual::constant(F::epsilon())
     }
 
+    // Classification predicates inspect only the primal: they mirror the
+    // underlying float's classification of the VALUE, matching how a
+    // program using f64 would branch at the same point. Tangent state is
+    // derivative bookkeeping, not part of the number being classified — a
+    // finite value with an Inf derivative is still a finite point of the
+    // function.
     fn is_nan(self) -> bool {
         self.re.is_nan()
     }
@@ -588,6 +594,9 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
         Reverse::constant(F::epsilon())
     }
 
+    // Classification predicates inspect only the primal value — see the
+    // rationale on Dual's implementations: adjoint state is not part of
+    // the number being classified.
     fn is_nan(self) -> bool {
         self.value.is_nan()
     }
@@ -685,9 +694,15 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
             return rev_binary(self, n, F::one(), F::zero(), dy);
         }
         let val = self.value.powf(n.value);
-        let dx = if self.value == F::zero() || val == F::zero() {
-            // Use n*x^(n-1) form to avoid 0/0 when x=0 and to handle
-            // underflow when x^n underflows to 0 but x != 0
+        let dx = if self.value == F::zero()
+            || val == F::zero()
+            || !self.value.is_finite()
+            || !val.is_finite()
+        {
+            // Use n*x^(n-1) form to avoid 0/0 when x=0, to handle underflow
+            // when x^n underflows to 0 but x != 0, and to avoid Inf/Inf = NaN
+            // at an infinite base (e.g. Inf^2.5 has derivative Inf, not NaN) —
+            // matching `Dual`/`opcode`.
             n.value * self.value.powf(n.value - F::one())
         } else {
             n.value * val / self.value
@@ -837,6 +852,15 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
 
     fn hypot(self, other: Self) -> Self {
         let h = self.value.hypot(other.value);
+        if h == F::zero() {
+            // Origin: the kernel's partials are (0, 0) by convention, but a
+            // recorded zero-partial node still multiplies 0 by the incoming
+            // adjoint on the backward sweep — NaN if that adjoint is
+            // non-finite (e.g. through sqrt'(0) = Inf downstream). Return a
+            // tape-free constant instead, mirroring atan2's origin
+            // short-circuit and Dual::hypot's structural-zero guard.
+            return Reverse::constant(h);
+        }
         let (dx, dy) = kernels::hypot_partials(self.value, other.value, h);
         rev_binary(self, other, h, dx, dy)
     }

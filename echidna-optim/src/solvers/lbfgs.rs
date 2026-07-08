@@ -1,7 +1,7 @@
 use num_traits::Float;
 
 use crate::convergence::{dot, norm, ConvergenceParams};
-use crate::line_search::{backtracking_armijo, ArmijoParams};
+use crate::line_search::{backtracking_armijo_with_evals, ArmijoParams};
 use crate::objective::Objective;
 use crate::result::{LbfgsDiagnostics, OptimResult, SolverDiagnostics, TerminationReason};
 
@@ -110,7 +110,15 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
         }
 
         // Line search
-        let ls = match backtracking_armijo(obj, &x, &d, f_val, &grad, &config.line_search) {
+        let ls = match backtracking_armijo_with_evals(
+            obj,
+            &x,
+            &d,
+            f_val,
+            &grad,
+            &config.line_search,
+            &mut func_evals,
+        ) {
             Some(ls) => ls,
             None => {
                 return OptimResult {
@@ -125,7 +133,8 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
                 };
             }
         };
-        func_evals += ls.evals;
+        // `func_evals` already includes this search's evaluations via the
+        // accumulator (which also survives the failure path above).
         // `ls.evals` counts every trial point including the first (alpha = 1).
         // A backtrack is any trial beyond the first.
         diag.line_search_backtracks += ls.evals.saturating_sub(1);

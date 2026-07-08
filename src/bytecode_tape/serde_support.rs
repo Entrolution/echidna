@@ -73,6 +73,8 @@ impl<'de, F: Float + Deserialize<'de>> Deserialize<'de> for BytecodeTape<F> {
             output_indices: data.output_indices,
             custom_ops: Vec::new(),
             custom_second_args: data.custom_second_args,
+            #[cfg(debug_assertions)]
+            tape_id: crate::bytecode_tape::next_tape_id(),
         };
         // Full structural validation: buffer lengths, the Input prefix,
         // output indices, per-op operand bounds (strictly-earlier slots),

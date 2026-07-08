@@ -15,6 +15,8 @@ use crate::opcode::{OpCode, UNUSED};
 /// (index == CONSTANT), promote it to a `Const` entry on the tape.
 #[inline]
 fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 {
+    #[cfg(debug_assertions)]
+    x.debug_assert_same_tape(tape);
     if x.index == CONSTANT {
         tape.push_const(x.value)
     } else {
@@ -35,7 +37,7 @@ fn brev_binary_op<F: Float + BtapeThreadLocal>(
         let ri = ensure_on_tape(&rhs, t);
         t.push_op(op, li, ri, value)
     });
-    BReverse { value, index }
+    BReverse::from_active_recording(value, index)
 }
 
 /// Record a unary op, promoting constant as needed.
@@ -45,7 +47,7 @@ fn brev_unary_op<F: Float + BtapeThreadLocal>(x: BReverse<F>, op: OpCode, value:
         let xi = ensure_on_tape(&x, t);
         t.push_op(op, xi, UNUSED, value)
     });
-    BReverse { value, index }
+    BReverse::from_active_recording(value, index)
 }
 
 // ──────────────────────────────────────────────
@@ -153,7 +155,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let c = t.push_const(rhs);
                     t.push_op(OpCode::Add, si, c, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -167,7 +169,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let ri = ensure_on_tape(&rhs, t);
                     t.push_op(OpCode::Add, c, ri, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -181,7 +183,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let c = t.push_const(rhs);
                     t.push_op(OpCode::Sub, si, c, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -195,7 +197,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let ri = ensure_on_tape(&rhs, t);
                     t.push_op(OpCode::Sub, c, ri, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -209,7 +211,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let c = t.push_const(rhs);
                     t.push_op(OpCode::Mul, si, c, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -223,7 +225,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let ri = ensure_on_tape(&rhs, t);
                     t.push_op(OpCode::Mul, c, ri, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -237,7 +239,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let c = t.push_const(rhs);
                     t.push_op(OpCode::Div, si, c, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -251,7 +253,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let ri = ensure_on_tape(&rhs, t);
                     t.push_op(OpCode::Div, c, ri, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -265,7 +267,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let c = t.push_const(rhs);
                     t.push_op(OpCode::Rem, si, c, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
 
@@ -279,7 +281,7 @@ macro_rules! impl_breverse_scalar_ops {
                     let ri = ensure_on_tape(&rhs, t);
                     t.push_op(OpCode::Rem, c, ri, value)
                 });
-                BReverse { value, index }
+                BReverse::from_active_recording(value, index)
             }
         }
     };

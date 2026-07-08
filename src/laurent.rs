@@ -51,7 +51,10 @@ fn rebase_to<F: Float, const K: usize>(coeffs: &[F; K], from_pole: i32, to_pole:
 /// Stack-allocated Laurent coefficient vector.
 ///
 /// `K` = total coefficient count. `coeffs[i]` = coefficient of `t^(pole_order + i)`.
-/// Always normalized: `coeffs[0] != 0` (or all zero).
+/// Normalized: `coeffs[0] != 0` (or all zero) — except for a series whose
+/// surviving coefficients are all subnormal, which keeps its leading exact
+/// zeros so a flush-to-zero scale collapse cannot misattribute the pole
+/// order (see `normalize`).
 #[derive(Clone, Copy, Debug)]
 pub struct Laurent<F: Float, const K: usize> {
     coeffs: [F; K],
@@ -215,7 +218,8 @@ impl<F: Float, const K: usize> Laurent<F, K> {
 
     /// Normalize: strip leading zero coefficients and adjust pole_order.
     ///
-    /// Ensures `coeffs[0] != 0` (or the value is all-zero with `pole_order = 0`).
+    /// Ensures `coeffs[0] != 0` (or the value is all-zero with `pole_order = 0`),
+    /// except when the surviving coefficients are all subnormal — see below.
     fn normalize(&mut self) {
         let mut shift = 0usize;
         while shift < K && self.coeffs[shift] == F::zero() {
@@ -227,6 +231,20 @@ impl<F: Float, const K: usize> Laurent<F, K> {
             return;
         }
         if shift > 0 {
+            // Rebase only while the series still carries a normally scaled
+            // (or non-finite) coefficient. If every surviving coefficient
+            // is subnormal, the leading exact zeros are plausibly
+            // flush-to-zero artifacts of a global scale collapse rather
+            // than structural zeros, and shifting would misattribute the
+            // pole order. Keeping the representation unshifted is the
+            // conservative direction: order-indexed queries stay aligned;
+            // only the window is not re-widened.
+            let any_signal = self.coeffs[shift..]
+                .iter()
+                .any(|c| c.is_normal() || !c.is_finite());
+            if !any_signal {
+                return;
+            }
             self.pole_order += shift as i32;
             for i in 0..K {
                 self.coeffs[i] = if i + shift < K {
@@ -335,7 +353,9 @@ impl<F: Float, const K: usize> Laurent<F, K> {
                 return Self::nan_laurent();
             }
             // pole_order is even: sqrt of t^p * f(t) = t^(p/2) * sqrt(f(t))
-            // where f(t) has coeffs[0] != 0 (due to normalization).
+            // where f(t) has coeffs[0] != 0 after normalization (except the
+            // all-subnormal collapse case, where taylor_sqrt's zero-leading
+            // branch applies).
             let mut c = [F::zero(); K];
             taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
             Laurent {
@@ -375,7 +395,9 @@ impl<F: Float, const K: usize> Laurent<F, K> {
                 return Self::nan_laurent();
             }
             // pole_order divisible by 3: cbrt of t^p * f(t) = t^(p/3) * cbrt(f(t))
-            // where f(t) has coeffs[0] != 0 (due to normalization).
+            // where f(t) has coeffs[0] != 0 after normalization (except the
+            // all-subnormal collapse case, where taylor_cbrt's zero-leading
+            // branch applies).
             let mut c = [F::zero(); K];
             let mut s1 = [F::zero(); K];
             let mut s2 = [F::zero(); K];

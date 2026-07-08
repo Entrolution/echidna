@@ -48,10 +48,14 @@ impl<F: Float> Div for Dual<F> {
     type Output = Self;
     #[inline]
     fn div(self, rhs: Self) -> Self {
+        // Primal is the correctly-rounded IEEE quotient (bit-exact with `f64`
+        // division and the bytecode tape); `inv` is reused only in the
+        // derivative term, where 1 ULP is inherent.
         let inv = F::one() / rhs.re;
+        let re = self.re / rhs.re;
         Dual {
-            re: self.re * inv,
-            eps: (self.eps - self.re * inv * rhs.eps) * inv,
+            re,
+            eps: (self.eps - re * rhs.eps) * inv,
         }
     }
 }
@@ -187,9 +191,10 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn div(self, rhs: $f) -> Dual<$f> {
+                // Correctly-rounded primal; `inv` only in the derivative term.
                 let inv = 1.0 / rhs;
                 Dual {
-                    re: self.re * inv,
+                    re: self.re / rhs,
                     eps: self.eps * inv,
                 }
             }
@@ -199,10 +204,13 @@ macro_rules! impl_dual_scalar_ops {
             type Output = Dual<$f>;
             #[inline]
             fn div(self, rhs: Dual<$f>) -> Dual<$f> {
+                // Correctly-rounded primal, reused in the derivative
+                // d/db (a/b) = -(a/b)/b so the tangent shares its rounding.
                 let inv = 1.0 / rhs.re;
+                let re = self / rhs.re;
                 Dual {
-                    re: self * inv,
-                    eps: -self * rhs.eps * inv * inv,
+                    re,
+                    eps: -re * rhs.eps * inv,
                 }
             }
         }
@@ -290,11 +298,13 @@ impl<F: Float + TapeThreadLocal> Div for Reverse<F> {
     type Output = Self;
     #[inline]
     fn div(self, rhs: Self) -> Self {
+        // Correctly-rounded primal; the rhs multiplier uses the `-r/b` form
+        // (r = a/b) matching the bytecode `OpCode::Div` partials, so eager
+        // and taped reverse sweeps agree to the last ULP.
         let inv = F::one() / rhs.value;
-        let value = self.value * inv;
-        let index = tape::with_active_tape(|t| {
-            t.push_binary(self.index, inv, rhs.index, -self.value * inv * inv)
-        });
+        let value = self.value / rhs.value;
+        let index =
+            tape::with_active_tape(|t| t.push_binary(self.index, inv, rhs.index, -value * inv));
         Reverse { value, index }
     }
 }
@@ -422,8 +432,9 @@ macro_rules! impl_reverse_scalar_ops {
             type Output = Reverse<$f>;
             #[inline]
             fn div(self, rhs: $f) -> Reverse<$f> {
+                // Correctly-rounded primal; `inv` only as the multiplier.
                 let inv: $f = 1.0 / rhs;
-                let value = self.value * inv;
+                let value = self.value / rhs;
                 let index = tape::with_active_tape(|t| t.push_unary(self.index, inv));
                 Reverse { value, index }
             }
@@ -433,9 +444,11 @@ macro_rules! impl_reverse_scalar_ops {
             type Output = Reverse<$f>;
             #[inline]
             fn div(self, rhs: Reverse<$f>) -> Reverse<$f> {
+                // Correctly-rounded primal, reused in the `-r/b` multiplier
+                // form matching the bytecode `OpCode::Div` partials.
                 let inv: $f = 1.0 / rhs.value;
-                let value = self * inv;
-                let index = tape::with_active_tape(|t| t.push_unary(rhs.index, -self * inv * inv));
+                let value = self / rhs.value;
+                let index = tape::with_active_tape(|t| t.push_unary(rhs.index, -value * inv));
                 Reverse { value, index }
             }
         }

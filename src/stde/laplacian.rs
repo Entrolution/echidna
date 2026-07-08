@@ -132,7 +132,7 @@ pub fn laplacian_with_control<F: Float>(
         estimate,
         sample_variance,
         standard_error,
-        num_samples: directions.len(),
+        num_samples: acc.contributing(),
     }
 }
 
@@ -355,6 +355,6 @@ pub fn laplacian_hutchpp<F: Float>(
         estimate: exact_trace + residual_mean,
         sample_variance,
         standard_error,
-        num_samples: stochastic_directions.len(),
+        num_samples: acc.contributing(),
     }
 }

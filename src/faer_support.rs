@@ -152,13 +152,19 @@ pub fn solve_dense_cholesky_faer(a: &Mat<f64>, b: &Col<f64>) -> Option<Col<f64>>
 /// Convert a [`crate::SparsityPattern`] (lower-triangle COO) plus values into a full
 /// symmetric `SparseColMat` suitable for faer's sparse solvers.
 ///
-/// Returns `None` if the triplet construction fails.
+/// Returns `None` if the triplet construction fails or if `values.len()`
+/// does not match `pattern.nnz()`.
 #[must_use]
 pub fn sparsity_to_faer_symmetric(
     pattern: &crate::sparse::SparsityPattern,
     values: &[f64],
 ) -> Option<faer::sparse::SparseColMat<usize, f64>> {
-    assert_eq!(pattern.nnz(), values.len());
+    // A pattern/values length mismatch is a caller inconsistency; surface
+    // it as None (matching this function's Option contract and its
+    // callers') rather than a panic.
+    if pattern.nnz() != values.len() {
+        return None;
+    }
     let mut triplets: Vec<faer::sparse::Triplet<usize, usize, f64>> =
         Vec::with_capacity(pattern.nnz() * 2);
     for ((&row, &col), &v) in pattern.rows.iter().zip(&pattern.cols).zip(values) {
@@ -188,7 +194,8 @@ pub fn sparsity_to_faer_symmetric(
 /// Solve a symmetric linear system `H * x = b` via sparse Cholesky, where `H` is
 /// given by a [`crate::SparsityPattern`] and its values (lower-triangle COO from `sparse_hessian`).
 ///
-/// Returns `None` if the matrix is not positive-definite or construction fails.
+/// Returns `None` if the matrix is not positive-definite, construction
+/// fails, or `values.len()` does not match `pattern.nnz()`.
 #[must_use]
 pub fn solve_sparse_cholesky_faer(
     pattern: &crate::sparse::SparsityPattern,
@@ -204,7 +211,7 @@ pub fn solve_sparse_cholesky_faer(
 /// Solve a symmetric linear system `H * x = b` via sparse LU, where `H` is
 /// given by a [`crate::SparsityPattern`] and its values.
 ///
-/// Returns `None` if the matrix is singular or construction fails.
+/// Returns `None` if the matrix is singular or construction fails, or if `values.len()` does not match `pattern.nnz()`.
 #[must_use]
 pub fn solve_sparse_lu_faer(
     pattern: &crate::sparse::SparsityPattern,

@@ -36,6 +36,7 @@ const BLOCK_SIZE: u32 = 256;
 
 macro_rules! cuda_forward_batch_body {
     ($self:expr, $tape:expr, $inputs:expr, $batch_size:expr, $F:ty, $constants:ident, $kernel:ident) => {{
+        crate::gpu::validate_batch_args($tape.num_inputs, $batch_size)?;
         let s = &$self.stream;
         let ni = $tape.num_inputs;
         let nv = $tape.num_variables;
@@ -84,6 +85,7 @@ macro_rules! cuda_forward_batch_body {
 
 macro_rules! cuda_gradient_batch_body {
     ($self:expr, $tape:expr, $inputs:expr, $batch_size:expr, $F:ty, $constants:ident, $fwd_kernel:ident, $rev_kernel:ident) => {{
+        crate::gpu::validate_batch_args($tape.num_inputs, $batch_size)?;
         let s = &$self.stream;
         let ni = $tape.num_inputs;
         let nv = $tape.num_variables;
@@ -159,6 +161,7 @@ macro_rules! cuda_gradient_batch_body {
 
 macro_rules! cuda_hvp_batch_body {
     ($self:expr, $tape:expr, $x:expr, $tangent_dirs:expr, $batch_size:expr, $F:ty, $constants:ident, $kernel:ident) => {{
+        crate::gpu::validate_batch_args($tape.num_inputs, $batch_size)?;
         let s = &$self.stream;
         let ni = $tape.num_inputs;
         let nv = $tape.num_variables;
@@ -789,6 +792,7 @@ impl CudaContext {
                 "unsupported Taylor order {order}, must be 1..=5"
             )));
         }
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
         let k = order as u32;
         let s = &self.stream;
         let ni = tape.num_inputs;
@@ -879,6 +883,7 @@ impl CudaContext {
                 "unsupported Taylor order {order}, must be 1..=5"
             )));
         }
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
         let k = order as u32;
         let s = &self.stream;
         let ni = tape.num_inputs;

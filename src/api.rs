@@ -61,6 +61,10 @@ pub fn grad<F: Float + TapeThreadLocal>(
 /// Jacobian-vector product (forward mode): `(f(x), J·v)`.
 ///
 /// Evaluates `f` at `x` and computes the directional derivative in direction `v`.
+///
+/// # Panics
+///
+/// Panics if `v.len()` does not match `x.len()`.
 pub fn jvp<F: Float>(f: impl Fn(&[Dual<F>]) -> Vec<Dual<F>>, x: &[F], v: &[F]) -> (Vec<F>, Vec<F>) {
     assert_eq!(x.len(), v.len(), "x and v must have the same length");
     let inputs: Vec<Dual<F>> = x
@@ -77,6 +81,10 @@ pub fn jvp<F: Float>(f: impl Fn(&[Dual<F>]) -> Vec<Dual<F>>, x: &[F], v: &[F]) -
 /// Vector-Jacobian product (reverse mode): `(f(x), wᵀ·J)`.
 ///
 /// Evaluates `f` at `x` and computes the adjoint product with weights `w`.
+///
+/// # Panics
+///
+/// Panics if `w.len()` does not match the number of outputs `f` produced.
 pub fn vjp<F: Float + TapeThreadLocal>(
     f: impl FnOnce(&[Reverse<F>]) -> Vec<Reverse<F>>,
     x: &[F],
@@ -123,6 +131,11 @@ pub fn vjp<F: Float + TapeThreadLocal>(
 /// Compute the full Jacobian of `f : R^n → R^m` using forward mode.
 ///
 /// Returns `(f(x), J)` where `J[i][j] = ∂f_i/∂x_j`.
+///
+/// # Panics
+///
+/// Panics if `f` produces a different number of outputs across passes
+/// (each column is recorded with its own evaluation of `f`).
 pub fn jacobian<F: Float>(
     f: impl Fn(&[Dual<F>]) -> Vec<Dual<F>>,
     x: &[F],
@@ -177,6 +190,12 @@ pub fn jacobian<F: Float>(
 /// (`if x > 0 { ... } else { ... }`), re-evaluating at inputs that take a
 /// different branch produces **incorrect results**.
 ///
+/// `BReverse` values are bound to the recording that produced them: do not
+/// capture them in a nested `record`, stash them for use in a later
+/// recording, or move them across recording threads — their tape indices
+/// are only meaningful on their own tape. Debug builds panic on such
+/// cross-tape use; release builds do not check.
+///
 /// # Example
 ///
 /// ```ignore
@@ -203,7 +222,7 @@ pub fn record<F: Float + BtapeThreadLocal>(
         .iter()
         .map(|&val| {
             let idx = tape.new_input(val);
-            BReverse::from_tape(val, idx)
+            BReverse::from_tape_of(&tape, val, idx)
         })
         .collect();
 
@@ -231,6 +250,11 @@ pub fn record<F: Float + BtapeThreadLocal>(
 /// [`vjp_multi`](BytecodeTape::vjp_multi), and [`reverse_seeded`](BytecodeTape::reverse_seeded).
 ///
 /// Returns the tape and the output values from the recording pass.
+///
+/// # Panics
+///
+/// Panics if `f` returns no outputs (a multi-output tape must have at
+/// least one).
 #[cfg(feature = "bytecode")]
 pub fn record_multi<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
@@ -244,7 +268,7 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
         .iter()
         .map(|&val| {
             let idx = tape.new_input(val);
-            BReverse::from_tape(val, idx)
+            BReverse::from_tape_of(&tape, val, idx)
         })
         .collect();
 
@@ -380,6 +404,10 @@ pub fn sparse_jacobian<F: Float + BtapeThreadLocal>(
 ///
 /// For repeated HVP with different `v`, prefer [`record`] + [`BytecodeTape::hvp`].
 /// This function re-records each call.
+///
+/// # Panics
+///
+/// Panics if `v.len()` does not match `x.len()`.
 #[cfg(feature = "bytecode")]
 pub fn composed_hvp<F, Func>(f: Func, x: &[F], v: &[F]) -> (F, Vec<F>, Vec<F>)
 where
@@ -398,7 +426,7 @@ where
         .zip(v.iter())
         .map(|(&xi, &vi)| {
             let idx = tape.new_input(xi);
-            let re = BReverse::from_tape(xi, idx);
+            let re = BReverse::from_tape_of(&tape, xi, idx);
             let eps = BReverse::constant(vi);
             Dual::new(re, eps)
         })

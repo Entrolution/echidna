@@ -20,8 +20,11 @@ impl<F: Float> super::BytecodeTape<F> {
     /// inputs via [`forward()`](Self::forward) but `self.values` was not updated
     /// to match the tangent inputs, the custom-op linearization point will be
     /// stale, producing O(||x - x_record||) errors in the tangent output.
-    /// For exact derivatives through custom ops, use the `Dual<F>` specialization
-    /// `forward_tangent_dual` which calls `CustomOp::eval_dual`.
+    /// For exact derivatives through custom ops, use the specializations
+    /// [`forward_tangent_dual`](Self::forward_tangent_dual) (`Dual<F>`) or
+    /// [`forward_tangent_dual2`](Self::forward_tangent_dual2)
+    /// (`Dual<Dual<F>>`), which route through `CustomOp::eval_dual` /
+    /// `CustomOp::partials_dual`.
     pub fn forward_tangent<T: NumFloat>(&self, inputs: &[T], buf: &mut Vec<T>) {
         self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
             // First-order linearization of custom ops: result + da*(a - a₀) + db*(b - b₀).
@@ -46,9 +49,42 @@ impl<F: Float> super::BytecodeTape<F> {
         });
     }
 
-    /// Forward sweep specialized for `Dual<F>`, calling [`CustomOp::eval_dual`]
-    /// so that custom ops propagate tangent information for second-order derivatives.
-    pub(super) fn forward_tangent_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
+    /// Forward sweep specialized for `Dual<Dual<F>>` (forward-over-forward),
+    /// propagating exact first- and second-order information through custom
+    /// ops.
+    ///
+    /// The inner dual level is evaluated with
+    /// [`CustomOp::eval_dual`](crate::CustomOp::eval_dual) at the
+    /// *current* inputs, and the outer tangent applies the chain rule with
+    /// partials from
+    /// [`CustomOp::partials_dual`](crate::CustomOp::partials_dual) — duals
+    /// whose tangent
+    /// components carry the partials' own derivatives, so the custom op's
+    /// curvature lands in the `eps.eps` component exactly as the built-in
+    /// arms produce it. Accuracy therefore matches what the op implements:
+    /// ops overriding `eval_dual`/`partials_dual` are exact to second order;
+    /// ops relying on the trait defaults degrade to constant partials (zero
+    /// curvature) but are still evaluated at the current point. The generic
+    /// [`forward_tangent`](Self::forward_tangent) would instead linearize
+    /// around recording-time primals, which both drops curvature and is
+    /// stale away from the recording point.
+    pub fn forward_tangent_dual2(&self, inputs: &[Dual<Dual<F>>], buf: &mut Vec<Dual<Dual<F>>>) {
+        self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
+            let [_a_idx, cb_idx] = self.arg_indices[i];
+            let op = &self.custom_ops[cb_idx as usize];
+            let r_re = op.eval_dual(a_t.re, b_t.re);
+            let (da, db) = op.partials_dual(a_t.re, b_t.re, r_re);
+            Dual::new(r_re, da * a_t.eps + db * b_t.eps)
+        });
+    }
+
+    /// Forward sweep specialized for `Dual<F>`, calling
+    /// [`CustomOp::eval_dual`](crate::CustomOp::eval_dual) so custom ops
+    /// propagate exact first-order tangents at the *current* inputs. The
+    /// generic [`forward_tangent`](Self::forward_tangent) instead linearizes
+    /// custom ops around recording-time primals, which is stale away from
+    /// the recording point.
+    pub fn forward_tangent_dual(&self, inputs: &[Dual<F>], buf: &mut Vec<Dual<F>>) {
         self.forward_tangent_inner(inputs, buf, |i, a_t, b_t| {
             let [_a_idx, cb_idx] = self.arg_indices[i];
             self.custom_ops[cb_idx as usize].eval_dual(a_t, b_t)
@@ -176,9 +212,14 @@ impl<F: Float> super::BytecodeTape<F> {
                     let [a_idx, _cb_idx] = self.arg_indices[i];
                     let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
                     let (da_t, db_t) = custom_partials(i);
-                    buf[a_idx as usize] = buf[a_idx as usize] + da_t * adj;
+                    // Zero-multiplier convention (see kernels/mod.rs).
+                    if !da_t.is_all_zero() {
+                        buf[a_idx as usize] = buf[a_idx as usize] + da_t * adj;
+                    }
                     if let Some(bi) = b_idx_opt {
-                        buf[bi as usize] = buf[bi as usize] + db_t * adj;
+                        if !db_t.is_all_zero() {
+                            buf[bi as usize] = buf[bi as usize] + db_t * adj;
+                        }
                     }
                 }
                 op => {
@@ -201,7 +242,9 @@ impl<F: Float> super::BytecodeTape<F> {
                             let n = T::from(exp).unwrap();
                             n * a.powi(exp - 1)
                         };
-                        buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                        if !da.is_all_zero() {
+                            buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                        }
                         continue;
                     }
                     let b = if b_idx != UNUSED {
@@ -212,8 +255,13 @@ impl<F: Float> super::BytecodeTape<F> {
                     let r = tangent_vals[i];
                     let (da, db) = opcode::reverse_partials(op, a, b, r);
 
-                    buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
-                    if b_idx != UNUSED {
+                    // Zero-multiplier convention (see kernels/mod.rs).
+                    // is_all_zero, not ==: a partial with zero primal but
+                    // live tangent carries second-order information.
+                    if !da.is_all_zero() {
+                        buf[a_idx as usize] = buf[a_idx as usize] + da * adj;
+                    }
+                    if b_idx != UNUSED && !db.is_all_zero() {
                         buf[b_idx as usize] = buf[b_idx as usize] + db * adj;
                     }
                 }

@@ -2,7 +2,7 @@ use num_traits::Float;
 
 use crate::convergence::{dot, norm, ConvergenceParams};
 use crate::linalg::lu_solve;
-use crate::line_search::{backtracking_armijo, ArmijoParams};
+use crate::line_search::{backtracking_armijo_with_evals, ArmijoParams};
 use crate::objective::Objective;
 use crate::result::{NewtonDiagnostics, OptimResult, SolverDiagnostics, TerminationReason};
 
@@ -113,7 +113,15 @@ pub fn newton<F: Float, O: Objective<F>>(
         };
 
         // Line search along Newton (or fallback steepest-descent) direction
-        let ls = match backtracking_armijo(obj, &x, &delta, f_val, &grad, &config.line_search) {
+        let ls = match backtracking_armijo_with_evals(
+            obj,
+            &x,
+            &delta,
+            f_val,
+            &grad,
+            &config.line_search,
+            &mut func_evals,
+        ) {
             Some(ls) => ls,
             None => {
                 return OptimResult {
@@ -128,7 +136,8 @@ pub fn newton<F: Float, O: Objective<F>>(
                 };
             }
         };
-        func_evals += ls.evals;
+        // `func_evals` already includes this search's evaluations via the
+        // accumulator (which also survives the failure path above).
         diag.line_search_backtracks += ls.evals.saturating_sub(1);
 
         // Update x

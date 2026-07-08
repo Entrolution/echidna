@@ -55,7 +55,7 @@ fn forward_batch_rosenbrock_f32() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<Vec<f64>> = (0..100)
         .map(|i| {
@@ -101,7 +101,7 @@ fn gradient_batch_rosenbrock_f32() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -147,7 +147,7 @@ fn forward_batch_rosenbrock_f64() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<Vec<f64>> = (0..100)
         .map(|i| {
@@ -189,7 +189,7 @@ fn gradient_batch_rosenbrock_f64() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -229,7 +229,7 @@ fn forward_batch_trig_f64() {
     };
 
     let x0 = [0.5_f64, 0.7];
-    let (mut tape, _) = record(|v| trig_func(v), &x0);
+    let (mut tape, _) = record(trig_func, &x0);
 
     let points: Vec<Vec<f64>> = (0..50)
         .map(|i| {
@@ -271,7 +271,7 @@ fn sparse_hessian_rosenbrock_f64() {
     };
 
     let x0 = [1.0_f64, 2.0];
-    let (mut tape, _) = record(|v| rosenbrock(v), &x0);
+    let (mut tape, _) = record(rosenbrock, &x0);
 
     let gpu_tape = ctx.upload_tape_f64(&tape).unwrap();
 
@@ -334,7 +334,7 @@ mod taylor_kth {
         };
 
         let x = [3.0_f64, 4.0];
-        let (tape, _) = record(|v| polynomial(v), &x);
+        let (tape, _) = record(polynomial, &x);
         let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
         let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -383,16 +383,20 @@ mod taylor_kth {
         };
 
         let x = [1.5_f64, 2.5];
-        let (tape, _) = record(|v| rosenbrock(v), &x);
+        let (tape, _) = record(rosenbrock, &x);
         let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
         let tape_buf = ctx.upload_tape(&gpu_data);
 
         let primals = [1.5f32, 2.5];
         let seeds = [0.6f32, 0.8];
 
-        let result_2nd = ctx
-            .taylor_forward_2nd_batch(&tape_buf, &primals, &seeds, 1)
-            .unwrap();
+        // Trait-qualified: CudaContext's inherent wrapper is deprecated in
+        // favor of the GpuBackend method; this test deliberately exercises
+        // the dedicated 2nd-order path against the kth path.
+        let result_2nd = echidna::gpu::GpuBackend::taylor_forward_2nd_batch(
+            &ctx, &tape_buf, &primals, &seeds, 1,
+        )
+        .unwrap();
         let result_kth = ctx
             .taylor_forward_kth_batch(&tape_buf, &primals, &seeds, 1, 3)
             .unwrap();
@@ -482,7 +486,7 @@ mod taylor_kth {
         };
 
         let x = [3.0_f64, 4.0];
-        let (tape, _) = record(|v| polynomial(v), &x);
+        let (tape, _) = record(polynomial, &x);
         let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
         let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -517,7 +521,7 @@ mod taylor_kth {
         };
 
         let x = [2.0_f64, 3.0];
-        let (tape, _) = record(|v| polynomial(v), &x);
+        let (tape, _) = record(polynomial, &x);
         let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
         let tape_buf = ctx.upload_tape(&gpu_data);
 
@@ -557,9 +561,9 @@ mod taylor_kth {
             .unwrap();
 
         assert_eq!(result.order, 3);
-        for k in 0..3 {
+        for (k, cpu_ck) in cpu_coeffs.iter().enumerate().take(3) {
             assert!(
-                (result.coefficients[k][0] - cpu_coeffs[k]).abs() < 1e-10,
+                (result.coefficients[k][0] - cpu_ck).abs() < 1e-10,
                 "f64 c{k}: gpu={} cpu={}",
                 result.coefficients[k][0],
                 cpu_coeffs[k]
