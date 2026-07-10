@@ -14,24 +14,18 @@ use echidna_optim::{
 };
 
 fn lbfgs_diag(d: &SolverDiagnostics) -> &LbfgsDiagnostics {
-    match d {
-        SolverDiagnostics::Lbfgs(l) => l,
-        other => panic!("expected Lbfgs diagnostics, got {:?}", other),
-    }
+    d.as_lbfgs()
+        .unwrap_or_else(|| panic!("expected Lbfgs diagnostics, got {d:?}"))
 }
 
 fn newton_diag(d: &SolverDiagnostics) -> &NewtonDiagnostics {
-    match d {
-        SolverDiagnostics::Newton(n) => n,
-        other => panic!("expected Newton diagnostics, got {:?}", other),
-    }
+    d.as_newton()
+        .unwrap_or_else(|| panic!("expected Newton diagnostics, got {d:?}"))
 }
 
 fn tr_diag(d: &SolverDiagnostics) -> &TrustRegionDiagnostics {
-    match d {
-        SolverDiagnostics::TrustRegion(t) => t,
-        other => panic!("expected TrustRegion diagnostics, got {:?}", other),
-    }
+    d.as_trust_region()
+        .unwrap_or_else(|| panic!("expected TrustRegion diagnostics, got {d:?}"))
 }
 
 // ─────────────────────────────────────────────────────────────────────

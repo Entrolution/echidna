@@ -1,56 +1,12 @@
-//! Phase 6 regression tests: scale-aware singularity, curvature filters,
-//! descent fallback, piggyback finiteness, compensated summation, and
-//! trust-region NaN detection.
+//! Phase 6 regression tests: curvature filters, descent fallback,
+//! piggyback finiteness, and trust-region NaN detection. (The scale-aware
+//! singularity and compensated-summation cases live as unit tests beside
+//! `linalg::lu_solve` and `convergence::norm`.)
 
-use echidna_optim::convergence::norm;
-use echidna_optim::linalg::lu_solve;
 use echidna_optim::objective::Objective;
 use echidna_optim::result::TerminationReason;
 use echidna_optim::{lbfgs, newton, trust_region, LbfgsConfig, NewtonConfig, TrustRegionConfig};
 
-// M30: scale-aware singularity tolerance. The matrix below is non-singular
-// symbolically (diag(1e-8, 1e10)), but its condition number (~1e18) exceeds
-// f64 precision, so LU cannot produce a reliable solve. The old
-// `max_pivot_seen`-anchored tolerance updates *per column*: at col 0 it
-// anchored on the tiny 1e-8 pivot (tol ≈ eps*2*1e-8 ≈ 4e-24), letting 1e-8
-// pass easily, then at col 1 it anchored on 1e10 but the small pivot was
-// already accepted. The new `‖A‖_∞` anchor fixes tol at eps*2*1e10 ≈ 4e-6
-// from the start, rejecting the 1e-8 pivot up-front.
-#[test]
-fn m30_lu_solve_rejects_ill_conditioned_scale_mismatch() {
-    let a = vec![vec![1.0e-8, 0.0], vec![0.0, 1.0e10]];
-    let b = vec![1.0, 1.0];
-    assert!(
-        lu_solve(&a, &b).is_none(),
-        "matrix with condition number ~1e18 must be flagged singular under \
-         matrix-norm-scaled tolerance"
-    );
-}
-
-#[test]
-fn m30_lu_solve_singular_large_scale() {
-    // Exactly rank-deficient, caught by max_val==0 regardless of tolerance.
-    let a = vec![
-        vec![1.0e10, 2.0e10, 3.0e10],
-        vec![2.0e10, 4.0e10, 6.0e10],
-        vec![1.0e10, 1.0e10, 1.0e10],
-    ];
-    let b = vec![1.0e10, 2.0e10, 3.0e10];
-    assert!(lu_solve(&a, &b).is_none());
-}
-
-#[test]
-fn m30_lu_solve_small_scale_still_solvable() {
-    // Well-conditioned (κ=1) matrix with tiny entries. New matrix-norm scaling
-    // gives tol ≈ eps*2*1e-12 ≈ 4e-28, well below the 1e-12 pivot — accepts.
-    let a = vec![vec![1.0e-12, 0.0], vec![0.0, 1.0e-12]];
-    let b = vec![1.0e-12, 2.0e-12];
-    let x = lu_solve(&a, &b).expect("well-conditioned matrix");
-    assert!((x[0] - 1.0f64).abs() < 1e-6);
-    assert!((x[1] - 2.0f64).abs() < 1e-6);
-}
-
-// M32: Cauchy-Schwarz curvature filter; M33/L35: gamma clamp.
 struct IllScaled;
 impl Objective<f64> for IllScaled {
     fn dim(&self) -> usize {
@@ -131,26 +87,6 @@ fn m34_newton_descent_fallback_makes_progress() {
         f_initial,
         result.value
     );
-}
-
-// M36: Kahan summation — very long vectors should yield tight norms.
-#[test]
-fn m36_norm_kahan_tight_for_long_vector() {
-    // 10_000 copies of 1.0 — exact norm is sqrt(10_000) = 100.0.
-    let v: Vec<f64> = (0..10_000).map(|_| 1.0).collect();
-    let n = norm(&v);
-    assert!(
-        (n - 100.0).abs() < 1e-12,
-        "norm of 10k ones not near 100: got {}",
-        n
-    );
-}
-
-#[test]
-fn m36_norm_short_vector_still_works() {
-    let v = vec![3.0_f64, 4.0];
-    let n = norm(&v);
-    assert!((n - 5.0).abs() < 1e-15);
 }
 
 // M47: trust_region should return NumericalError when hvp produces NaN mid-

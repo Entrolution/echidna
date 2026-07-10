@@ -53,6 +53,35 @@ pub fn dot<F: Float>(a: &[F], b: &[F]) -> F {
     kahan_sum(a.iter().zip(b.iter()).map(|(&x, &y)| x * y))
 }
 
+/// The shared post-step convergence gate: gradient norm, then step size,
+/// then relative function change — the order every solver used.
+///
+/// Relative func_tol: absolute `|f_prev - f_val| < tol` is scale-blind — a
+/// tolerance of 1e-8 means ULP-precision on large-magnitude objectives
+/// (|f| ≈ 1e8) and impossibly tight on tiny ones. Scaling by `(1 + |f|)`
+/// makes the criterion track the problem. NOT for the solvers' pre-loop
+/// gradient-only checks: with no step taken, `f_prev == f_val` would fire
+/// the function-change predicate spuriously.
+pub(crate) fn check_convergence<F: Float>(
+    grad_norm: F,
+    step_norm: F,
+    f_prev: F,
+    f_val: F,
+    p: &ConvergenceParams<F>,
+) -> Option<crate::result::TerminationReason> {
+    use crate::result::TerminationReason;
+    if grad_norm < p.grad_tol {
+        return Some(TerminationReason::GradientNorm);
+    }
+    if step_norm < p.step_tol {
+        return Some(TerminationReason::StepSize);
+    }
+    if p.func_tol > F::zero() && (f_prev - f_val).abs() < p.func_tol * (F::one() + f_val.abs()) {
+        return Some(TerminationReason::FunctionChange);
+    }
+    None
+}
+
 /// Threshold above which compensated summation beats naive summation.
 /// Below this, naive summation's runtime advantage dominates and the
 /// precision gap is negligible.
@@ -97,4 +126,29 @@ fn kahan_sum<F: Float, I: Iterator<Item = F>>(iter: I) -> F {
         s = t;
     }
     s + c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // M36: Kahan summation — very long vectors should yield tight norms.
+    #[test]
+    fn m36_norm_kahan_tight_for_long_vector() {
+        // 10_000 copies of 1.0 — exact norm is sqrt(10_000) = 100.0.
+        let v: Vec<f64> = (0..10_000).map(|_| 1.0).collect();
+        let n = norm(&v);
+        assert!(
+            (n - 100.0).abs() < 1e-12,
+            "norm of 10k ones not near 100: got {}",
+            n
+        );
+    }
+
+    #[test]
+    fn m36_norm_short_vector_still_works() {
+        let v = vec![3.0_f64, 4.0];
+        let n = norm(&v);
+        assert!((n - 5.0).abs() < 1e-15);
+    }
 }

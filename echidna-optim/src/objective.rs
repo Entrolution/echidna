@@ -53,11 +53,6 @@ impl<F: Float> TapeObjective<F> {
     pub fn func_evals(&self) -> usize {
         self.func_evals
     }
-
-    /// Borrow the underlying tape.
-    pub fn tape(&self) -> &BytecodeTape<F> {
-        &self.tape
-    }
 }
 
 impl<F: Float> Objective<F> for TapeObjective<F> {

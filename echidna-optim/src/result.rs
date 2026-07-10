@@ -36,6 +36,34 @@ pub struct OptimResult<F> {
     pub diagnostics: SolverDiagnostics,
 }
 
+impl<F> OptimResult<F> {
+    /// Assemble a result. The single construction path for every solver
+    /// return — the struct is `#[non_exhaustive]`, so adding a field means
+    /// touching exactly this signature and its call sites.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn assemble(
+        x: Vec<F>,
+        value: F,
+        gradient: Vec<F>,
+        gradient_norm: F,
+        iterations: usize,
+        func_evals: usize,
+        termination: TerminationReason,
+        diagnostics: SolverDiagnostics,
+    ) -> Self {
+        OptimResult {
+            x,
+            value,
+            gradient,
+            gradient_norm,
+            iterations,
+            func_evals,
+            termination,
+            diagnostics,
+        }
+    }
+}
+
 /// Why the optimizer stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminationReason {
@@ -99,8 +127,6 @@ pub enum SolverDiagnostics {
     Newton(NewtonDiagnostics),
     /// Trust-region-specific counters.
     TrustRegion(TrustRegionDiagnostics),
-    /// Fallback for solver paths that don't yet emit specific counters.
-    Other,
 }
 
 impl SolverDiagnostics {

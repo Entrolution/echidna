@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unused optional `bumpalo` dependency (the bytecode tape is Vec-backed;
   builds with the `bytecode` feature no longer pull it in).
 
+### Removed (echidna-optim)
+
+- The never-constructed `SolverDiagnostics::Other` variant (the enum is
+  `#[non_exhaustive]`, so matches already need a wildcard arm).
+- The unused accessors `TapeObjective::tape`,
+  `SparseImplicitContext::nnz`, and `SparseImplicitContext::fx_nnz`
+  (`fz_nnz` remains).
+- The `linalg` and `convergence` modules are no longer public; they were
+  internal solver plumbing. `ConvergenceParams` remains re-exported at the
+  crate root.
+
 ## [0.14.1] - 2026-07-08
 
 **Coordinated release:** `echidna` 0.14.1 and `echidna-optim` 0.14.1.

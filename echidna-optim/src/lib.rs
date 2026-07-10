@@ -56,9 +56,9 @@
 //! [`implicit_tangent_sparse`], [`implicit_adjoint_sparse`], and
 //! [`implicit_jacobian_sparse`].
 
-pub mod convergence;
+mod convergence;
 pub mod implicit;
-pub mod linalg;
+mod linalg;
 pub mod line_search;
 pub mod objective;
 pub mod piggyback;

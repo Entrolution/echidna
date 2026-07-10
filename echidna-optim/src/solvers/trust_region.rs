@@ -1,6 +1,6 @@
 use num_traits::Float;
 
-use crate::convergence::{dot, norm, ConvergenceParams};
+use crate::convergence::{check_convergence, dot, norm, ConvergenceParams};
 use crate::objective::Objective;
 use crate::result::{OptimResult, SolverDiagnostics, TerminationReason, TrustRegionDiagnostics};
 
@@ -73,16 +73,16 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         // make `rho > eta` always false → silent no-progress MaxIterations).
         || !(config.eta >= F::zero() && config.eta < F::one() / F::from(4.0).unwrap())
     {
-        return OptimResult {
-            x: x0.to_vec(),
-            value: F::nan(),
-            gradient: vec![F::nan(); n],
-            gradient_norm: F::nan(),
-            iterations: 0,
-            func_evals: 0,
-            termination: TerminationReason::NumericalError,
-            diagnostics: SolverDiagnostics::TrustRegion(diag),
-        };
+        return OptimResult::assemble(
+            x0.to_vec(),
+            F::nan(),
+            vec![F::nan(); n],
+            F::nan(),
+            0,
+            0,
+            TerminationReason::NumericalError,
+            SolverDiagnostics::TrustRegion(diag),
+        );
     }
 
     let max_cg = if config.max_cg_iter == 0 {
@@ -98,34 +98,37 @@ pub fn trust_region<F: Float, O: Objective<F>>(
     let mut radius = config.initial_radius;
 
     if !grad_norm.is_finite() || !f_val.is_finite() {
-        return OptimResult {
+        return OptimResult::assemble(
             x,
-            value: f_val,
-            gradient: grad,
-            gradient_norm: grad_norm,
-            iterations: 0,
+            f_val,
+            grad,
+            grad_norm,
+            0,
             func_evals,
-            termination: TerminationReason::NumericalError,
-            diagnostics: SolverDiagnostics::TrustRegion(diag),
-        };
+            TerminationReason::NumericalError,
+            SolverDiagnostics::TrustRegion(diag),
+        );
     }
 
     if grad_norm < config.convergence.grad_tol {
-        return OptimResult {
+        return OptimResult::assemble(
             x,
-            value: f_val,
-            gradient: grad,
-            gradient_norm: grad_norm,
-            iterations: 0,
+            f_val,
+            grad,
+            grad_norm,
+            0,
             func_evals,
-            termination: TerminationReason::GradientNorm,
-            diagnostics: SolverDiagnostics::TrustRegion(diag),
-        };
+            TerminationReason::GradientNorm,
+            SolverDiagnostics::TrustRegion(diag),
+        );
     }
 
     let two = F::one() + F::one();
     let quarter = F::one() / (two * two);
     let three_quarter = F::one() - quarter;
+
+    // Trial-point buffer, fully rewritten each outer iteration.
+    let mut x_new = vec![F::zero(); n];
 
     for iter in 0..config.convergence.max_iter {
         // Solve the trust-region subproblem with Steihaug-Toint CG.
@@ -134,10 +137,16 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         let (step, cg_iters) = steihaug_cg(obj, &x, &grad, radius, max_cg, &mut func_evals);
         diag.cg_inner_iters += cg_iters;
 
-        // Predicted reduction: -g^T s - 0.5 * s^T H s
-        // Note: this recomputes H*s outside of CG. For stateful objectives (e.g.,
-        // stochastic HVP estimators), this may diverge from the H*s used inside
-        // steihaug_cg. A future optimization could return gs/shs from CG directly.
+        // Predicted reduction: -g^T s - 0.5 * s^T H s.
+        //
+        // Deliberately recomputes H·s at the composed step rather than
+        // accumulating s^T H s inside CG: for an hvp that is not exactly
+        // linear in its direction (broken, stochastic, or adversarial
+        // implementations), H·(Σ αd) need not equal Σ α·(H·d), and this
+        // ground-truthing is what lets the predicted-reduction test below
+        // detect a bad model — it feeds `radius_shrinks_bad_model` and the
+        // NaN bail-out. VERIFIED CORRECT — the PredictedNegative regression
+        // tests fail with the accumulated form.
         let (_, hvp_result) = obj.hvp(&x, &step);
         func_evals += 1;
         let gs = dot(&grad, &step);
@@ -145,7 +154,6 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         let predicted = F::zero() - gs - shs / two;
 
         // Actual reduction
-        let mut x_new = vec![F::zero(); n];
         for i in 0..n {
             x_new[i] = x[i] + step[i];
         }
@@ -161,16 +169,16 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         // and the solver spins to `max_iter` without diagnosing. Return
         // `NumericalError` at the first sign of a NaN.
         if !predicted.is_finite() || !actual.is_finite() {
-            return OptimResult {
+            return OptimResult::assemble(
                 x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
+                f_val,
+                grad,
+                grad_norm,
+                iter + 1,
                 func_evals,
-                termination: TerminationReason::NumericalError,
-                diagnostics: SolverDiagnostics::TrustRegion(diag),
-            };
+                TerminationReason::NumericalError,
+                SolverDiagnostics::TrustRegion(diag),
+            );
         }
 
         // Guard: reject step unconditionally when predicted reduction is non-positive.
@@ -179,16 +187,16 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             diag.radius_shrinks_bad_model += 1;
             let shrunk = quarter * radius;
             if shrunk < config.min_radius {
-                return OptimResult {
+                return OptimResult::assemble(
                     x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter + 1,
+                    f_val,
+                    grad,
+                    grad_norm,
+                    iter + 1,
                     func_evals,
-                    termination: TerminationReason::NumericalError,
-                    diagnostics: SolverDiagnostics::TrustRegion(diag),
-                };
+                    TerminationReason::NumericalError,
+                    SolverDiagnostics::TrustRegion(diag),
+                );
             }
             radius = shrunk;
             continue;
@@ -218,16 +226,16 @@ pub fn trust_region<F: Float, O: Objective<F>>(
             diag.radius_shrinks_low_rho += 1;
             let shrunk = quarter * radius;
             if shrunk < config.min_radius {
-                return OptimResult {
+                return OptimResult::assemble(
                     x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter + 1,
+                    f_val,
+                    grad,
+                    grad_norm,
+                    iter + 1,
                     func_evals,
-                    termination: TerminationReason::NumericalError,
-                    diagnostics: SolverDiagnostics::TrustRegion(diag),
-                };
+                    TerminationReason::NumericalError,
+                    SolverDiagnostics::TrustRegion(diag),
+                );
             }
             radius = shrunk;
         } else if rho > three_quarter && near_boundary(step_norm, radius) {
@@ -239,85 +247,54 @@ pub fn trust_region<F: Float, O: Objective<F>>(
         // Accept or reject step
         if rho > config.eta {
             let f_prev = f_val;
-            x = x_new;
+            std::mem::swap(&mut x, &mut x_new);
             f_val = f_new;
             grad = g_new;
             grad_norm = norm(&grad);
 
             // NaN/Inf detection
             if !grad_norm.is_finite() || !f_val.is_finite() {
-                return OptimResult {
+                return OptimResult::assemble(
                     x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter + 1,
+                    f_val,
+                    grad,
+                    grad_norm,
+                    iter + 1,
                     func_evals,
-                    termination: TerminationReason::NumericalError,
-                    diagnostics: SolverDiagnostics::TrustRegion(diag),
-                };
+                    TerminationReason::NumericalError,
+                    SolverDiagnostics::TrustRegion(diag),
+                );
             }
 
-            // Convergence checks
-            if grad_norm < config.convergence.grad_tol {
-                return OptimResult {
-                    x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter + 1,
-                    func_evals,
-                    termination: TerminationReason::GradientNorm,
-                    diagnostics: SolverDiagnostics::TrustRegion(diag),
-                };
-            }
-
-            if step_norm < config.convergence.step_tol {
-                return OptimResult {
-                    x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter + 1,
-                    func_evals,
-                    termination: TerminationReason::StepSize,
-                    diagnostics: SolverDiagnostics::TrustRegion(diag),
-                };
-            }
-
-            // Relative `func_tol` test: previously `|f_prev - f_val| < tol`
-            // was absolute, so a tolerance like 1e-8 meant "one ULP" on
-            // large-magnitude objectives (|f| ≈ 1e8) and "impossibly tight"
-            // on tiny ones. Scale by `(1 + |f|)` so the tolerance tracks
-            // the problem magnitude.
-            if config.convergence.func_tol > F::zero()
-                && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
+            // Convergence checks (gradient, step, relative function change).
+            if let Some(reason) =
+                check_convergence(grad_norm, step_norm, f_prev, f_val, &config.convergence)
             {
-                return OptimResult {
+                return OptimResult::assemble(
                     x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter + 1,
+                    f_val,
+                    grad,
+                    grad_norm,
+                    iter + 1,
                     func_evals,
-                    termination: TerminationReason::FunctionChange,
-                    diagnostics: SolverDiagnostics::TrustRegion(diag),
-                };
+                    reason,
+                    SolverDiagnostics::TrustRegion(diag),
+                );
             }
         }
         // If rejected, loop again with smaller radius
     }
 
-    OptimResult {
+    OptimResult::assemble(
         x,
-        value: f_val,
-        gradient: grad,
-        gradient_norm: grad_norm,
-        iterations: config.convergence.max_iter,
+        f_val,
+        grad,
+        grad_norm,
+        config.convergence.max_iter,
         func_evals,
-        termination: TerminationReason::MaxIterations,
-        diagnostics: SolverDiagnostics::TrustRegion(diag),
-    }
+        TerminationReason::MaxIterations,
+        SolverDiagnostics::TrustRegion(diag),
+    )
 }
 
 /// Steihaug-Toint truncated CG for the trust-region subproblem.
@@ -335,6 +312,9 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
 ) -> (Vec<F>, usize) {
     let n = grad.len();
     let mut s = vec![F::zero(); n];
+    // Trial-step buffer, reused every CG iteration (fully overwritten
+    // before each read; swapped into `s` on the interior accept).
+    let mut s_next = vec![F::zero(); n];
     let mut r: Vec<F> = grad.to_vec();
     let mut d: Vec<F> = r.iter().map(|&ri| F::zero() - ri).collect();
     let mut r_dot_r = dot(&r, &r);
@@ -364,7 +344,6 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
         let alpha = r_dot_r / d_hd;
 
         // Check if step would leave the trust region
-        let mut s_next = vec![F::zero(); n];
         for i in 0..n {
             s_next[i] = s[i] + alpha * d[i];
         }
@@ -376,7 +355,7 @@ fn steihaug_cg<F: Float, O: Objective<F>>(
             return (s, cg_iter + 1);
         }
 
-        s = s_next;
+        std::mem::swap(&mut s, &mut s_next);
 
         // Update residual
         for i in 0..n {
@@ -508,6 +487,68 @@ mod tests {
         };
         let nan_result = trust_region(&mut obj, &[0.0, 0.0], &nan_config);
         assert_eq!(nan_result.termination, TerminationReason::NumericalError);
+    }
+
+    #[test]
+    fn steihaug_negative_curvature_exits_at_boundary() {
+        // hvp = -2v makes every direction negative-curvature (d_hd < 0), so
+        // CG must take the boundary exit on iteration one, reading the old
+        // (zero) step before writing it — the write pattern the reused
+        // trial-step buffer must preserve. The step runs to the boundary
+        // along -grad: grad = [3, 4] (norm 5), radius 1 → s = [-0.6, -0.8].
+        struct NegCurve;
+        impl Objective<f64> for NegCurve {
+            fn dim(&self) -> usize {
+                2
+            }
+            fn eval_grad(&mut self, _x: &[f64]) -> (f64, Vec<f64>) {
+                (0.0, vec![3.0, 4.0])
+            }
+            fn hvp(&mut self, _x: &[f64], v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+                (vec![3.0, 4.0], v.iter().map(|&vi| -2.0 * vi).collect())
+            }
+        }
+        let mut func_evals = 0usize;
+        let (s, iters) = steihaug_cg(
+            &mut NegCurve,
+            &[0.0, 0.0],
+            &[3.0, 4.0],
+            1.0,
+            10,
+            &mut func_evals,
+        );
+        assert_eq!(iters, 1);
+        assert!((s[0] - (-0.6)).abs() < 1e-12, "s = {s:?}");
+        assert!((s[1] - (-0.8)).abs() < 1e-12, "s = {s:?}");
+    }
+
+    #[test]
+    fn steihaug_boundary_exit_with_tiny_radius() {
+        // A well-conditioned quadratic (H = I) whose full Newton step lies
+        // far outside a tiny trust region: the first interior trial must
+        // trip the ||s_next|| >= radius branch, which reads the old step
+        // via boundary_tau before writing it in place.
+        struct Identity;
+        impl Objective<f64> for Identity {
+            fn dim(&self) -> usize {
+                2
+            }
+            fn eval_grad(&mut self, x: &[f64]) -> (f64, Vec<f64>) {
+                (0.5 * (x[0] * x[0] + x[1] * x[1]), x.to_vec())
+            }
+            fn hvp(&mut self, x: &[f64], v: &[f64]) -> (Vec<f64>, Vec<f64>) {
+                (x.to_vec(), v.to_vec())
+            }
+        }
+        let grad = vec![3.0, 4.0]; // Newton step has norm 5
+        let mut func_evals = 0usize;
+        let (s, iters) = steihaug_cg(&mut Identity, &[3.0, 4.0], &grad, 0.5, 10, &mut func_evals);
+        assert_eq!(iters, 1);
+        let norm_s = (s[0] * s[0] + s[1] * s[1]).sqrt();
+        assert!(
+            (norm_s - 0.5).abs() < 1e-12,
+            "step must land on the boundary, |s| = {norm_s}"
+        );
     }
 
     #[test]

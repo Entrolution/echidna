@@ -258,22 +258,10 @@ impl SparseImplicitContext {
         self.num_params
     }
 
-    /// Number of structural non-zeros in the full Jacobian pattern.
-    #[must_use]
-    pub fn nnz(&self) -> usize {
-        self.pattern.nnz()
-    }
-
     /// Number of structural non-zeros in the F_z block.
     #[must_use]
     pub fn fz_nnz(&self) -> usize {
         self.fz_indices.len()
-    }
-
-    /// Number of structural non-zeros in the F_x block.
-    #[must_use]
-    pub fn fx_nnz(&self) -> usize {
-        self.fx_indices.len()
     }
 }
 
