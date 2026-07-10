@@ -19,13 +19,9 @@ fn forward_dispatch<F: Float>(
         match opcodes[i] {
             OpCode::Input | OpCode::Const => continue,
             OpCode::Custom => {
-                let [a_idx, cb_idx] = arg_indices[i];
-                let a = values[a_idx as usize];
-                let b = custom_second_args
-                    .get(&(i as u32))
-                    .map(|&bi| values[bi as usize])
-                    .unwrap_or(F::zero());
-                values[i] = custom_ops[cb_idx as usize].eval(a, b);
+                let ops =
+                    super::decode_custom_operands(arg_indices, custom_second_args, &*values, i);
+                values[i] = custom_ops[ops.cb_idx as usize].eval(ops.a, ops.b);
             }
             op => {
                 let [a_idx, b_idx] = arg_indices[i];
@@ -213,7 +209,7 @@ impl<F: Float> super::BytecodeTape<F> {
             "input slots must be contiguous Input opcodes at the start of the tape"
         );
 
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         values_buf.clear();
         values_buf.resize(n, F::zero());
 

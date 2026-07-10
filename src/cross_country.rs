@@ -50,26 +50,39 @@ impl<F: Float> LinearizedGraph<F> {
 
         let zero = F::zero();
 
+        // Add the weighted edge src → i to both adjacency lists. The guard
+        // is load-bearing: constants contribute no derivative and zero
+        // partials carry nothing, so neither may enter the graph.
+        fn add_edge<F: Float>(
+            preds: &mut [Vec<(u32, F)>],
+            succs: &mut [Vec<(u32, F)>],
+            opcodes: &[OpCode],
+            i: usize,
+            src: u32,
+            w: F,
+        ) {
+            if opcodes[src as usize] != OpCode::Const && w != F::zero() {
+                preds[i].push((src, w));
+                succs[src as usize].push((i as u32, w));
+            }
+        }
+
         for i in 0..n {
             match opcodes[i] {
                 OpCode::Input | OpCode::Const => continue,
                 OpCode::Custom => {
-                    let [a_idx, cb_idx] = arg_indices[i];
-                    let a = values[a_idx as usize];
-                    let b_idx_opt = custom_second_args.get(&(i as u32));
-                    let b = b_idx_opt.map_or(zero, |&bi| values[bi as usize]);
+                    let ops = crate::bytecode_tape::decode_custom_operands(
+                        arg_indices,
+                        custom_second_args,
+                        values,
+                        i,
+                    );
                     let r = values[i];
-                    let (da, db) = custom_ops[cb_idx as usize].partials(a, b, r);
+                    let (da, db) = custom_ops[ops.cb_idx as usize].partials(ops.a, ops.b, r);
 
-                    if opcodes[a_idx as usize] != OpCode::Const && da != zero {
-                        preds[i].push((a_idx, da));
-                        succs[a_idx as usize].push((i as u32, da));
-                    }
-                    if let Some(&bi) = b_idx_opt {
-                        if opcodes[bi as usize] != OpCode::Const && db != zero {
-                            preds[i].push((bi, db));
-                            succs[bi as usize].push((i as u32, db));
-                        }
+                    add_edge(&mut preds, &mut succs, opcodes, i, ops.a_idx, da);
+                    if let Some(bi) = ops.b_idx {
+                        add_edge(&mut preds, &mut succs, opcodes, i, bi, db);
                     }
                 }
                 op => {
@@ -78,10 +91,7 @@ impl<F: Float> LinearizedGraph<F> {
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
                         let da = opcode::powi_reverse_partial(exp, a, values[i]);
-                        if opcodes[a_idx as usize] != OpCode::Const && da != zero {
-                            preds[i].push((a_idx, da));
-                            succs[a_idx as usize].push((i as u32, da));
-                        }
+                        add_edge(&mut preds, &mut succs, opcodes, i, a_idx, da);
                         continue;
                     }
                     let b = if b_idx != UNUSED {
@@ -93,27 +103,24 @@ impl<F: Float> LinearizedGraph<F> {
                     let (da, db) = opcode::reverse_partials(op, a, b, r);
 
                     // Edge from first argument
-                    if opcodes[a_idx as usize] != OpCode::Const && da != zero {
-                        preds[i].push((a_idx, da));
-                        succs[a_idx as usize].push((i as u32, da));
-                    }
+                    add_edge(&mut preds, &mut succs, opcodes, i, a_idx, da);
 
                     // Edge from second argument (binary ops only)
-                    if b_idx != UNUSED && opcodes[b_idx as usize] != OpCode::Const && db != zero {
-                        preds[i].push((b_idx, db));
-                        succs[b_idx as usize].push((i as u32, db));
+                    if b_idx != UNUSED {
+                        add_edge(&mut preds, &mut succs, opcodes, i, b_idx, db);
                     }
                 }
             }
         }
 
         // Classify nodes: intermediate iff not input, not const, not output
-        let mut is_intermediate = vec![false; n];
-        for i in 0..n {
-            is_intermediate[i] = i >= num_inputs
-                && opcodes[i] != OpCode::Const
-                && !output_indices.contains(&(i as u32));
-        }
+        let is_intermediate: Vec<bool> = (0..n)
+            .map(|i| {
+                i >= num_inputs
+                    && opcodes[i] != OpCode::Const
+                    && !output_indices.contains(&(i as u32))
+            })
+            .collect();
 
         LinearizedGraph {
             num_inputs,

@@ -42,6 +42,74 @@ fn dualvec_1_matches_dual() {
             DualVec::<f64, 1>::new(-2.0, [1.0]).abs(),
         ),
         ("powi3", x_dual.powi(3), x_vec.powi(3)),
+        (
+            "atanh",
+            Dual::new(0.5, 1.0).atanh(),
+            DualVec::<f64, 1>::new(0.5, [1.0]).atanh(),
+        ),
+        (
+            "log",
+            x_dual.log(Dual::new(3.0, 0.5)),
+            x_vec.log(DualVec::<f64, 1>::new(3.0, [0.5])),
+        ),
+        // Step functions: primal moves, derivative is structurally zero.
+        (
+            "signum",
+            Dual::new(-2.5, 1.0).signum(),
+            DualVec::<f64, 1>::new(-2.5, [1.0]).signum(),
+        ),
+        (
+            "floor",
+            Dual::new(2.7, 1.0).floor(),
+            DualVec::<f64, 1>::new(2.7, [1.0]).floor(),
+        ),
+        (
+            "ceil",
+            Dual::new(2.3, 1.0).ceil(),
+            DualVec::<f64, 1>::new(2.3, [1.0]).ceil(),
+        ),
+        (
+            "round",
+            Dual::new(2.6, 1.0).round(),
+            DualVec::<f64, 1>::new(2.6, [1.0]).round(),
+        ),
+        (
+            "trunc",
+            Dual::new(-2.7, 1.0).trunc(),
+            DualVec::<f64, 1>::new(-2.7, [1.0]).trunc(),
+        ),
+        // fract keeps the tangent (d/dx (x - floor x) = 1 between kinks).
+        (
+            "fract",
+            Dual::new(2.7, 3.0).fract(),
+            DualVec::<f64, 1>::new(2.7, [3.0]).fract(),
+        ),
+        // max/min select an argument wholesale (value AND tangent).
+        (
+            "max_lhs_wins",
+            Dual::new(3.0, 1.0).max(Dual::new(2.0, 0.5)),
+            DualVec::<f64, 1>::new(3.0, [1.0]).max(DualVec::<f64, 1>::new(2.0, [0.5])),
+        ),
+        (
+            "max_tie_takes_self",
+            Dual::new(2.0, 1.0).max(Dual::new(2.0, 0.5)),
+            DualVec::<f64, 1>::new(2.0, [1.0]).max(DualVec::<f64, 1>::new(2.0, [0.5])),
+        ),
+        (
+            "max_rhs_nan_takes_self",
+            Dual::new(2.0, 1.0).max(Dual::new(f64::NAN, 0.5)),
+            DualVec::<f64, 1>::new(2.0, [1.0]).max(DualVec::<f64, 1>::new(f64::NAN, [0.5])),
+        ),
+        (
+            "min_rhs_wins",
+            Dual::new(3.0, 1.0).min(Dual::new(2.0, 0.5)),
+            DualVec::<f64, 1>::new(3.0, [1.0]).min(DualVec::<f64, 1>::new(2.0, [0.5])),
+        ),
+        (
+            "min_tie_takes_self",
+            Dual::new(2.0, 1.0).min(Dual::new(2.0, 0.5)),
+            DualVec::<f64, 1>::new(2.0, [1.0]).min(DualVec::<f64, 1>::new(2.0, [0.5])),
+        ),
     ];
 
     for (name, dual, dvec) in ops {

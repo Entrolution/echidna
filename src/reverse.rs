@@ -29,6 +29,7 @@ impl<F: Float> From<F> for Reverse<F> {
 impl<F: Float> Reverse<F> {
     /// Create a constant (not tracked on tape).
     #[inline]
+    #[must_use]
     pub fn constant(value: F) -> Self {
         Reverse {
             value,
@@ -39,6 +40,7 @@ impl<F: Float> Reverse<F> {
     /// Create a reverse variable from a tape allocation.
     /// Typically only used internally by the API layer and tests.
     #[inline]
+    #[must_use]
     pub fn from_tape(value: F, index: u32) -> Self {
         Reverse { value, index }
     }
@@ -47,6 +49,19 @@ impl<F: Float> Reverse<F> {
     #[inline]
     pub fn index(&self) -> u32 {
         self.index
+    }
+}
+
+impl<F: Float> crate::tape::Tape<F> {
+    /// Register every element of `x` as a tape variable, returning the
+    /// tracked [`Reverse`] values in order.
+    pub(crate) fn new_variables(&mut self, x: &[F]) -> Vec<Reverse<F>> {
+        x.iter()
+            .map(|&val| {
+                let (idx, v) = self.new_variable(val);
+                Reverse::from_tape(v, idx)
+            })
+            .collect()
     }
 }
 

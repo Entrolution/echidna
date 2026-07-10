@@ -65,6 +65,32 @@ pub(crate) fn detect_sparsity_impl(
     // Deduplicated via sort + dedup at the end.
     let mut interactions: Vec<(u32, u32)> = Vec::new();
 
+    // Push every unordered pair within `bits` (including self-pairs),
+    // normalized to lower-triangle (row >= col) order.
+    fn push_upper_pairs(out: &mut Vec<(u32, u32)>, bits: &[u32]) {
+        for ii in 0..bits.len() {
+            for jj in 0..=ii {
+                let (r, c) = if bits[ii] >= bits[jj] {
+                    (bits[ii], bits[jj])
+                } else {
+                    (bits[jj], bits[ii])
+                };
+                out.push((r, c));
+            }
+        }
+    }
+
+    // Push every cross pair between two dependency sets, normalized the
+    // same way.
+    fn push_cross_pairs(out: &mut Vec<(u32, u32)>, bits_a: &[u32], bits_b: &[u32]) {
+        for &va in bits_a {
+            for &vb in bits_b {
+                let (r, c) = if va >= vb { (va, vb) } else { (vb, va) };
+                out.push((r, c));
+            }
+        }
+    }
+
     let mut input_idx = 0u32;
     for i in 0..opcodes.len() {
         match opcodes[i] {
@@ -97,16 +123,7 @@ pub(crate) fn detect_sparsity_impl(
                         // owned Vec, so the pair loop below borrows nothing
                         // from deps.
                         let bits = extract_bits(&deps[i], num_inputs);
-                        for ii in 0..bits.len() {
-                            for jj in 0..=ii {
-                                let (r, c) = if bits[ii] >= bits[jj] {
-                                    (bits[ii], bits[jj])
-                                } else {
-                                    (bits[jj], bits[ii])
-                                };
-                                interactions.push((r, c));
-                            }
-                        }
+                        push_upper_pairs(&mut interactions, &bits);
                     }
                     OpClass::BinaryNonlinear => {
                         // For Custom ops, arg_indices[i][1] is the callback index,
@@ -125,49 +142,17 @@ pub(crate) fn detect_sparsity_impl(
                             union_into(&mut deps, i, a);
                             union_into(&mut deps, i, b);
                             // Cross-pairs between operand dependency sets
-                            for &va in &bits_a {
-                                for &vb in &bits_b {
-                                    let (r, c) = if va >= vb { (va, vb) } else { (vb, va) };
-                                    interactions.push((r, c));
-                                }
-                            }
+                            push_cross_pairs(&mut interactions, &bits_a, &bits_b);
                             // Within-operand second derivatives (non-Mul ops)
                             if op != OpCode::Mul {
-                                for ii in 0..bits_a.len() {
-                                    for jj in 0..=ii {
-                                        let (r, c) = if bits_a[ii] >= bits_a[jj] {
-                                            (bits_a[ii], bits_a[jj])
-                                        } else {
-                                            (bits_a[jj], bits_a[ii])
-                                        };
-                                        interactions.push((r, c));
-                                    }
-                                }
-                                for ii in 0..bits_b.len() {
-                                    for jj in 0..=ii {
-                                        let (r, c) = if bits_b[ii] >= bits_b[jj] {
-                                            (bits_b[ii], bits_b[jj])
-                                        } else {
-                                            (bits_b[jj], bits_b[ii])
-                                        };
-                                        interactions.push((r, c));
-                                    }
-                                }
+                                push_upper_pairs(&mut interactions, &bits_a);
+                                push_upper_pairs(&mut interactions, &bits_b);
                             }
                         } else {
                             // Unary custom op: treat as UnaryNonlinear
                             union_into(&mut deps, i, a);
                             let bits = extract_bits(&deps[i], num_inputs);
-                            for ii in 0..bits.len() {
-                                for jj in 0..=ii {
-                                    let (r, c) = if bits[ii] >= bits[jj] {
-                                        (bits[ii], bits[jj])
-                                    } else {
-                                        (bits[jj], bits[ii])
-                                    };
-                                    interactions.push((r, c));
-                                }
-                            }
+                            push_upper_pairs(&mut interactions, &bits);
                         }
                     }
                     OpClass::ZeroDerivative => {

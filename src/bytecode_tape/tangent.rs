@@ -32,19 +32,19 @@ impl<F: Float> super::BytecodeTape<F> {
             // is the correct first-order chain rule. Chained custom ops stay exact because
             // each op's primal matches self.values[i] (computed by the preceding forward()).
             // For full second-order accuracy through custom ops, use forward_tangent_dual.
-            let [a_idx, cb_idx] = self.arg_indices[i];
-            let a_primal = self.values[a_idx as usize];
-            let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-            let b_primal = b_idx_opt
-                .map(|bi| self.values[bi as usize])
-                .unwrap_or(F::zero());
-            let result = self.custom_ops[cb_idx as usize].eval(a_primal, b_primal);
-            let (da, db) = self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, result);
+            let ops = super::decode_custom_operands(
+                &self.arg_indices,
+                &self.custom_second_args,
+                &self.values,
+                i,
+            );
+            let result = self.custom_ops[ops.cb_idx as usize].eval(ops.a, ops.b);
+            let (da, db) = self.custom_ops[ops.cb_idx as usize].partials(ops.a, ops.b, result);
             let result_t = T::from(result).unwrap();
             let da_t = T::from(da).unwrap();
             let db_t = T::from(db).unwrap();
-            let a_re_t = T::from(a_primal).unwrap();
-            let b_re_t = T::from(b_primal).unwrap();
+            let a_re_t = T::from(ops.a).unwrap();
+            let b_re_t = T::from(ops.b).unwrap();
             result_t + da_t * (a_t - a_re_t) + db_t * (b_t - b_re_t)
         });
     }
@@ -106,7 +106,7 @@ impl<F: Float> super::BytecodeTape<F> {
             "wrong number of inputs"
         );
 
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         buf.clear();
         buf.resize(n, T::zero());
 
@@ -159,14 +159,14 @@ impl<F: Float> super::BytecodeTape<F> {
     ) {
         self.reverse_tangent_inner(tangent_vals, buf, |i| {
             // First-order: convert primal-float partials to T.
-            let [a_idx, cb_idx] = self.arg_indices[i];
-            let a_primal = self.values[a_idx as usize];
-            let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-            let b_primal = b_idx_opt
-                .map(|bi| self.values[bi as usize])
-                .unwrap_or(F::zero());
+            let ops = super::decode_custom_operands(
+                &self.arg_indices,
+                &self.custom_second_args,
+                &self.values,
+                i,
+            );
             let r_primal = self.values[i];
-            let (da, db) = self.custom_ops[cb_idx as usize].partials(a_primal, b_primal, r_primal);
+            let (da, db) = self.custom_ops[ops.cb_idx as usize].partials(ops.a, ops.b, r_primal);
             (T::from(da).unwrap(), T::from(db).unwrap())
         });
     }
@@ -194,7 +194,7 @@ impl<F: Float> super::BytecodeTape<F> {
         buf: &mut Vec<T>,
         custom_partials: impl Fn(usize) -> (T, T),
     ) {
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         buf.clear();
         buf.resize(n, T::zero());
         buf[self.output_index as usize] = T::one();
@@ -280,6 +280,9 @@ impl<F: Float> super::BytecodeTape<F> {
         dual_vals_buf: &mut Vec<Dual<F>>,
         adjoint_buf: &mut Vec<Dual<F>>,
     ) -> (Vec<F>, Vec<F>) {
+        // Deliberately not assert_scalar_output: the HVP has a better
+        // vector-valued remedy (jacobian + cotangent) than the generic
+        // record-one-output-at-a-time advice.
         assert_eq!(
             self.num_outputs(),
             1,
@@ -329,13 +332,7 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Returns `(value, gradient, hessian)` where `hessian[i][j] = ∂²f/∂x_i∂x_j`.
     /// The tape is not mutated.
     pub fn hessian(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "hessian is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("hessian");
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -346,16 +343,9 @@ impl<F: Float> super::BytecodeTape<F> {
         let gradient = vec![F::zero(); n];
         let mut value = F::zero();
 
-        // Constant-output tape (n == 0): the dual-column loop never runs,
-        // so `value` would stay at zero. Recover the true constant by
-        // replaying the tape's primal forward pass.
+        // Constant-output tape (n == 0): no columns to sweep.
         if n == 0 {
-            let mut values_buf = Vec::new();
-            self.forward_into(&[], &mut values_buf);
-            if let Some(&v) = values_buf.get(self.output_index as usize) {
-                value = v;
-            }
-            return (value, gradient, hessian);
+            return (self.constant_output_value(), gradient, hessian);
         }
 
         let mut hessian = hessian;
@@ -400,13 +390,7 @@ impl<F: Float> super::BytecodeTape<F> {
             "hessian_vec: custom ops produce approximate (first-order) second derivatives; \
              use eval_forward with Dual<Dual<F>> for exact Hessians through custom ops"
         );
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "hessian_vec is defined for scalar-output tapes only; this tape has {} \
-             outputs.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("hessian_vec");
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -417,15 +401,9 @@ impl<F: Float> super::BytecodeTape<F> {
         let gradient = vec![F::zero(); n];
         let mut value = F::zero();
 
-        // Constant-output tape (n == 0): the batch loop never runs so `value`
-        // would stay at zero. Recover the true constant via a primal pass.
+        // Constant-output tape (n == 0): no batches to sweep.
         if n == 0 {
-            let mut values_buf = Vec::new();
-            self.forward_into(&[], &mut values_buf);
-            if let Some(&v) = values_buf.get(self.output_index as usize) {
-                value = v;
-            }
-            return (value, gradient, hessian);
+            return (self.constant_output_value(), gradient, hessian);
         }
 
         let mut hessian = hessian;
@@ -485,13 +463,7 @@ impl<F: Float> super::BytecodeTape<F> {
     /// Uses `Dual<Dual<F>>` (nested dual numbers): inner tangent for `v1`,
     /// outer tangent for `v2`.
     pub fn third_order_hvvp(&self, x: &[F], v1: &[F], v2: &[F]) -> (Vec<F>, Vec<F>, Vec<F>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "third_order_hvvp is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("third_order_hvvp");
         assert!(
             self.custom_ops.is_empty(),
             "third_order_hvvp: custom ops produce approximate (first-order) higher-order \

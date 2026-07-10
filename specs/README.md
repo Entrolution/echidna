@@ -120,14 +120,14 @@ source files.
 | TLA+ Invariant | Anchor site | How the Rust code upholds it |
 |---------------|-------------|------------------------------|
 | `InputPrefixInvariant` | `src/bytecode_tape/mod.rs` | `new_input` pushes `OpCode::Input` with `[UNUSED, UNUSED]` before any non-input op |
-| `DAGOrderInvariant` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts `arg0 < i` and `arg1 < i` for non-Input/Const/Powi |
-| `ValidRefsInvariant` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts every arg index `< tape length` |
-| `OutputValidInvariant` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts `output_index < n` and each `output_indices[i] < n` |
-| `InputsPreserved` | `src/bytecode_tape/optimize.rs` | `PostOptValid` asserts Input-opcode count equals `num_inputs` |
+| `DAGOrderInvariant` | `src/bytecode_tape/mod.rs` | `validate()` rejects `arg0 >= i` / `arg1 >= i` (Powi/Custom slot-1 metadata exempt) |
+| `ValidRefsInvariant` | `src/bytecode_tape/mod.rs` | subsumed by `validate()`'s strictly-earlier operand checks |
+| `OutputValidInvariant` | `src/bytecode_tape/mod.rs` | `validate()` rejects `output_index >= n` and any `output_indices[i] >= n` |
+| `InputsPreserved` | `src/bytecode_tape/mod.rs` | `validate()` requires Input opcodes to be exactly the first `num_inputs` entries |
 | `CSERemapMonotone` | `src/bytecode_tape/optimize.rs` | CSE uses first-seen canonical, so `remap[i] <= i` |
 | `CSERemapIdempotent` | `src/bytecode_tape/optimize.rs` | canonical entries are not remapped, giving `remap[remap[i]] = remap[i]` |
 | `DCEInputsReachable` | `src/bytecode_tape/optimize.rs` | `dce_compact` marks the first `num_inputs` slots reachable unconditionally |
-| `PostOptValid` | `src/bytecode_tape/optimize.rs` | the `debug_assertions` block in `optimize()` is the runtime structural check |
+| `PostOptValid` | `src/bytecode_tape/optimize.rs` | `optimize()` re-runs `validate()` under `debug_assertions` as the runtime structural check |
 | `IdempotencyProperty` | `src/bytecode_tape/optimize.rs` | property exercised by `tests/spec_invariants_tape_optimize.rs` |
 
 ## Keeping Specs and Code in Sync
@@ -174,7 +174,7 @@ test (usually both) will break when the code diverges.
 |--------------|-----------|
 | `opcodes` | `self.opcodes: Vec<OpCode>` (abstracted to 5 kinds) |
 | `args` | `self.arg_indices: Vec<[u32; 2]>` |
-| `numEntries` | `self.opcodes.len()` / `self.num_variables` |
+| `numEntries` | `self.opcodes.len()` (the serde payload keeps a `num_variables` consistency stamp) |
 | `outputIdx` | `self.output_index` |
 | `remap` | `remap: Vec<u32>` in `cse()` |
 | `seen` | `seen: HashMap<(OpCode, u32, u32), u32>` in `cse()` |

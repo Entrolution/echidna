@@ -177,3 +177,43 @@ fn sparse_hessian_on_scalar_output_still_works() {
     // H of x² + y² is diag(2, 2); the two diagonal entries are present.
     assert!(h.iter().any(|&v| (v - 2.0).abs() < 1e-12));
 }
+
+// ── Thread-local active-pointer guards ──
+//
+// Both tape families share one reentrance/null-check mechanism; these pin
+// its two panic paths per family (nothing else in the suite attempts a
+// reentrant access or a guardless one).
+
+#[test]
+#[should_panic(expected = "No active tape")]
+fn with_active_tape_without_guard_panics() {
+    echidna::tape::with_active_tape::<f64, _>(|_| ());
+}
+
+#[test]
+#[should_panic(expected = "No active bytecode tape")]
+fn with_active_btape_without_guard_panics() {
+    echidna::bytecode_tape::with_active_btape::<f64, _>(|_| ());
+}
+
+#[test]
+#[should_panic(expected = "reentrant with_active_tape")]
+fn reentrant_with_active_tape_panics() {
+    use echidna::tape::{with_active_tape, Tape, TapeGuard};
+    let mut tape: Tape<f64> = Tape::new();
+    let _guard = TapeGuard::new(&mut tape);
+    with_active_tape::<f64, _>(|_| {
+        with_active_tape::<f64, _>(|_| ());
+    });
+}
+
+#[test]
+#[should_panic(expected = "reentrant with_active_btape")]
+fn reentrant_with_active_btape_panics() {
+    use echidna::bytecode_tape::{with_active_btape, BtapeGuard};
+    let mut tape: BytecodeTape<f64> = BytecodeTape::new();
+    let _guard = BtapeGuard::new(&mut tape);
+    with_active_btape::<f64, _>(|_| {
+        with_active_btape::<f64, _>(|_| ());
+    });
+}

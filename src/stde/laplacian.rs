@@ -160,17 +160,9 @@ pub fn hessian_diagonal_with_buf<F: Float>(
     let mut diag = Vec::with_capacity(n);
     let mut value = F::zero();
 
-    // Constant-output tape (n == 0): the basis-vector loop never runs so
-    // `value` would stay at zero. Recover the true constant via a primal
-    // pass — the same convention as `hessian`, `hessian_vec`, and the
-    // sparse counterparts.
+    // Constant-output tape (n == 0): no basis vectors to sweep.
     if n == 0 {
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        if let Some(&v) = values_buf.get(tape.output_index()) {
-            value = v;
-        }
-        return (value, diag);
+        return (tape.constant_output_value(), diag);
     }
 
     // Build basis vector once, mutate the hot coordinate

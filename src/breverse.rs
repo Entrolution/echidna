@@ -1,13 +1,13 @@
 //! Bytecode-tape reverse-mode AD variable.
 //!
 //! [`BReverse<F>`] is analogous to [`Reverse<F>`](crate::Reverse) but records
-//! opcodes to a [`BytecodeTape`](crate::bytecode_tape::BytecodeTape) instead
+//! opcodes to a [`BytecodeTape`] instead
 //! of precomputed multipliers to an Adept-style tape. This allows the tape to
 //! be re-evaluated at different inputs without re-recording.
 
 use std::fmt::{self, Display};
 
-use crate::bytecode_tape::{BtapeThreadLocal, CustomOpHandle, CONSTANT};
+use crate::bytecode_tape::{BtapeThreadLocal, BytecodeTape, CustomOpHandle, CONSTANT};
 use crate::float::Float;
 
 /// Debug-only sentinel for `BReverse` values without tape provenance
@@ -16,11 +16,37 @@ use crate::float::Float;
 #[cfg(debug_assertions)]
 pub(crate) const TAPE_ID_UNTRACKED: u64 = 0;
 
+/// Ensure a BReverse operand has a valid tape index. If it's a constant
+/// (index == CONSTANT), promote it to a `Const` entry on the tape.
+#[inline]
+pub(crate) fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 {
+    #[cfg(debug_assertions)]
+    x.debug_assert_same_tape(tape);
+    if x.index == CONSTANT {
+        tape.push_const(x.value)
+    } else {
+        x.index
+    }
+}
+
+impl<F: Float> BytecodeTape<F> {
+    /// Register every element of `x` as an input variable, returning the
+    /// tracked [`BReverse`] values in order.
+    pub(crate) fn new_inputs(&mut self, x: &[F]) -> Vec<BReverse<F>> {
+        x.iter()
+            .map(|&val| {
+                let idx = self.new_input(val);
+                BReverse::from_tape_of(self, val, idx)
+            })
+            .collect()
+    }
+}
+
 /// Bytecode-tape reverse-mode AD variable.
 ///
 /// Same layout as [`Reverse<F>`](crate::Reverse) (12 bytes of payload for
 /// `f64` — 16 with alignment padding — and `Copy`) in release builds. Operations record opcodes to the thread-local
-/// [`BytecodeTape`](crate::bytecode_tape::BytecodeTape).
+/// [`BytecodeTape`].
 ///
 /// # Tape identity
 ///
@@ -50,6 +76,7 @@ impl<F: Float> From<F> for BReverse<F> {
 impl<F: Float> BReverse<F> {
     /// Create a constant (not tracked on tape).
     #[inline]
+    #[must_use]
     pub fn constant(value: F) -> Self {
         BReverse {
             value,
@@ -65,6 +92,7 @@ impl<F: Float> BReverse<F> {
     /// the debug cross-tape check; prefer indices produced by an active
     /// recording.
     #[inline]
+    #[must_use]
     pub fn from_tape(value: F, index: u32) -> Self {
         BReverse {
             value,
@@ -134,13 +162,7 @@ impl<F: Float> BReverse<F> {
         F: BtapeThreadLocal,
     {
         let index = crate::bytecode_tape::with_active_btape(|t| {
-            #[cfg(debug_assertions)]
-            self.debug_assert_same_tape(t);
-            let xi = if self.index == CONSTANT {
-                t.push_const(self.value)
-            } else {
-                self.index
-            };
+            let xi = ensure_on_tape(&self, t);
             t.push_custom_unary(xi, handle, value)
         });
         BReverse::from_active_recording(value, index)
@@ -152,21 +174,8 @@ impl<F: Float> BReverse<F> {
         F: BtapeThreadLocal,
     {
         let index = crate::bytecode_tape::with_active_btape(|t| {
-            #[cfg(debug_assertions)]
-            {
-                self.debug_assert_same_tape(t);
-                other.debug_assert_same_tape(t);
-            }
-            let li = if self.index == CONSTANT {
-                t.push_const(self.value)
-            } else {
-                self.index
-            };
-            let ri = if other.index == CONSTANT {
-                t.push_const(other.value)
-            } else {
-                other.index
-            };
+            let li = ensure_on_tape(&self, t);
+            let ri = ensure_on_tape(&other, t);
             t.push_custom_binary(li, ri, handle, value)
         });
         BReverse::from_active_recording(value, index)

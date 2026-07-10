@@ -6,23 +6,10 @@ use std::ops::{
     Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign,
 };
 
-use crate::breverse::BReverse;
-use crate::bytecode_tape::{self, BtapeThreadLocal, BytecodeTape, CONSTANT};
+use crate::breverse::{ensure_on_tape, BReverse};
+use crate::bytecode_tape::{self, BtapeThreadLocal};
 use crate::float::Float;
 use crate::opcode::{OpCode, UNUSED};
-
-/// Ensure a BReverse operand has a valid tape index. If it's a constant
-/// (index == CONSTANT), promote it to a `Const` entry on the tape.
-#[inline]
-pub(super) fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 {
-    #[cfg(debug_assertions)]
-    x.debug_assert_same_tape(tape);
-    if x.index == CONSTANT {
-        tape.push_const(x.value)
-    } else {
-        x.index
-    }
-}
 
 /// Record a binary op, promoting constants as needed.
 #[inline]

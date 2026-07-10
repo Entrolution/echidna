@@ -973,3 +973,69 @@ fn dce_for_outputs_rejects_out_of_range_index() {
     let (mut tape, _) = record(|x: &[BReverse<f64>]| x[0] * x[0], &[3.0_f64]);
     tape.dead_code_elimination_for_outputs(&[9999]);
 }
+
+// ── Optimization over binary custom ops ──
+
+#[test]
+fn optimize_preserves_binary_custom_op_side_table() {
+    // A binary custom op stores its second operand in the custom_second_args
+    // side table, which DCE compaction must remap alongside the arrays and
+    // CSE must leave keyed to the surviving entry. Trigger both passes —
+    // a duplicated subexpression for CSE and an unused intermediate for
+    // DCE — and check value + gradient at a fresh point against the
+    // unoptimized tape.
+    use echidna::bytecode_tape::BtapeGuard;
+    use echidna::CustomOp;
+    use std::sync::Arc;
+
+    struct WeightedProduct;
+    impl CustomOp<f64> for WeightedProduct {
+        fn eval(&self, a: f64, b: f64) -> f64 {
+            3.0 * a * b
+        }
+        fn partials(&self, a: f64, b: f64, _r: f64) -> (f64, f64) {
+            (3.0 * b, 3.0 * a)
+        }
+    }
+
+    let x = [1.5_f64, -2.0];
+    let build = |x: &[f64]| {
+        let mut tape = echidna::BytecodeTape::with_capacity(32);
+        let h = tape.register_custom(Arc::new(WeightedProduct));
+        let xi = tape.new_input(x[0]);
+        let yi = tape.new_input(x[1]);
+        let (xr, yr) = (BReverse::from_tape(x[0], xi), BReverse::from_tape(x[1], yi));
+        let out = {
+            let _guard = BtapeGuard::new(&mut tape);
+            let s1 = xr * yr; // duplicated subexpression (CSE fodder)
+            let s2 = xr * yr;
+            let _dead = s1 + BReverse::constant(7.0); // unused (DCE fodder)
+            let c = s1.custom_binary(s2, h, 3.0 * (s1.value() * s2.value()));
+            c + xr
+        };
+        tape.set_output(out.index());
+        tape
+    };
+
+    let mut plain = build(&x);
+    let mut optimized = build(&x);
+    optimized.optimize();
+    assert!(
+        optimized.num_variables_count() < plain.num_variables_count(),
+        "optimize() should shrink the tape (CSE + DCE both firing)"
+    );
+
+    let x_new = [0.25_f64, 4.0];
+    let (v_plain, v_opt) = {
+        plain.forward(&x_new);
+        optimized.forward(&x_new);
+        (plain.output_value(), optimized.output_value())
+    };
+    assert_relative_eq!(v_plain, v_opt, max_relative = 1e-12);
+
+    let g_plain = plain.gradient(&x_new);
+    let g_opt = optimized.gradient(&x_new);
+    for (a, b) in g_plain.iter().zip(g_opt.iter()) {
+        assert_relative_eq!(a, b, max_relative = 1e-12);
+    }
+}

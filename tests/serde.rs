@@ -234,6 +234,39 @@ fn corrupt_payload_baseline_roundtrips() {
 }
 
 #[test]
+fn serialized_payload_carries_num_variables() {
+    // Wire-format pin: the tape derives its entry count from `opcodes.len()`
+    // internally, but the payload must keep the `num_variables` field so
+    // pre-existing readers and writers stay compatible.
+    let v = tape_value();
+    let nv = v["num_variables"]
+        .as_u64()
+        .expect("payload must carry a numeric num_variables field");
+    assert_eq!(nv as usize, v["opcodes"].as_array().unwrap().len());
+}
+
+#[test]
+fn deserialize_rejects_num_variables_mismatch() {
+    // `num_variables` is a consistency stamp on the wire; a payload whose
+    // stamp disagrees with `opcodes.len()` must be rejected at the explicit
+    // deserialize check (structural validation cannot see the transmitted
+    // value once the in-memory tape derives the count).
+    let mut v = tape_value();
+    let nv = v["num_variables"].as_u64().unwrap();
+    v["num_variables"] = serde_json::Value::from(nv + 1);
+    assert_rejected(v, "num_variables mismatch");
+}
+
+#[test]
+fn deserialize_rejects_args_on_input_entry() {
+    // Input entries are leaves; a payload giving one a real operand index
+    // must be rejected even though the index is in bounds.
+    let mut v = tape_value();
+    v["arg_indices"][0] = serde_json::json!([0u32, 0u32]);
+    assert_rejected(v, "Input entry with args");
+}
+
+#[test]
 fn deserialize_rejects_input_opcode_after_prefix() {
     let mut v = tape_value();
     let last = last_real_op(&v);

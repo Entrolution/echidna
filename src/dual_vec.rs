@@ -4,6 +4,7 @@
 //! enabling vectorized Jacobian columns or batched Hessian computation via
 //! forward-over-reverse mode.
 
+use crate::dual::forward_elementary_methods;
 use std::fmt::{self, Display};
 
 use crate::kernels;
@@ -27,10 +28,7 @@ pub struct DualVec<F: Float, const N: usize> {
 
 impl<F: Float, const N: usize> Default for DualVec<F, N> {
     fn default() -> Self {
-        DualVec {
-            re: F::zero(),
-            eps: [F::zero(); N],
-        }
+        Self::constant(F::zero())
     }
 }
 
@@ -54,12 +52,14 @@ impl<F: Float, const N: usize> From<F> for DualVec<F, N> {
 impl<F: Float, const N: usize> DualVec<F, N> {
     /// Create a new batched dual number.
     #[inline]
+    #[must_use]
     pub fn new(re: F, eps: [F; N]) -> Self {
         DualVec { re, eps }
     }
 
     /// Create a constant (zero derivatives in all lanes).
     #[inline]
+    #[must_use]
     pub fn constant(re: F) -> Self {
         DualVec {
             re,
@@ -69,6 +69,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
 
     /// Create a variable with unit derivative in the specified lane.
     #[inline]
+    #[must_use]
     pub fn with_tangent(re: F, lane: usize) -> Self {
         DualVec {
             re,
@@ -99,50 +100,9 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         }
     }
 
+    forward_elementary_methods!();
+
     // -- Powers --
-
-    /// Reciprocal (1/x).
-    #[inline]
-    pub fn recip(self) -> Self {
-        // See `Dual::recip` — `chain`'s structural-zero short-circuit keeps
-        // constant lanes at exactly 0 at the x = 0 singularity.
-        let inv = F::one() / self.re;
-        self.chain(inv, -inv * inv)
-    }
-
-    /// Square root.
-    #[inline]
-    pub fn sqrt(self) -> Self {
-        let s = self.re.sqrt();
-        let two = F::one() + F::one();
-        self.chain(s, F::one() / (two * s))
-    }
-
-    /// Cube root.
-    #[inline]
-    pub fn cbrt(self) -> Self {
-        let c = self.re.cbrt();
-        let three = F::from(3.0).unwrap();
-        self.chain(c, F::one() / (three * c * c))
-    }
-
-    /// Integer power.
-    #[inline]
-    pub fn powi(self, n: i32) -> Self {
-        if n == 0 {
-            return DualVec {
-                re: F::one(),
-                eps: [F::zero(); N],
-            };
-        }
-        let val = self.re.powi(n);
-        let deriv = if n == i32::MIN {
-            F::from(n).unwrap() * val / self.re
-        } else {
-            F::from(n).unwrap() * self.re.powi(n - 1)
-        };
-        self.chain(val, deriv)
-    }
 
     /// Floating-point power.
     #[inline]
@@ -220,111 +180,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         }
     }
 
-    // -- Exp/Log --
-
-    /// Natural exponential (e^x).
-    #[inline]
-    pub fn exp(self) -> Self {
-        let e = self.re.exp();
-        self.chain(e, e)
-    }
-
-    /// Base-2 exponential (2^x).
-    #[inline]
-    pub fn exp2(self) -> Self {
-        let e = self.re.exp2();
-        self.chain(e, e * F::LN_2())
-    }
-
-    /// e^x - 1, accurate near zero.
-    #[inline]
-    pub fn exp_m1(self) -> Self {
-        self.chain(self.re.exp_m1(), self.re.exp())
-    }
-
-    /// Natural logarithm.
-    #[inline]
-    pub fn ln(self) -> Self {
-        self.chain(self.re.ln(), kernels::ln_deriv(self.re))
-    }
-
-    /// Base-2 logarithm.
-    #[inline]
-    pub fn log2(self) -> Self {
-        self.chain(self.re.log2(), kernels::log2_deriv(self.re))
-    }
-
-    /// Base-10 logarithm.
-    #[inline]
-    pub fn log10(self) -> Self {
-        self.chain(self.re.log10(), kernels::log10_deriv(self.re))
-    }
-
-    /// ln(1+x), accurate near zero.
-    #[inline]
-    pub fn ln_1p(self) -> Self {
-        self.chain(self.re.ln_1p(), kernels::ln_1p_deriv(self.re))
-    }
-
-    /// Logarithm with given base.
-    #[inline]
-    pub fn log(self, base: Self) -> Self {
-        self.ln() / base.ln()
-    }
-
     // -- Trig --
-
-    /// Sine.
-    #[inline]
-    pub fn sin(self) -> Self {
-        self.chain(self.re.sin(), self.re.cos())
-    }
-
-    /// Cosine.
-    #[inline]
-    pub fn cos(self) -> Self {
-        self.chain(self.re.cos(), -self.re.sin())
-    }
-
-    /// Tangent.
-    #[inline]
-    pub fn tan(self) -> Self {
-        let c = self.re.cos();
-        self.chain(self.re.tan(), F::one() / (c * c))
-    }
-
-    /// Simultaneous sine and cosine.
-    #[inline]
-    pub fn sin_cos(self) -> (Self, Self) {
-        // Delegate to `chain` so the structural-zero tangent convention
-        // cannot drift from `sin`/`cos`.
-        let (s, c) = self.re.sin_cos();
-        (self.chain(s, c), self.chain(c, -s))
-    }
-
-    /// Arcsine.
-    #[inline]
-    pub fn asin(self) -> Self {
-        self.chain(
-            self.re.asin(),
-            F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
-        )
-    }
-
-    /// Arccosine.
-    #[inline]
-    pub fn acos(self) -> Self {
-        self.chain(
-            self.re.acos(),
-            -F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
-        )
-    }
-
-    /// Arctangent.
-    #[inline]
-    pub fn atan(self) -> Self {
-        self.chain(self.re.atan(), kernels::atan_deriv(self.re))
-    }
 
     /// Two-argument arctangent.
     #[inline]
@@ -336,110 +192,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         }
     }
 
-    // -- Hyperbolic --
-
-    /// Hyperbolic sine.
-    #[inline]
-    pub fn sinh(self) -> Self {
-        self.chain(self.re.sinh(), self.re.cosh())
-    }
-
-    /// Hyperbolic cosine.
-    #[inline]
-    pub fn cosh(self) -> Self {
-        self.chain(self.re.cosh(), self.re.sinh())
-    }
-
-    /// Hyperbolic tangent.
-    #[inline]
-    pub fn tanh(self) -> Self {
-        let c = self.re.cosh();
-        self.chain(self.re.tanh(), F::one() / (c * c))
-    }
-
-    /// Inverse hyperbolic sine.
-    #[inline]
-    pub fn asinh(self) -> Self {
-        self.chain(self.re.asinh(), kernels::asinh_deriv(self.re))
-    }
-
-    /// Inverse hyperbolic cosine.
-    #[inline]
-    pub fn acosh(self) -> Self {
-        self.chain(self.re.acosh(), kernels::acosh_deriv(self.re))
-    }
-
-    /// Inverse hyperbolic tangent.
-    #[inline]
-    pub fn atanh(self) -> Self {
-        self.chain(self.re.atanh(), kernels::atanh_deriv(self.re))
-    }
-
     // -- Misc --
-
-    /// Absolute value.
-    ///
-    /// Derivative convention matches [`Dual::abs`](crate::Dual::abs), applied
-    /// per lane: [`kernels::abs_deriv`] gives `0` at the kink `x = 0` (the
-    /// minimal-norm subgradient), `sign(x)` elsewhere, `NaN` at `NaN`.
-    #[inline]
-    pub fn abs(self) -> Self {
-        self.chain(self.re.abs(), kernels::abs_deriv(self.re))
-    }
-
-    /// Sign function (zero derivative).
-    #[inline]
-    pub fn signum(self) -> Self {
-        DualVec {
-            re: self.re.signum(),
-            eps: [F::zero(); N],
-        }
-    }
-
-    /// Floor (zero derivative).
-    #[inline]
-    pub fn floor(self) -> Self {
-        DualVec {
-            re: self.re.floor(),
-            eps: [F::zero(); N],
-        }
-    }
-
-    /// Ceiling (zero derivative).
-    #[inline]
-    pub fn ceil(self) -> Self {
-        DualVec {
-            re: self.re.ceil(),
-            eps: [F::zero(); N],
-        }
-    }
-
-    /// Round to nearest integer (zero derivative).
-    #[inline]
-    pub fn round(self) -> Self {
-        DualVec {
-            re: self.re.round(),
-            eps: [F::zero(); N],
-        }
-    }
-
-    /// Truncate toward zero (zero derivative).
-    #[inline]
-    pub fn trunc(self) -> Self {
-        DualVec {
-            re: self.re.trunc(),
-            eps: [F::zero(); N],
-        }
-    }
-
-    /// Fractional part.
-    #[inline]
-    pub fn fract(self) -> Self {
-        DualVec {
-            re: self.re.fract(),
-            eps: self.eps,
-        }
-    }
 
     /// Fused multiply-add: self * a + b.
     #[inline]
@@ -457,41 +210,12 @@ impl<F: Float, const N: usize> DualVec<F, N> {
         if h == F::zero() {
             // See `Dual::hypot`: singular point — short-circuit to zero
             // tangent regardless of `eps` sign/finiteness.
-            return DualVec {
-                re: h,
-                eps: [F::zero(); N],
-            };
+            return Self::constant(h);
         }
         let (da, db) = kernels::hypot_partials(self.re, other.re, h);
         DualVec {
             re: h,
             eps: std::array::from_fn(|k| da * self.eps[k] + db * other.eps[k]),
-        }
-    }
-
-    /// Maximum of two values.
-    ///
-    /// Matches `num_traits::Float::max` semantics: returns the non-NaN argument.
-    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
-    #[inline]
-    pub fn max(self, other: Self) -> Self {
-        if self.re >= other.re || other.re.is_nan() {
-            self
-        } else {
-            other
-        }
-    }
-
-    /// Minimum of two values.
-    ///
-    /// Matches `num_traits::Float::min` semantics: returns the non-NaN argument.
-    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
-    #[inline]
-    pub fn min(self, other: Self) -> Self {
-        if self.re <= other.re || other.re.is_nan() {
-            self
-        } else {
-            other
         }
     }
 }

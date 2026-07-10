@@ -37,13 +37,7 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Returns `(value, gradient, hessian)`.
     pub fn hessian_par(&self, x: &[F]) -> (F, Vec<F>, Vec<Vec<F>>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "hessian_par is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("hessian_par");
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -96,13 +90,7 @@ impl<F: Float> super::BytecodeTape<F> {
         &self,
         x: &[F],
     ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "sparse_hessian_par is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("sparse_hessian_par");
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -183,7 +171,7 @@ impl<F: Float> super::BytecodeTape<F> {
             let color_results: Vec<Vec<F>> = (0..num_colors)
                 .into_par_iter()
                 .map(|color| {
-                    let n_vars = self.num_variables as usize;
+                    let n_vars = self.num_variables_count();
                     let mut adjoints = vec![F::zero(); n_vars];
                     for (i, &oi) in out_indices.iter().enumerate() {
                         if row_colors[i] == color {

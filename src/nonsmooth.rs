@@ -61,27 +61,33 @@ pub struct NonsmoothInfo<F: Float> {
 }
 
 impl<F: Float> NonsmoothInfo<F> {
-    /// Return kink entries whose switching value is within `tol` of zero,
-    /// or whose switching value is non-finite (NaN / ±Inf).
+    /// The activeness predicate shared by [`active_kinks`](Self::active_kinks)
+    /// and [`is_smooth`](Self::is_smooth), so proximity detection and the
+    /// smoothness verdict can never disagree.
     ///
-    /// Non-finite switching values indicate an upstream numerical blow-up
+    /// A non-finite switching value indicates an upstream numerical blow-up
     /// where the branch can no longer be decided — the kink is
     /// conservatively reported as active so callers who enumerate the
     /// Clarke subdifferential don't silently miss a potentially active
     /// branch. Regression test `regression_24_nan_switching_value_is_not_smooth`
     /// pins this contract.
+    fn is_active(k: &KinkEntry<F>, tol: F) -> bool {
+        k.switching_value.abs() < tol || !k.switching_value.is_finite()
+    }
+
+    /// Return kink entries whose switching value is within `tol` of zero,
+    /// or whose switching value is non-finite (NaN / ±Inf) — see
+    /// `is_active` for the rationale.
     pub fn active_kinks(&self, tol: F) -> Vec<&KinkEntry<F>> {
         self.kinks
             .iter()
-            .filter(|k| k.switching_value.abs() < tol || !k.switching_value.is_finite())
+            .filter(|k| Self::is_active(k, tol))
             .collect()
     }
 
     /// True if no kinks are active within the given tolerance.
     pub fn is_smooth(&self, tol: F) -> bool {
-        self.kinks
-            .iter()
-            .all(|k| k.switching_value.is_finite() && k.switching_value.abs() >= tol)
+        !self.kinks.iter().any(|k| Self::is_active(k, tol))
     }
 
     /// Branch signature: `(tape_index, branch)` pairs for all kinks.

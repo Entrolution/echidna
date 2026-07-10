@@ -477,6 +477,9 @@ macro_rules! impl_promote_scalar_ops {
         }
         };
 }
+// Re-exported for the Laurent scalar-ops impls; unused when only `taylor`
+// is enabled (`laurent` implies `taylor`, so the gate is always satisfiable).
+#[cfg(feature = "laurent")]
 pub(super) use impl_promote_scalar_ops;
 
 impl_promote_scalar_ops!([] TaylorDyn<f32>, f32);

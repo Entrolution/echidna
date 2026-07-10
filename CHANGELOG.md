@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `BytecodeTape::validate` (and therefore deserialization of serialized
+  tapes) is stricter: `Input` and `Const` entries must carry the unused
+  arg sentinel in both operand slots, and a payload whose `num_variables`
+  field disagrees with `opcodes.len()` is rejected. Tapes produced by
+  `record`/`record_multi` or the `push_*` builders are unaffected.
+- The AD value-type constructors (`Dual::new`/`constant`/`variable`,
+  `DualVec::new`/`constant`/`with_tangent`, `Reverse::constant`/`from_tape`,
+  `BReverse::constant`/`from_tape`) are now `#[must_use]`, matching the
+  `Tape` constructors; discarding their results warns.
+
 ### Removed
 
 - The deprecated (since 0.5.0) CUDA-specific STDE wrappers

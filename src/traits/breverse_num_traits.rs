@@ -9,19 +9,18 @@ use num_traits::{
     Float as NumFloat, FloatConst, FromPrimitive, Num, NumCast, One, Signed, ToPrimitive, Zero,
 };
 
-use crate::breverse::BReverse;
+use crate::breverse::{ensure_on_tape, BReverse};
 use crate::bytecode_tape::{self, BtapeThreadLocal};
 use crate::float::Float;
 use crate::opcode::OpCode;
 
 // ── Helpers ──
 
-// The tape-recording helpers live once in `breverse_ops` — including the
-// debug-mode same-tape guard — so the arithmetic and num-traits recording
-// paths cannot drift apart.
-use super::breverse_ops::{
-    brev_binary_op as brev_binary, brev_unary_op as brev_unary, ensure_on_tape,
-};
+// The recording helpers are shared, not duplicated: `brev_*` live in
+// `breverse_ops`, and `ensure_on_tape` — carrying the debug-mode same-tape
+// guard — lives beside `BReverse` itself, so the arithmetic and num-traits
+// recording paths cannot drift apart.
+use super::breverse_ops::{brev_binary_op as brev_binary, brev_unary_op as brev_unary};
 
 // ══════════════════════════════════════════════
 //  Basic numeric traits

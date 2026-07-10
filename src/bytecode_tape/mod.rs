@@ -125,7 +125,6 @@ pub struct BytecodeTape<F: Float> {
     pub(crate) arg_indices: Vec<[u32; 2]>,
     pub(crate) values: Vec<F>,
     pub(crate) num_inputs: u32,
-    pub(crate) num_variables: u32,
     pub(crate) output_index: u32,
     /// Indices of multiple output variables (empty = single-output mode).
     pub(crate) output_indices: Vec<u32>,
@@ -152,6 +151,47 @@ pub(crate) fn next_tape_id() -> u64 {
     NEXT_TAPE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Decoded operands of a `Custom` tape entry.
+pub(crate) struct CustomOperands<F> {
+    /// First-operand tape index.
+    pub a_idx: u32,
+    /// Callback index into `custom_ops` (the entry's second arg slot).
+    pub cb_idx: u32,
+    /// Second-operand tape index for binary custom ops, from the side table.
+    pub b_idx: Option<u32>,
+    /// First-operand value.
+    pub a: F,
+    /// Second-operand value; zero for unary custom ops.
+    pub b: F,
+}
+
+/// Decode the operands of the `Custom` entry at tape index `i`.
+///
+/// A custom entry's second arg slot holds its callback index, so the real
+/// second operand of a binary custom op lives in the `custom_second_args`
+/// side table keyed by tape index; a missing key means a unary op, whose
+/// `b` reads as zero. Every primal-valued sweep decodes with this exact
+/// convention, so it lives here once (the `T`-valued tangent sweeps read
+/// their operands from `T` buffers and keep their own index decode).
+/// `values` is a parameter because sweeps read primals either from
+/// `self.values` or from an external buffer.
+pub(crate) fn decode_custom_operands<F: Float>(
+    arg_indices: &[[u32; 2]],
+    custom_second_args: &HashMap<u32, u32>,
+    values: &[F],
+    i: usize,
+) -> CustomOperands<F> {
+    let [a_idx, cb_idx] = arg_indices[i];
+    let b_idx = custom_second_args.get(&(i as u32)).copied();
+    CustomOperands {
+        a_idx,
+        cb_idx,
+        b_idx,
+        a: values[a_idx as usize],
+        b: b_idx.map(|bi| values[bi as usize]).unwrap_or_else(F::zero),
+    }
+}
+
 impl<F: Float> BytecodeTape<F> {
     /// Create an empty bytecode tape.
     #[must_use]
@@ -167,7 +207,6 @@ impl<F: Float> BytecodeTape<F> {
             arg_indices: Vec::with_capacity(est_ops),
             values: Vec::with_capacity(est_ops),
             num_inputs: 0,
-            num_variables: 0,
             output_index: 0,
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
@@ -177,37 +216,38 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
+    /// Append one tape entry, keeping the parallel arrays in lockstep.
+    ///
+    /// The single home of the append invariant: `opcodes`, `arg_indices`,
+    /// and `values` grow together, and an entry's index is the pre-push
+    /// tape length. Callers add only their own bookkeeping (the input
+    /// count, the custom-op side table).
+    #[inline]
+    fn push_entry(&mut self, op: OpCode, args: [u32; 2], value: F) -> u32 {
+        debug_assert!(
+            self.opcodes.len() < u32::MAX as usize,
+            "tape entry count overflows u32 indexing"
+        );
+        let idx = self.opcodes.len() as u32;
+        self.opcodes.push(op);
+        self.arg_indices.push(args);
+        self.values.push(value);
+        idx
+    }
+
     /// Register a new input variable. Returns its index.
     #[inline]
     pub fn new_input(&mut self, value: F) -> u32 {
-        debug_assert!(
-            self.num_variables < u32::MAX,
-            "tape variable count overflow"
-        );
-        let idx = self.num_variables;
-        self.num_variables += 1;
         self.num_inputs += 1;
         // SPEC: InputPrefixInvariant — Input opcodes are always added before any non-input
         // opcode and carry `[UNUSED, UNUSED]` args; callers (e.g. `record`) rely on this.
-        self.opcodes.push(OpCode::Input);
-        self.arg_indices.push([UNUSED, UNUSED]);
-        self.values.push(value);
-        idx
+        self.push_entry(OpCode::Input, [UNUSED, UNUSED], value)
     }
 
     /// Register a scalar constant. Returns its index.
     #[inline]
     pub fn push_const(&mut self, value: F) -> u32 {
-        debug_assert!(
-            self.num_variables < u32::MAX,
-            "tape variable count overflow"
-        );
-        let idx = self.num_variables;
-        self.num_variables += 1;
-        self.opcodes.push(OpCode::Const);
-        self.arg_indices.push([UNUSED, UNUSED]);
-        self.values.push(value);
-        idx
+        self.push_entry(OpCode::Const, [UNUSED, UNUSED], value)
     }
 
     /// Record an operation. Returns the result index.
@@ -242,16 +282,7 @@ impl<F: Float> BytecodeTape<F> {
             }
         }
 
-        debug_assert!(
-            self.num_variables < u32::MAX,
-            "tape variable count overflow"
-        );
-        let idx = self.num_variables;
-        self.num_variables += 1;
-        self.opcodes.push(op);
-        self.arg_indices.push([arg0, arg1]);
-        self.values.push(value);
-        idx
+        self.push_entry(op, [arg0, arg1], value)
     }
 
     /// Try to simplify a binary op where exactly one argument is a known constant.
@@ -347,12 +378,7 @@ impl<F: Float> BytecodeTape<F> {
             return self.push_op(OpCode::Recip, arg0, UNUSED, value);
         }
 
-        let idx = self.num_variables;
-        self.num_variables += 1;
-        self.opcodes.push(OpCode::Powi);
-        self.arg_indices.push([arg0, opcode::powi_exp_encode(exp)]);
-        self.values.push(value);
-        idx
+        self.push_entry(OpCode::Powi, [arg0, opcode::powi_exp_encode(exp)], value)
     }
 
     /// Register a custom operation. Returns a handle for use with
@@ -367,12 +393,7 @@ impl<F: Float> BytecodeTape<F> {
     /// Record a unary custom op. `arg_indices = [arg0, callback_idx]`.
     #[inline]
     pub fn push_custom_unary(&mut self, arg0: u32, handle: CustomOpHandle, value: F) -> u32 {
-        let idx = self.num_variables;
-        self.num_variables += 1;
-        self.opcodes.push(OpCode::Custom);
-        self.arg_indices.push([arg0, u32::from(handle.0)]);
-        self.values.push(value);
-        idx
+        self.push_entry(OpCode::Custom, [arg0, u32::from(handle.0)], value)
     }
 
     /// Record a binary custom op. `arg_indices = [arg0, callback_idx]`,
@@ -385,12 +406,8 @@ impl<F: Float> BytecodeTape<F> {
         handle: CustomOpHandle,
         value: F,
     ) -> u32 {
-        let idx = self.num_variables;
-        self.num_variables += 1;
-        self.opcodes.push(OpCode::Custom);
-        self.arg_indices.push([arg0, u32::from(handle.0)]);
+        let idx = self.push_custom_unary(arg0, handle, value);
         self.custom_second_args.insert(idx, arg1);
-        self.values.push(value);
         idx
     }
 
@@ -405,6 +422,21 @@ impl<F: Float> BytecodeTape<F> {
     #[must_use]
     pub fn output_value(&self) -> F {
         self.values[self.output_index as usize]
+    }
+
+    /// Primal output of a constant (zero-input) tape.
+    ///
+    /// Derivative methods guard `n == 0` before their sweep loops; the loops
+    /// would never run and the reported value would stay at zero, so this
+    /// replays the primal forward pass to recover the true constant. Falls
+    /// back to zero if the output slot is out of range.
+    pub(crate) fn constant_output_value(&self) -> F {
+        let mut values_buf = Vec::new();
+        self.forward_into(&[], &mut values_buf);
+        values_buf
+            .get(self.output_index as usize)
+            .copied()
+            .unwrap_or_else(F::zero)
     }
 
     /// Index of the (single) output variable.
@@ -474,6 +506,20 @@ impl<F: Float> BytecodeTape<F> {
         }
     }
 
+    /// Panic unless the tape has exactly one output.
+    ///
+    /// Guard shared by the Hessian-family methods, which are defined for
+    /// scalar-valued `f` only; `method` names the caller in the panic text.
+    pub(crate) fn assert_scalar_output(&self, method: &str) {
+        assert_eq!(
+            self.num_outputs(),
+            1,
+            "{method} is defined for scalar-output tapes only; this tape has {} \
+             outputs. For vector-valued f record one output at a time.",
+            self.num_outputs(),
+        );
+    }
+
     /// Get all output values (available after `forward()` or initial recording).
     ///
     /// In single-output mode, returns a single-element vector.
@@ -512,9 +558,10 @@ impl<F: Float> BytecodeTape<F> {
     /// meaningless derivatives from uncomputed slots.
     ///
     /// Checked invariants:
-    /// - `opcodes`, `arg_indices`, and `values` each have exactly
-    ///   `num_variables` entries;
-    /// - the `Input` opcodes are exactly the first `num_inputs` entries;
+    /// - `arg_indices` and `values` each have exactly `opcodes.len()`
+    ///   entries;
+    /// - the `Input` opcodes are exactly the first `num_inputs` entries,
+    ///   and `Input`/`Const` entries carry `[UNUSED, UNUSED]` args;
     /// - `output_index` and every entry of `output_indices` name a real
     ///   tape slot;
     /// - every operand index references a strictly earlier slot (the tape
@@ -523,33 +570,31 @@ impl<F: Float> BytecodeTape<F> {
     ///   are registered;
     /// - `custom_second_args` keys name `Custom` ops and their values
     ///   reference strictly earlier slots.
+    // SPEC: PostOptValid — this is the comprehensive structural check that
+    // `optimize()` re-runs at the end of its pipeline in debug builds.
     pub fn validate(&self) -> Result<(), TapeValidationError> {
         fn err<T>(msg: String) -> Result<T, TapeValidationError> {
             Err(TapeValidationError(msg))
         }
-        let nv = self.num_variables as usize;
-        if self.opcodes.len() != nv {
-            return err(format!(
-                "opcodes.len() ({}) != num_variables ({nv})",
-                self.opcodes.len()
-            ));
-        }
+        let nv = self.opcodes.len();
         if self.arg_indices.len() != nv {
             return err(format!(
-                "arg_indices.len() ({}) != num_variables ({nv})",
+                "arg_indices.len() ({}) != opcodes.len() ({nv})",
                 self.arg_indices.len()
             ));
         }
         if self.values.len() != nv {
             return err(format!(
-                "values.len() ({}) != num_variables ({nv})",
+                "values.len() ({}) != opcodes.len() ({nv})",
                 self.values.len()
             ));
         }
         let ni = self.num_inputs as usize;
         if ni > nv {
-            return err(format!("num_inputs ({ni}) > num_variables ({nv})"));
+            return err(format!("num_inputs ({ni}) > tape length ({nv})"));
         }
+        // SPEC: InputsPreserved — Input opcodes are exactly the first
+        // `num_inputs` entries, so their count always equals `num_inputs`.
         for (i, &op) in self.opcodes.iter().enumerate() {
             if (op == OpCode::Input) != (i < ni) {
                 return if i < ni {
@@ -560,23 +605,38 @@ impl<F: Float> BytecodeTape<F> {
                     ))
                 };
             }
+            if i < ni && self.arg_indices[i] != [UNUSED, UNUSED] {
+                return err(format!(
+                    "arg_indices[{i}] must be [UNUSED, UNUSED] for an Input entry, found {:?}",
+                    self.arg_indices[i]
+                ));
+            }
         }
+        // SPEC: OutputValidInvariant — output_index (and every output_indices
+        // entry) names a real tape slot.
         if self.output_index as usize >= nv {
             return err(format!(
-                "output_index ({}) >= num_variables ({nv})",
+                "output_index ({}) >= tape length ({nv})",
                 self.output_index
             ));
         }
         for (j, &oi) in self.output_indices.iter().enumerate() {
             if oi as usize >= nv {
-                return err(format!(
-                    "output_indices[{j}] ({oi}) >= num_variables ({nv})"
-                ));
+                return err(format!("output_indices[{j}] ({oi}) >= tape length ({nv})"));
             }
         }
+        // SPEC: ValidRefsInvariant — every operand index is in bounds.
+        // SPEC: DAGOrderInvariant — operands reference strictly earlier slots
+        // (`< i`, which subsumes the in-bounds check).
         for i in ni..nv {
             let op = self.opcodes[i];
             if op == OpCode::Const {
+                if self.arg_indices[i] != [UNUSED, UNUSED] {
+                    return err(format!(
+                        "arg_indices[{i}] must be [UNUSED, UNUSED] for a Const entry, found {:?}",
+                        self.arg_indices[i]
+                    ));
+                }
                 continue;
             }
             let [a, b] = self.arg_indices[i];
@@ -628,9 +688,7 @@ impl<F: Float> BytecodeTape<F> {
         }
         for (&k, &v) in &self.custom_second_args {
             if k as usize >= nv {
-                return err(format!(
-                    "custom_second_args key {k} >= num_variables ({nv})"
-                ));
+                return err(format!("custom_second_args key {k} >= tape length ({nv})"));
             }
             if self.opcodes[k as usize] != OpCode::Custom {
                 return err(format!(
@@ -673,7 +731,7 @@ impl<F: Float> BytecodeTape<F> {
     #[inline]
     #[must_use]
     pub fn num_variables_count(&self) -> usize {
-        self.num_variables as usize
+        self.opcodes.len()
     }
 
     /// Returns `true` if the tape contains any custom operations.
@@ -701,7 +759,6 @@ mod validate_tests {
             arg_indices: vec![[UNUSED, UNUSED], [UNUSED, UNUSED], [0, 1]],
             values: vec![2.0, 3.0, 6.0],
             num_inputs: 1,
-            num_variables: 3,
             output_index: 2,
             output_indices: Vec::new(),
             custom_ops: Vec::new(),
@@ -753,6 +810,32 @@ mod validate_tests {
     }
 
     #[test]
+    fn optimize_accepts_callback_index_at_or_above_tape_index() {
+        // A Custom entry whose callback index is >= its own tape index is
+        // valid: arg1 holds a callback-table index, not a tape slot. The
+        // debug post-optimize check must treat it as such (validate() checks
+        // it against custom_ops.len(), never against the entry's position).
+        struct Twice;
+        impl CustomOp<f64> for Twice {
+            fn eval(&self, a: f64, _b: f64) -> f64 {
+                a + a
+            }
+            fn partials(&self, _a: f64, _b: f64, _r: f64) -> (f64, f64) {
+                (2.0, 0.0)
+            }
+        }
+        let mut tape = BytecodeTape::<f64>::new();
+        let _h0 = tape.register_custom(Arc::new(Twice));
+        let h1 = tape.register_custom(Arc::new(Twice));
+        let x = tape.new_input(2.0);
+        // Tape entry 1 with callback index 1: callback index == tape index.
+        let y = tape.push_custom_unary(x, h1, 4.0);
+        tape.set_output(y);
+        tape.optimize();
+        tape.validate().unwrap();
+    }
+
+    #[test]
     fn negative_powi_exponent_is_not_an_index() {
         // powi(-1) encodes its exponent as 0xFFFFFFFF — the same bits as
         // UNUSED — and powi(-3) as another huge u32. Neither is an index.
@@ -792,6 +875,19 @@ mod validate_tests {
         let mut tape = tiny();
         tape.opcodes[0] = OpCode::Const;
         assert_rejected(&tape, "non-Input inside the prefix");
+    }
+
+    #[test]
+    fn rejects_args_on_input_and_const_entries() {
+        // Input and Const are leaves; a real index in either arg slot is
+        // corrupt data even when it happens to be in bounds.
+        let mut tape = tiny();
+        tape.arg_indices[0] = [0, UNUSED];
+        assert_rejected(&tape, "Input entry with an arg");
+
+        let mut tape = tiny();
+        tape.arg_indices[1] = [0, 0];
+        assert_rejected(&tape, "Const entry with args");
     }
 
     #[test]

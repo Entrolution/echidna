@@ -521,6 +521,19 @@ pub fn powi_exp_encode(exp: i32) -> u32 {
     exp as u32
 }
 
+/// True when `arg_indices[1]` holds a real tape index for `op`.
+///
+/// Two opcodes repurpose the slot for metadata — [`OpCode::Powi`] stores the
+/// encoded exponent and [`OpCode::Custom`] the callback index — so index
+/// remapping (DCE compaction, CSE canonicalization) must leave it untouched
+/// for them: remapping a callback index as if it were a tape slot silently
+/// corrupts the tape.
+#[inline]
+#[must_use]
+pub(crate) fn arg1_is_index(op: OpCode, b: u32) -> bool {
+    b != UNUSED && op != OpCode::Powi && op != OpCode::Custom
+}
+
 #[cfg(test)]
 mod tests {
     use super::powi_reverse_partial;

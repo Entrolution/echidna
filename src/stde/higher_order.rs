@@ -49,15 +49,8 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
     if n == 0 {
-        // Constant tape: recover the primal with an empty forward pass;
-        // there is nothing to differentiate.
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let mut value = F::zero();
-        if let Some(&v) = values_buf.get(tape.output_index()) {
-            value = v;
-        }
-        return (value, Vec::new());
+        // Constant tape: nothing to differentiate; return the primal.
+        return (tape.constant_output_value(), Vec::new());
     }
 
     let order = k + 1; // number of Taylor coefficients
@@ -146,15 +139,8 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
     if n == 0 {
-        // Constant tape: recover the primal with an empty forward pass;
-        // there is nothing to differentiate.
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let mut value = F::zero();
-        if let Some(&v) = values_buf.get(tape.output_index()) {
-            value = v;
-        }
-        return (value, Vec::new());
+        // Constant tape: nothing to differentiate; return the primal.
+        return (tape.constant_output_value(), Vec::new());
     }
 
     let mut k_factorial = F::one();

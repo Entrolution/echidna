@@ -2,6 +2,27 @@ use crate::dual::Dual;
 use crate::dual_vec::DualVec;
 use crate::float::Float;
 
+/// Lane-packed coloring seed: lane `k` is hot iff `colors[i] == base_color + k`
+/// and that color exists. Shared by `sparse_hessian_vec` and
+/// `sparse_jacobian_vec`; the dense `hessian_vec` seeds on `i == col` instead
+/// and deliberately does not use this.
+#[inline]
+fn color_seed_eps<F: Float, const N: usize>(
+    i: usize,
+    colors: &[u32],
+    base_color: u32,
+    num_colors: u32,
+) -> [F; N] {
+    std::array::from_fn(|lane| {
+        let target_color = base_color + lane as u32;
+        if target_color < num_colors && colors[i] == target_color {
+            F::one()
+        } else {
+            F::zero()
+        }
+    })
+}
+
 impl<F: Float> super::BytecodeTape<F> {
     /// Detect the structural sparsity pattern of the Hessian.
     ///
@@ -14,7 +35,7 @@ impl<F: Float> super::BytecodeTape<F> {
             &self.arg_indices,
             &self.custom_second_args,
             self.num_inputs as usize,
-            self.num_variables as usize,
+            self.num_variables_count(),
         )
     }
 
@@ -30,7 +51,7 @@ impl<F: Float> super::BytecodeTape<F> {
             &self.arg_indices,
             &self.custom_second_args,
             self.num_inputs as usize,
-            self.num_variables as usize,
+            self.num_variables_count(),
             out_indices,
         )
     }
@@ -44,13 +65,7 @@ impl<F: Float> super::BytecodeTape<F> {
     /// HVP calls instead of `n`, which can be dramatically fewer for banded
     /// or sparse interaction structures.
     pub fn sparse_hessian(&self, x: &[F]) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "sparse_hessian is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("sparse_hessian");
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -76,13 +91,7 @@ impl<F: Float> super::BytecodeTape<F> {
         &self,
         x: &[F],
     ) -> (F, Vec<F>, crate::sparse::SparsityPattern, Vec<F>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "sparse_hessian_vec is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("sparse_hessian_vec");
         assert!(
             self.custom_ops.is_empty(),
             "sparse_hessian_vec: custom ops produce approximate (first-order) second derivatives; \
@@ -98,16 +107,14 @@ impl<F: Float> super::BytecodeTape<F> {
         let gradient = vec![F::zero(); n];
         let mut value = F::zero();
 
-        // Constant-output tape (n == 0): the batch loop never runs, so `value`
-        // would stay at zero. Recover the true constant via a primal pass —
-        // mirrors the fix in `hessian` and `hessian_vec`.
+        // Constant-output tape (n == 0): no batches to sweep.
         if n == 0 {
-            let mut values_buf = Vec::new();
-            self.forward_into(&[], &mut values_buf);
-            if let Some(&v) = values_buf.get(self.output_index as usize) {
-                value = v;
-            }
-            return (value, gradient, pattern, hessian_values);
+            return (
+                self.constant_output_value(),
+                gradient,
+                pattern,
+                hessian_values,
+            );
         }
 
         let mut hessian_values = hessian_values;
@@ -123,17 +130,11 @@ impl<F: Float> super::BytecodeTape<F> {
 
             // Build DualVec inputs: lane k has v[i]=1 if colors[i] == base_color+k
             dual_input_buf.clear();
-            dual_input_buf.extend((0..n).map(|i| {
-                let eps = std::array::from_fn(|lane| {
-                    let target_color = base_color + lane as u32;
-                    if target_color < num_colors && colors[i] == target_color {
-                        F::one()
-                    } else {
-                        F::zero()
-                    }
-                });
-                DualVec::new(x[i], eps)
-            }));
+            dual_input_buf.extend(
+                (0..n).map(|i| {
+                    DualVec::new(x[i], color_seed_eps(i, &colors, base_color, num_colors))
+                }),
+            );
 
             self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
             self.reverse_tangent(&dual_vals_buf, &mut adjoint_buf);
@@ -357,17 +358,11 @@ impl<F: Float> super::BytecodeTape<F> {
             let base_color = (batch * N) as u32;
 
             dual_input_buf.clear();
-            dual_input_buf.extend((0..n).map(|i| {
-                let eps = std::array::from_fn(|lane| {
-                    let target_color = base_color + lane as u32;
-                    if target_color < num_colors && colors[i] == target_color {
-                        F::one()
-                    } else {
-                        F::zero()
-                    }
-                });
-                DualVec::new(x[i], eps)
-            }));
+            dual_input_buf.extend(
+                (0..n).map(|i| {
+                    DualVec::new(x[i], color_seed_eps(i, &colors, base_color, num_colors))
+                }),
+            );
 
             self.forward_tangent(&dual_input_buf, &mut dual_vals_buf);
 
@@ -394,13 +389,7 @@ impl<F: Float> super::BytecodeTape<F> {
         colors: &[u32],
         num_colors: u32,
     ) -> (F, Vec<F>, Vec<F>) {
-        assert_eq!(
-            self.num_outputs(),
-            1,
-            "sparse_hessian_with_pattern is defined for scalar-output tapes only; this tape has {} \
-             outputs. For vector-valued f record one output at a time.",
-            self.num_outputs(),
-        );
+        self.assert_scalar_output("sparse_hessian_with_pattern");
         let n = self.num_inputs as usize;
         assert_eq!(x.len(), n, "wrong number of inputs");
 
@@ -408,16 +397,9 @@ impl<F: Float> super::BytecodeTape<F> {
         let gradient = vec![F::zero(); n];
         let mut value = F::zero();
 
-        // Constant-output tape (n == 0): the color loop never runs, so `value`
-        // would stay at zero. Recover the true constant via a primal pass —
-        // mirrors the fix in `hessian` and `hessian_vec`.
+        // Constant-output tape (n == 0): no colors to sweep.
         if n == 0 {
-            let mut values_buf = Vec::new();
-            self.forward_into(&[], &mut values_buf);
-            if let Some(&v) = values_buf.get(self.output_index as usize) {
-                value = v;
-            }
-            return (value, gradient, hessian_values);
+            return (self.constant_output_value(), gradient, hessian_values);
         }
 
         let mut hessian_values = hessian_values;

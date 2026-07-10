@@ -623,14 +623,8 @@ pub fn mixed_partial<F: Float + TaylorArenaLocal>(
     );
     if orders.is_empty() {
         // Zero-input (constant) tape: the empty multi-index is the
-        // zeroth-derivative operator, and ∂⁰f = f. Recover the primal with
-        // an empty forward pass and return it in both slots.
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let value = values_buf
-            .get(tape.output_index())
-            .copied()
-            .unwrap_or_else(F::zero);
+        // zeroth-derivative operator, and ∂⁰f = f — the primal in both slots.
+        let value = tape.constant_output_value();
         return (value, value);
     }
     let mi = MultiIndex::new(orders);
@@ -670,13 +664,7 @@ pub fn hessian<F: Float + TaylorArenaLocal>(
     // Hessian — matching `BytecodeTape::hessian` — instead of panicking in
     // `JetPlan::plan`, which rejects the empty multi-index list this would build.
     if n == 0 {
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let value = values_buf
-            .get(tape.output_index())
-            .copied()
-            .unwrap_or_else(F::zero);
-        return (value, Vec::new(), Vec::new());
+        return (tape.constant_output_value(), Vec::new(), Vec::new());
     }
 
     let mut indices = Vec::with_capacity(n + n * (n + 1) / 2);

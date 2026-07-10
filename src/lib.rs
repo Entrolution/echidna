@@ -118,6 +118,7 @@ macro_rules! assert_send_sync {
     };
 }
 
+mod active_cell;
 pub mod api;
 pub mod dual;
 pub mod dual_vec;
