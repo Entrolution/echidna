@@ -1653,6 +1653,25 @@ mod btape_guard_lifo {
 #[cfg(all(feature = "bytecode", debug_assertions))]
 mod breverse_tape_identity {
     use echidna::{record, BReverse};
+    use num_traits::Float as _;
+
+    #[test]
+    #[should_panic(expected = "another recording")]
+    fn stashed_value_through_transcendental_panics() {
+        // The num-traits recording path (sin/exp/ln, ...) shares the guarded
+        // tape helpers with the arithmetic operators, so a stale value is
+        // rejected here too — not only on + and *.
+        let stash = std::cell::Cell::new(None);
+        let _ = record(
+            |x: &[BReverse<f64>]| {
+                stash.set(Some(x[0]));
+                x[0] * 2.0
+            },
+            &[1.0],
+        );
+        let stale = stash.get().unwrap();
+        let _ = record(move |x: &[BReverse<f64>]| x[0] + stale.sin(), &[1.0]);
+    }
 
     #[test]
     #[should_panic(expected = "another recording")]

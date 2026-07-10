@@ -394,92 +394,93 @@ impl<F: Float + TaylorArenaLocal> RemAssign for TaylorDyn<F> {
 }
 
 // Mixed ops: TaylorDyn<F> with primitive floats.
-macro_rules! impl_taylor_dyn_scalar_ops {
-    ($f:ty) => {
-        impl Add<$f> for TaylorDyn<$f> {
-            type Output = TaylorDyn<$f>;
+macro_rules! impl_promote_scalar_ops {
+    ([$($gen:tt)*] $ty:ty, $f:ty) => {
+        impl<$($gen)*> Add<$f> for $ty {
+            type Output = $ty;
             #[inline]
-            fn add(self, rhs: $f) -> TaylorDyn<$f> {
-                self + TaylorDyn::constant(rhs)
+            fn add(self, rhs: $f) -> $ty {
+                self + <$ty>::constant(rhs)
             }
         }
 
-        impl Add<TaylorDyn<$f>> for $f {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Add<$ty> for $f {
+            type Output = $ty;
             #[inline]
-            fn add(self, rhs: TaylorDyn<$f>) -> TaylorDyn<$f> {
-                TaylorDyn::constant(self) + rhs
+            fn add(self, rhs: $ty) -> $ty {
+                <$ty>::constant(self) + rhs
             }
         }
 
-        impl Sub<$f> for TaylorDyn<$f> {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Sub<$f> for $ty {
+            type Output = $ty;
             #[inline]
-            fn sub(self, rhs: $f) -> TaylorDyn<$f> {
-                self - TaylorDyn::constant(rhs)
+            fn sub(self, rhs: $f) -> $ty {
+                self - <$ty>::constant(rhs)
             }
         }
 
-        impl Sub<TaylorDyn<$f>> for $f {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Sub<$ty> for $f {
+            type Output = $ty;
             #[inline]
-            fn sub(self, rhs: TaylorDyn<$f>) -> TaylorDyn<$f> {
-                TaylorDyn::constant(self) - rhs
+            fn sub(self, rhs: $ty) -> $ty {
+                <$ty>::constant(self) - rhs
             }
         }
 
-        impl Mul<$f> for TaylorDyn<$f> {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Mul<$f> for $ty {
+            type Output = $ty;
             #[inline]
-            fn mul(self, rhs: $f) -> TaylorDyn<$f> {
-                self * TaylorDyn::constant(rhs)
+            fn mul(self, rhs: $f) -> $ty {
+                self * <$ty>::constant(rhs)
             }
         }
 
-        impl Mul<TaylorDyn<$f>> for $f {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Mul<$ty> for $f {
+            type Output = $ty;
             #[inline]
-            fn mul(self, rhs: TaylorDyn<$f>) -> TaylorDyn<$f> {
-                TaylorDyn::constant(self) * rhs
+            fn mul(self, rhs: $ty) -> $ty {
+                <$ty>::constant(self) * rhs
             }
         }
 
-        impl Div<$f> for TaylorDyn<$f> {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Div<$f> for $ty {
+            type Output = $ty;
             #[inline]
-            fn div(self, rhs: $f) -> TaylorDyn<$f> {
-                self / TaylorDyn::constant(rhs)
+            fn div(self, rhs: $f) -> $ty {
+                self / <$ty>::constant(rhs)
             }
         }
 
-        impl Div<TaylorDyn<$f>> for $f {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Div<$ty> for $f {
+            type Output = $ty;
             #[inline]
-            fn div(self, rhs: TaylorDyn<$f>) -> TaylorDyn<$f> {
-                TaylorDyn::constant(self) / rhs
+            fn div(self, rhs: $ty) -> $ty {
+                <$ty>::constant(self) / rhs
             }
         }
 
-        impl Rem<$f> for TaylorDyn<$f> {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Rem<$f> for $ty {
+            type Output = $ty;
             #[inline]
-            fn rem(self, rhs: $f) -> TaylorDyn<$f> {
-                self % TaylorDyn::constant(rhs)
+            fn rem(self, rhs: $f) -> $ty {
+                self % <$ty>::constant(rhs)
             }
         }
 
-        impl Rem<TaylorDyn<$f>> for $f {
-            type Output = TaylorDyn<$f>;
+        impl<$($gen)*> Rem<$ty> for $f {
+            type Output = $ty;
             #[inline]
-            fn rem(self, rhs: TaylorDyn<$f>) -> TaylorDyn<$f> {
-                TaylorDyn::constant(self) % rhs
+            fn rem(self, rhs: $ty) -> $ty {
+                <$ty>::constant(self) % rhs
             }
         }
-    };
+        };
 }
+pub(super) use impl_promote_scalar_ops;
 
-impl_taylor_dyn_scalar_ops!(f32);
-impl_taylor_dyn_scalar_ops!(f64);
+impl_promote_scalar_ops!([] TaylorDyn<f32>, f32);
+impl_promote_scalar_ops!([] TaylorDyn<f64>, f64);
 
 impl<F: Float> PartialEq for TaylorDyn<F> {
     #[inline]

@@ -14,7 +14,7 @@ use crate::opcode::{OpCode, UNUSED};
 /// Ensure a BReverse operand has a valid tape index. If it's a constant
 /// (index == CONSTANT), promote it to a `Const` entry on the tape.
 #[inline]
-fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 {
+pub(super) fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 {
     #[cfg(debug_assertions)]
     x.debug_assert_same_tape(tape);
     if x.index == CONSTANT {
@@ -26,7 +26,7 @@ fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 
 
 /// Record a binary op, promoting constants as needed.
 #[inline]
-fn brev_binary_op<F: Float + BtapeThreadLocal>(
+pub(super) fn brev_binary_op<F: Float + BtapeThreadLocal>(
     lhs: BReverse<F>,
     rhs: BReverse<F>,
     op: OpCode,
@@ -42,7 +42,11 @@ fn brev_binary_op<F: Float + BtapeThreadLocal>(
 
 /// Record a unary op, promoting constant as needed.
 #[inline]
-fn brev_unary_op<F: Float + BtapeThreadLocal>(x: BReverse<F>, op: OpCode, value: F) -> BReverse<F> {
+pub(super) fn brev_unary_op<F: Float + BtapeThreadLocal>(
+    x: BReverse<F>,
+    op: OpCode,
+    value: F,
+) -> BReverse<F> {
     let index = bytecode_tape::with_active_btape(|t| {
         let xi = ensure_on_tape(&x, t);
         t.push_op(op, xi, UNUSED, value)

@@ -4,6 +4,7 @@ use std::ops::{
     Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign,
 };
 
+use super::taylor_std_ops::impl_promote_scalar_ops;
 use crate::float::Float;
 use crate::laurent::Laurent;
 use crate::taylor_ops;
@@ -22,6 +23,53 @@ use crate::taylor_ops;
 ///
 /// # Panics
 ///
+/// Rebase both operands to their common (more negative) pole order so the
+/// coefficient arrays line up index-for-index; returns the aligned arrays
+/// and the common pole order.
+///
+/// # Panics
+///
+/// Panics when the pole-order gap is `K` or more — every coefficient of one
+/// operand would be silently discarded (`op_name` labels the panic message).
+#[inline]
+fn align_pole_orders<F: Float, const K: usize>(
+    lhs: &Laurent<F, K>,
+    rhs: &Laurent<F, K>,
+    op_name: &str,
+) -> ([F; K], [F; K], i32) {
+    let p1 = lhs.pole_order();
+    let p2 = rhs.pole_order();
+    let p_out = p1.min(p2);
+    // Widen to i64 so the shift can't overflow i32 for extreme pole orders
+    // (p1 large positive, p2 large negative) — a wrapped shift could pass
+    // the gap check below and silently truncate coefficients.
+    let gap1 = i64::from(p1) - i64::from(p_out);
+    let gap2 = i64::from(p2) - i64::from(p_out);
+    assert!(
+        gap1 < K as i64 && gap2 < K as i64,
+        "Laurent {op_name}: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
+        gap1.max(gap2),
+        K - 1,
+    );
+    let shift1 = gap1 as usize;
+    let shift2 = gap2 as usize;
+    let a: [F; K] = std::array::from_fn(|i| {
+        if i >= shift1 && i - shift1 < K {
+            lhs.coeff(p_out + i as i32)
+        } else {
+            F::zero()
+        }
+    });
+    let b: [F; K] = std::array::from_fn(|i| {
+        if i >= shift2 && i - shift2 < K {
+            rhs.coeff(p_out + i as i32)
+        } else {
+            F::zero()
+        }
+    });
+    (a, b, p_out)
+}
+
 /// Panics when the pole-order gap is `K` or more: every coefficient of one
 /// operand would be silently discarded, so the sum would just be the other
 /// operand — a structural misalignment, not a numeric edge. `Mul`/`Div`
@@ -44,38 +92,7 @@ impl<F: Float, const K: usize> Add for Laurent<F, K> {
         if self.is_all_zero_pub() {
             return rhs;
         }
-        let p1 = self.pole_order();
-        let p2 = rhs.pole_order();
-        let p_out = p1.min(p2);
-        // Align both to p_out by shifting
-        // Widen to i64 so the shift can't overflow i32 for extreme pole orders
-        // (p1 large positive, p2 large negative) — a wrapped shift could pass
-        // the gap check below and silently truncate coefficients.
-        let gap1 = i64::from(p1) - i64::from(p_out);
-        let gap2 = i64::from(p2) - i64::from(p_out);
-        assert!(
-            gap1 < K as i64 && gap2 < K as i64,
-            "Laurent Add: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
-            gap1.max(gap2),
-            K - 1,
-        );
-        let shift1 = gap1 as usize;
-        let shift2 = gap2 as usize;
-
-        let a: [F; K] = std::array::from_fn(|i| {
-            if i >= shift1 && i - shift1 < K {
-                self.coeff(p_out + i as i32)
-            } else {
-                F::zero()
-            }
-        });
-        let b: [F; K] = std::array::from_fn(|i| {
-            if i >= shift2 && i - shift2 < K {
-                rhs.coeff(p_out + i as i32)
-            } else {
-                F::zero()
-            }
-        });
+        let (a, b, p_out) = align_pole_orders(&self, &rhs, "Add");
 
         let mut c = [F::zero(); K];
         taylor_ops::taylor_add(&a, &b, &mut c);
@@ -96,35 +113,7 @@ impl<F: Float, const K: usize> Sub for Laurent<F, K> {
         if self.is_all_zero_pub() {
             return -rhs;
         }
-        let p1 = self.pole_order();
-        let p2 = rhs.pole_order();
-        let p_out = p1.min(p2);
-        // Widen to i64 so the shift can't overflow i32 (see the `Add` impl).
-        let gap1 = i64::from(p1) - i64::from(p_out);
-        let gap2 = i64::from(p2) - i64::from(p_out);
-        assert!(
-            gap1 < K as i64 && gap2 < K as i64,
-            "Laurent Sub: pole-order gap ({}) exceeds K-1 ({}), coefficients would be silently truncated",
-            gap1.max(gap2),
-            K - 1,
-        );
-        let shift1 = gap1 as usize;
-        let shift2 = gap2 as usize;
-
-        let a: [F; K] = std::array::from_fn(|i| {
-            if i >= shift1 && i - shift1 < K {
-                self.coeff(p_out + i as i32)
-            } else {
-                F::zero()
-            }
-        });
-        let b: [F; K] = std::array::from_fn(|i| {
-            if i >= shift2 && i - shift2 < K {
-                rhs.coeff(p_out + i as i32)
-            } else {
-                F::zero()
-            }
-        });
+        let (a, b, p_out) = align_pole_orders(&self, &rhs, "Sub");
 
         let mut c = [F::zero(); K];
         taylor_ops::taylor_sub(&a, &b, &mut c);
@@ -227,96 +216,8 @@ impl<F: Float, const K: usize> RemAssign for Laurent<F, K> {
     }
 }
 
-// Mixed ops: Laurent<F, K> with primitive floats.
-macro_rules! impl_laurent_scalar_ops {
-    ($f:ty) => {
-        impl<const K: usize> Add<$f> for Laurent<$f, K> {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn add(self, rhs: $f) -> Laurent<$f, K> {
-                self + Laurent::constant(rhs)
-            }
-        }
-
-        impl<const K: usize> Add<Laurent<$f, K>> for $f {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn add(self, rhs: Laurent<$f, K>) -> Laurent<$f, K> {
-                Laurent::constant(self) + rhs
-            }
-        }
-
-        impl<const K: usize> Sub<$f> for Laurent<$f, K> {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn sub(self, rhs: $f) -> Laurent<$f, K> {
-                self - Laurent::constant(rhs)
-            }
-        }
-
-        impl<const K: usize> Sub<Laurent<$f, K>> for $f {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn sub(self, rhs: Laurent<$f, K>) -> Laurent<$f, K> {
-                Laurent::constant(self) - rhs
-            }
-        }
-
-        impl<const K: usize> Mul<$f> for Laurent<$f, K> {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn mul(self, rhs: $f) -> Laurent<$f, K> {
-                self * Laurent::constant(rhs)
-            }
-        }
-
-        impl<const K: usize> Mul<Laurent<$f, K>> for $f {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn mul(self, rhs: Laurent<$f, K>) -> Laurent<$f, K> {
-                Laurent::constant(self) * rhs
-            }
-        }
-
-        // Scalar division delegates to full Laurent Div to reuse pole-order arithmetic.
-        // Clippy flags the / inside a Div impl (self-referential dispatch), but this is
-        // intentional — the scalar is promoted to a Laurent series first.
-        impl<const K: usize> Div<$f> for Laurent<$f, K> {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn div(self, rhs: $f) -> Laurent<$f, K> {
-                self / Laurent::constant(rhs)
-            }
-        }
-
-        impl<const K: usize> Div<Laurent<$f, K>> for $f {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn div(self, rhs: Laurent<$f, K>) -> Laurent<$f, K> {
-                Laurent::constant(self) / rhs
-            }
-        }
-
-        impl<const K: usize> Rem<$f> for Laurent<$f, K> {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn rem(self, rhs: $f) -> Laurent<$f, K> {
-                self % Laurent::constant(rhs)
-            }
-        }
-
-        impl<const K: usize> Rem<Laurent<$f, K>> for $f {
-            type Output = Laurent<$f, K>;
-            #[inline]
-            fn rem(self, rhs: Laurent<$f, K>) -> Laurent<$f, K> {
-                Laurent::constant(self) % rhs
-            }
-        }
-    };
-}
-
-impl_laurent_scalar_ops!(f32);
-impl_laurent_scalar_ops!(f64);
+impl_promote_scalar_ops!([const K: usize] Laurent<f32, K>, f32);
+impl_promote_scalar_ops!([const K: usize] Laurent<f64, K>, f64);
 
 impl<F: Float, const K: usize> PartialEq for Laurent<F, K> {
     #[inline]

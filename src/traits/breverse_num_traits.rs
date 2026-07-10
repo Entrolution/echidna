@@ -10,47 +10,18 @@ use num_traits::{
 };
 
 use crate::breverse::BReverse;
-use crate::bytecode_tape::{self, BtapeThreadLocal, BytecodeTape, CONSTANT};
+use crate::bytecode_tape::{self, BtapeThreadLocal};
 use crate::float::Float;
-use crate::opcode::{OpCode, UNUSED};
+use crate::opcode::OpCode;
 
 // ── Helpers ──
 
-/// Ensure a BReverse operand has a valid tape index.
-#[inline]
-fn ensure_on_tape<F: Float>(x: &BReverse<F>, tape: &mut BytecodeTape<F>) -> u32 {
-    if x.index == CONSTANT {
-        tape.push_const(x.value)
-    } else {
-        x.index
-    }
-}
-
-/// Record a unary opcode, promoting constant if needed.
-#[inline]
-fn brev_unary<F: Float + BtapeThreadLocal>(x: BReverse<F>, op: OpCode, f_val: F) -> BReverse<F> {
-    let index = bytecode_tape::with_active_btape(|t| {
-        let xi = ensure_on_tape(&x, t);
-        t.push_op(op, xi, UNUSED, f_val)
-    });
-    BReverse::from_active_recording(f_val, index)
-}
-
-/// Record a binary opcode, promoting constants if needed.
-#[inline]
-fn brev_binary<F: Float + BtapeThreadLocal>(
-    x: BReverse<F>,
-    y: BReverse<F>,
-    op: OpCode,
-    f_val: F,
-) -> BReverse<F> {
-    let index = bytecode_tape::with_active_btape(|t| {
-        let xi = ensure_on_tape(&x, t);
-        let yi = ensure_on_tape(&y, t);
-        t.push_op(op, xi, yi, f_val)
-    });
-    BReverse::from_active_recording(f_val, index)
-}
+// The tape-recording helpers live once in `breverse_ops` — including the
+// debug-mode same-tape guard — so the arithmetic and num-traits recording
+// paths cannot drift apart.
+use super::breverse_ops::{
+    brev_binary_op as brev_binary, brev_unary_op as brev_unary, ensure_on_tape,
+};
 
 // ══════════════════════════════════════════════
 //  Basic numeric traits
@@ -444,24 +415,25 @@ impl<F: Float + BtapeThreadLocal> NumFloat for BReverse<F> {
     }
 
     fn to_degrees(self) -> Self {
+        // Recorded as x * (180/pi) — same tape layout as brev_binary's
+        // constant promotion (const push, then Mul).
         let factor = F::from(180.0).unwrap() / F::PI();
-        let val = self.value.to_degrees();
-        let index = bytecode_tape::with_active_btape(|t| {
-            let xi = ensure_on_tape(&self, t);
-            let fi = t.push_const(factor);
-            t.push_op(OpCode::Mul, xi, fi, val)
-        });
-        BReverse::from_active_recording(val, index)
+        brev_binary(
+            self,
+            BReverse::constant(factor),
+            OpCode::Mul,
+            self.value.to_degrees(),
+        )
     }
 
     fn to_radians(self) -> Self {
+        // Recorded as x * (pi/180); see `to_degrees`.
         let factor = F::PI() / F::from(180.0).unwrap();
-        let val = self.value.to_radians();
-        let index = bytecode_tape::with_active_btape(|t| {
-            let xi = ensure_on_tape(&self, t);
-            let fi = t.push_const(factor);
-            t.push_op(OpCode::Mul, xi, fi, val)
-        });
-        BReverse::from_active_recording(val, index)
+        brev_binary(
+            self,
+            BReverse::constant(factor),
+            OpCode::Mul,
+            self.value.to_radians(),
+        )
     }
 }

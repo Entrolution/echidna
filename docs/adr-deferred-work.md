@@ -68,7 +68,7 @@ fixed in-PR, so the track left no follow-up deferrals.
 | no_std / embedded (5.7) | Requires removing heap allocation and the thread-local tape/arena storage — a ground-up rewrite. Architecture fundamentally depends on dynamic allocation. | — |
 | Source transformation / proc-macro AD | Orthogonal approach. Enzyme covers LLVM-level AD. Would be a separate project. | — |
 | Preaccumulation of straight-line segments | Superseded by cross-country Markowitz elimination (R5), which achieves the same goal more generally. | `jacobian_cross_country()` |
-| Trait impl macros for num_traits | ~3,200 lines are mechanical but readable. Macros hurt error messages, IDE support, and debuggability. Low maintenance cost since impls rarely change. | Manual trait impls |
+| Trait impl macros for num_traits | ~3,200 lines are mechanical but readable. Macros hurt error messages, IDE support, and debuggability. Low maintenance cost since impls rarely change. Re-evaluated 2026-07-10 after a review surfaced one realized copy divergence (a dropped debug guard in the BReverse tape helpers): upheld — the divergence class is closed by consolidating the shared helpers into one home, which does not require macro-izing the impl surface. | Manual trait impls |
 | DiffOperator trait abstraction | Concrete estimators work well as standalone functions. `Estimator` trait (5.1) already provides the needed abstraction. Another trait layer would over-abstract. | `Estimator` trait + concrete functions |
 
 ### STDE Paper Items
