@@ -16,7 +16,9 @@
 //! let results = ctx.forward_batch(&tape_bufs, &[1.0f32, 2.0, 3.0, 4.0], 2).unwrap();
 //! ```
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(feature = "stde")]
+use std::sync::Mutex;
 
 use cudarc::driver::{
     CudaContext as CudarContext, CudaFunction, CudaSlice, CudaStream, LaunchConfig, PushKernelArg,
@@ -680,26 +682,6 @@ impl CudaContext {
     ///
     /// Deprecated: this inherent method delegates to the `GpuBackend` trait method.
     /// Import `GpuBackend` and call `taylor_forward_2nd_batch` directly.
-    #[cfg(feature = "stde")]
-    #[deprecated(
-        since = "0.5.0",
-        note = "import GpuBackend trait and call taylor_forward_2nd_batch() directly"
-    )]
-    pub fn taylor_forward_2nd_batch(
-        &self,
-        tape: &CudaTapeBuffers,
-        primal_inputs: &[f32],
-        direction_seeds: &[f32],
-        batch_size: u32,
-    ) -> Result<super::TaylorBatchResult<f32>, GpuError> {
-        <Self as GpuBackend>::taylor_forward_2nd_batch(
-            self,
-            tape,
-            primal_inputs,
-            direction_seeds,
-            batch_size,
-        )
-    }
 
     /// Batched second-order Taylor forward propagation (f64, CUDA only).
     #[cfg(feature = "stde")]

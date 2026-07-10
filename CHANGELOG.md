@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The deprecated (since 0.5.0) CUDA-specific STDE wrappers
+  `stde_gpu::laplacian_gpu_cuda` and `stde_gpu::hessian_diagonal_gpu_cuda`
+  — the generic `stde_gpu::laplacian_gpu` / `stde_gpu::hessian_diagonal_gpu`
+  work with both backends.
+- The deprecated (since 0.5.0) inherent `CudaContext::taylor_forward_2nd_batch`
+  — import the `GpuBackend` trait and call the trait method of the same name.
+- `TaylorDynGuard::arena` and `JetPlan::multi_indices`, unused accessors.
+- The unused optional `bumpalo` dependency (the bytecode tape is Vec-backed;
+  builds with the `bytecode` feature no longer pull it in).
+
 ## [0.14.1] - 2026-07-08
 
 **Coordinated release:** `echidna` 0.14.1 and `echidna-optim` 0.14.1.

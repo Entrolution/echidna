@@ -241,8 +241,6 @@ echidna = { version = "0.14", features = ["bytecode", "taylor"] }
 | `stde_gpu::laplacian_gpu(ctx, bufs, x, dirs)` | GPU-accelerated Laplacian estimator |
 | `stde_gpu::hessian_diagonal_gpu(ctx, bufs, x)` | GPU-accelerated exact Hessian diagonal |
 | `stde_gpu::laplacian_with_control_gpu(ctx, bufs, x, dirs, ctrl)` | GPU Laplacian with control variate |
-| `stde_gpu::laplacian_gpu_cuda(ctx, bufs, x, dirs)` | CUDA-accelerated Laplacian estimator |
-| `stde_gpu::hessian_diagonal_gpu_cuda(ctx, bufs, x)` | CUDA-accelerated exact Hessian diagonal |
 
 CUDA additionally supports `_f64` variants of all methods.
 

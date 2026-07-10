@@ -45,7 +45,6 @@ pub(super) struct WelfordAccumulator<F> {
     mean: F,
     m2: F,
     count: usize,
-    skipped: usize,
 }
 
 impl<F: Float> WelfordAccumulator<F> {
@@ -54,18 +53,15 @@ impl<F: Float> WelfordAccumulator<F> {
             mean: F::zero(),
             m2: F::zero(),
             count: 0,
-            skipped: 0,
         }
     }
 
-    /// Accumulate one sample. Non-finite samples are skipped and counted
-    /// (see [`skipped`](Self::skipped)) rather than poisoning the running
-    /// mean and variance: a NaN or Inf sample carries no usable magnitude
-    /// information, and estimators report how many samples actually
-    /// contributed via `num_samples`.
+    /// Accumulate one sample. Non-finite samples are skipped rather than
+    /// poisoning the running mean and variance: a NaN or Inf sample carries
+    /// no usable magnitude information, and estimators report how many
+    /// samples actually contributed via `num_samples`.
     pub(super) fn update(&mut self, sample: F) {
         if !sample.is_finite() {
-            self.skipped += 1;
             return;
         }
         self.count += 1;

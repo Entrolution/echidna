@@ -26,7 +26,7 @@ pub fn generate_taylor_wgsl(k: usize) -> String {
     write_wgsl_opcodes(&mut s);
 
     // TapeMeta, bind groups
-    write_wgsl_bindings(&mut s, k);
+    write_wgsl_bindings(&mut s);
 
     // Helper builtins missing from WGSL
     write_wgsl_helpers(&mut s);
@@ -132,7 +132,7 @@ fn write_wgsl_opcodes(s: &mut String) {
     writeln!(s).unwrap();
 }
 
-fn write_wgsl_bindings(s: &mut String, k: usize) {
+fn write_wgsl_bindings(s: &mut String) {
     writeln!(
         s,
         "struct TapeMeta {{
@@ -160,7 +160,6 @@ fn write_wgsl_bindings(s: &mut String, k: usize) {
 "
     )
     .unwrap();
-    let _ = k; // K only affects buffer sizes at dispatch time, not bindings
 }
 
 fn write_wgsl_helpers(s: &mut String) {

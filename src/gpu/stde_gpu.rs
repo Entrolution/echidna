@@ -265,34 +265,3 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
         num_samples: count,
     })
 }
-
-// ── Deprecated backend-specific wrappers ──
-
-/// Deprecated: Use [`laplacian_gpu`] instead (now generic over any `GpuBackend`).
-#[cfg(feature = "gpu-cuda")]
-#[deprecated(
-    since = "0.5.0",
-    note = "use laplacian_gpu() which is now generic over GpuBackend"
-)]
-pub fn laplacian_gpu_cuda(
-    backend: &super::CudaContext,
-    tape: &super::CudaTapeBuffers,
-    x: &[f32],
-    directions: &[&[f32]],
-) -> Result<EstimatorResult<f32>, GpuError> {
-    laplacian_gpu(backend, tape, x, directions)
-}
-
-/// Deprecated: Use [`hessian_diagonal_gpu`] instead (now generic over any `GpuBackend`).
-#[cfg(feature = "gpu-cuda")]
-#[deprecated(
-    since = "0.5.0",
-    note = "use hessian_diagonal_gpu() which is now generic over GpuBackend"
-)]
-pub fn hessian_diagonal_gpu_cuda(
-    backend: &super::CudaContext,
-    tape: &super::CudaTapeBuffers,
-    x: &[f32],
-) -> Result<(f32, Vec<f32>), GpuError> {
-    hessian_diagonal_gpu(backend, tape, x)
-}

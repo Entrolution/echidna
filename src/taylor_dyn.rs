@@ -131,6 +131,10 @@ pub fn with_active_arena<F: TaylorArenaLocal, R>(f: impl FnOnce(&mut TaylorArena
 /// Creates a new arena with the specified degree. Restores the previous
 /// arena (if any) on drop.
 pub struct TaylorDynGuard<F: TaylorArenaLocal> {
+    // Never read directly, but load-bearing: the thread-local cell holds a
+    // raw pointer into this Box, and `with_active_arena`'s SAFETY contract
+    // depends on the guard keeping the allocation alive until drop.
+    #[allow(dead_code)]
     arena: Box<TaylorArena<F>>,
     prev: *mut TaylorArena<F>,
 }
@@ -147,12 +151,6 @@ impl<F: TaylorArenaLocal> TaylorDynGuard<F> {
             prev
         });
         TaylorDynGuard { arena, prev }
-    }
-
-    /// Access the underlying arena.
-    #[must_use]
-    pub fn arena(&self) -> &TaylorArena<F> {
-        &self.arena
     }
 }
 

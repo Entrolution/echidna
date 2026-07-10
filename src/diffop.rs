@@ -497,12 +497,6 @@ impl<F: Float> JetPlan<F> {
     pub fn jet_order(&self) -> usize {
         self.max_jet_order
     }
-
-    /// The multi-indices this plan computes, in order.
-    #[must_use]
-    pub fn multi_indices(&self) -> Vec<MultiIndex> {
-        self.multi_indices.clone()
-    }
 }
 
 // ══════════════════════════════════════════════
