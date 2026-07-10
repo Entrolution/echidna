@@ -5,7 +5,7 @@
 //! evaluation, and for computing the Clarke generalized Jacobian via
 //! enumeration of limiting Jacobians with forced branch choices.
 //!
-//! Eight nonsmooth operations are tracked:
+//! Nine nonsmooth operations are tracked:
 //! - **`Abs`, `Min`, `Max`** — kinks with nontrivial subdifferentials (the two
 //!   sides of the kink have different derivatives). These contribute distinct
 //!   limiting Jacobians in Clarke enumeration.
@@ -14,6 +14,10 @@
 //!   for proximity detection (via [`NonsmoothInfo::active_kinks`]) but are
 //!   filtered out of Clarke enumeration since their forced branches produce
 //!   identical partials.
+//! - **`Fract`** — value discontinuity at integers with identical unit
+//!   derivative on both sides (a jump, not a derivative kink). Tracked for
+//!   proximity detection and, like the step functions, filtered out of
+//!   Clarke enumeration.
 
 use std::fmt;
 
@@ -35,7 +39,7 @@ pub struct KinkEntry<F: Float> {
     /// Distance from the kink point:
     /// - `Abs`, `Signum`: `x` (kink at `x = 0`)
     /// - `Min`, `Max`: `a - b` (kink at `a = b`)
-    /// - `Floor`, `Ceil`, `Trunc`: `x - round(x)` (kink at integers)
+    /// - `Floor`, `Ceil`, `Trunc`, `Fract`: `x - round(x)` (kink at integers)
     /// - `Round`: `(x + 0.5) - round(x + 0.5)` (kink at half-integers)
     pub switching_value: F,
     /// Which branch was taken:

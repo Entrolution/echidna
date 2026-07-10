@@ -14,6 +14,9 @@ use crate::Float;
 /// `DualVec { re, eps }` represents a value with N independent tangent directions,
 /// enabling batched Hessian computation.
 #[derive(Clone, Copy, Debug)]
+// repr(C) pins the field order (re, then the eps lanes) so batched values have
+// a byte-stable layout for FFI/GPU-style interop; no in-crate consumer depends
+// on it today.
 #[repr(C)]
 pub struct DualVec<F: Float, const N: usize> {
     /// Primal (real) value.
@@ -375,6 +378,10 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     // -- Misc --
 
     /// Absolute value.
+    ///
+    /// Derivative convention matches [`Dual::abs`](crate::Dual::abs), applied
+    /// per lane: [`kernels::abs_deriv`] gives `0` at the kink `x = 0` (the
+    /// minimal-norm subgradient), `sign(x)` elsewhere, `NaN` at `NaN`.
     #[inline]
     pub fn abs(self) -> Self {
         self.chain(self.re.abs(), kernels::abs_deriv(self.re))
@@ -463,6 +470,9 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     }
 
     /// Maximum of two values.
+    ///
+    /// Matches `num_traits::Float::max` semantics: returns the non-NaN argument.
+    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
     #[inline]
     pub fn max(self, other: Self) -> Self {
         if self.re >= other.re || other.re.is_nan() {
@@ -473,6 +483,9 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     }
 
     /// Minimum of two values.
+    ///
+    /// Matches `num_traits::Float::min` semantics: returns the non-NaN argument.
+    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
     #[inline]
     pub fn min(self, other: Self) -> Self {
         if self.re <= other.re || other.re.is_nan() {

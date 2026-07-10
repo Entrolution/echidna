@@ -252,14 +252,10 @@ pub fn taylor_atan<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     scratch2[0] = F::one() + scratch1[0];
     // c[0] = atan(a[0])
     c[0] = a[0].atan();
-    // c' = a' / (1 + a²), so c[k] via the division-integration recurrence:
-    // Let d = 1/(1+a²). Then c'[k-1] = Σ d[j] * a'[k-j-1]... but simpler approach:
-    // Since (1+a²) * c' = a', we have:
-    // k * (1+a²)[0] * c[k] + Σ_{j=1}^{k-1} (1+a²)[j] * (k-j) * c[k-j]...
-    // Actually the integration approach: if g = 1/(1+a²), then c' = a' * g
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * g[k-j]
-    // First compute g = 1/(1+a²):
-    // Reuse scratch1 for g = recip(1+a²)
+    // c' = a' / (1 + a²). With g = 1/(1 + a²) this is c' = a' * g, and
+    // integrating the Cauchy product gives
+    //   c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * g[k-j]
+    // Reuse scratch1 for g = recip(1 + a²):
     taylor_recip(scratch2, scratch1);
     // Now c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * scratch1[k-j]
     for k in 1..n {
@@ -311,26 +307,17 @@ pub fn taylor_acos<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
 
 /// `c = tan(a)` — via `c' = a' * (1 + tan²(a))` = `a' * (1 + c²)`.
 ///
-/// Uses `scratch` for `c²`.
+/// Uses `scratch` for `1 + c²`.
 #[inline]
 pub fn taylor_tan<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     let n = c.len();
     c[0] = a[0].tan();
-    // Recurrence: c' = a' * (1 + c²)
-    // c[k] = a[k] + (1/k) * Σ_{j=1}^{k} j * a[j] * scratch[k-j]
-    // where scratch holds running c² (partial)
-    // Actually let's do it step by step: after computing c[0..k], update scratch = c[0..k]²
-    // But this is circular. Better approach:
-    // Let s = 1 + c². Then c' = a' * s.
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * s[k-j]
-    // s[0] = 1 + c[0]², and for k>=1: s[k] = Σ_{j=0}^{k} c[j]*c[k-j]
-    // But s[k] depends on c[k], which depends on s...
-    // Expand: s[k] = 2*c[0]*c[k] + Σ_{j=1}^{k-1} c[j]*c[k-j]
-    // And c[k] = (1/k) * [k*a[k]*s[0] + Σ_{j=1}^{k-1} j*a[j]*s[k-j]]
-    // So substitute and solve for c[k]:
-    // c[k] = a[k]*s[0] + (1/k) * Σ_{j=1}^{k-1} j*a[j]*s[k-j]  ... (*)
-    // Then s[k] = 2*c[0]*c[k] + Σ_{j=1}^{k-1} c[j]*c[k-j]
-    // Wait, (*) only uses s[0..k-1] which are known. So this works!
+    // Let s = 1 + c², so c' = a' * s. Integrating the Cauchy product:
+    //   c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * s[k-j]
+    // reads only s[0..k-1] (j >= 1), all already known; then
+    //   s[k] = Σ_{j=0}^{k} c[j] * c[k-j]
+    // uses the fresh c[k], so the two recurrences interleave without
+    // circularity.
 
     // scratch = s (1 + c²)
     scratch[0] = F::one() + c[0] * c[0];
@@ -534,9 +521,8 @@ pub fn taylor_powf<F: Float>(
     taylor_ln(a, scratch1);
     // scratch2 = b * ln(a)
     taylor_mul(b, scratch1, scratch2);
-    // c = exp(b * ln(a))
-    // But we can't use scratch1 anymore since taylor_exp needs its own output...
-    // Actually taylor_exp writes to c, so we just need scratch2 as input.
+    // c = exp(b * ln(a)); taylor_exp reads scratch2 and writes c, so
+    // scratch1 is free from here on.
     taylor_exp(scratch2, c);
     if a[0] < F::zero() {
         // Negative base with a LIVE exponent (the constant-integer fast path
@@ -560,7 +546,8 @@ pub fn taylor_powf<F: Float>(
 ///
 /// Dispatches between two strategies:
 /// - **Repeated squaring** (binary exponentiation via `taylor_mul`): used when
-///   `a[0] < 0` (where `ln` would produce NaN) or `|n| <= 8` (at most 3
+///   `a[0] <= 0` (`ln` is singular there: NaN for a negative base, `-Inf`
+///   at zero) or `|n| <= 8` (at most 3
 ///   multiplications, competitive with exp-ln).
 /// - **exp(n * ln(a))**: used for positive base with large exponents.
 #[inline]
@@ -704,13 +691,10 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 
 /// `c = exp(a) - 1` (exp_m1).
 ///
-/// NOTE (verified correct): The recurrence uses `exp(a\[0\])` for `c\[1..\]` (via `taylor_exp`),
-/// then patches `c\[0\]` to `exp_m1(a\[0\])`. This is correct because derivatives of `exp(x)-1`
-/// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
-///
-/// The recurrence correctly uses `c[0] = exp(a[0])` (not `exp_m1(a[0])`) to compute
-/// `c[1..K]`, because `d/dx[exp(x)-1] = exp(x)` — the higher-order Taylor coefficients
-/// of `exp(x)-1` are identical to those of `exp(x)`. Only `c[0]` is patched afterward.
+/// Runs `taylor_exp` with `c[0] = exp(a[0])` during the recurrence —
+/// `d/dx[exp(x) - 1] = exp(x)`, so the higher-order coefficients of
+/// `exp(x) - 1` equal those of `exp(x)` — then patches `c[0]` to
+/// `exp_m1(a[0])` for the cancellation-free primal.
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
     taylor_exp(a, c);
@@ -768,8 +752,9 @@ pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 /// operands to a common pole order so the coefficient arrays
 /// become directly comparable, then calls through here.
 ///
-/// Uses `scratch1` for a², `scratch2` for b², and the result scratch
-/// for a²+b². Rescales inputs by `max(|a[0]|, |b[0]|)` (leading
+/// The scratch buffers stage the rescaled operands and squared terms
+/// (exact roles rotate; the step comments in the body annotate each).
+/// Rescales inputs by `max(|a[0]|, |b[0]|)` (leading
 /// coefficients only) to avoid overflow/underflow in the intermediate
 /// a²+b². At `scale == 0` with non-zero higher-order seeds, performs
 /// a recursive shift-and-square: hypot(a, b) near t = 0 with both

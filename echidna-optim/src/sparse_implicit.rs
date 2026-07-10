@@ -453,8 +453,8 @@ fn col_to_vec(col: &Col<f64>, len: usize) -> Vec<f64> {
 /// Returns `Err(SparseImplicitError)` if F_z is singular or
 /// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
-/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// Runtime vector-length mismatches (`z_star`, `x`, or `x_dot` not
+/// matching `ctx.num_states()` / `ctx.num_params()`)
 /// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
 /// tape-shape contract is still checked at `SparseImplicitContext::new`
 /// construction time, where mismatches panic — those are programmer
@@ -523,8 +523,8 @@ pub fn implicit_tangent_sparse(
 /// Returns `Err(SparseImplicitError)` if F_z is singular or
 /// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
-/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// Runtime vector-length mismatches (`z_star`, `x`, or `z_bar` not
+/// matching `ctx.num_states()` / `ctx.num_params()`)
 /// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
 /// tape-shape contract is still checked at `SparseImplicitContext::new`
 /// construction time, where mismatches panic — those are programmer
@@ -596,8 +596,8 @@ pub fn implicit_adjoint_sparse(
 /// Returns `Err(SparseImplicitError)` if F_z is singular or
 /// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
-/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// Runtime vector-length mismatches (`z_star` or `x` not matching
+/// `ctx.num_states()` / `ctx.num_params()`)
 /// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
 /// tape-shape contract is still checked at `SparseImplicitContext::new`
 /// construction time, where mismatches panic — those are programmer

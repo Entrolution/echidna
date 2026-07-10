@@ -824,16 +824,14 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     pub fn hypot(self, other: Self) -> Self {
         // Both-zero short-circuit: `hypot(0, 0) = 0` in the scalar
         // sense, but the Laurent representation at the cone-point
-        // singularity is ambiguous. The underlying `taylor_hypot`
-        // kernel produces `[0, Inf, Inf, ...]` (its "singular-
-        // derivative convention at a true zero"), which after
-        // `normalize()` on fixed-K Laurent storage degenerates into
-        // a nonsense pole-of-order-1 with Inf coefficients rather
-        // than the expected clean zero. Short-circuit here so
+        // singularity is ambiguous. The `taylor_hypot` kernel's own
+        // all-zero guard returns `[0, 0, ...]`, so the zero result
+        // does not depend on this branch; it is kept so
         // `Laurent::zero().hypot(Laurent::zero()) == Laurent::zero()`
-        // stays an invariant — the pure cone point carries no
-        // directional information that Laurent can meaningfully
-        // represent.
+        // is an explicit, locally-visible invariant rather than a
+        // consequence of kernel internals — the pure cone point
+        // carries no directional information that Laurent can
+        // meaningfully represent.
         //
         // Note: rebasing the two operands to a common (more-negative) pole
         // introduces leading zeros in the higher-pole operand's coefficient

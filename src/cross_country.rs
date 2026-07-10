@@ -82,6 +82,10 @@ impl<F: Float> LinearizedGraph<F> {
                         let da = if exp == 0 {
                             F::zero()
                         } else if exp == i32::MIN {
+                            // `exp - 1` overflows i32 at i32::MIN, so use the
+                            // algebraic rewrite n * a^n / a = n * a^(n-1),
+                            // valid for a != 0 (a == 0 already yields the
+                            // 0/Inf/NaN family either way).
                             let n = F::from(exp).unwrap();
                             n * values[i] / a
                         } else {
@@ -236,8 +240,8 @@ impl<F: Float> LinearizedGraph<F> {
 
             // Accumulate remaining edges. Elevate the debug_assert to a hard
             // assert: release-mode silent truncation of non-input predecessors
-            // produces silently wrong Jacobian rows (the bug-hunt finding M11),
-            // and the panic here is caller-actionable.
+            // produces silently wrong Jacobian rows, and the panic here is
+            // caller-actionable.
             for &(pred_idx, weight) in &self.preds[out] {
                 let p = pred_idx as usize;
                 assert!(

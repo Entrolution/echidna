@@ -93,8 +93,9 @@ pub(crate) fn detect_sparsity_impl(
                     OpClass::UnaryNonlinear => {
                         // Union dependencies + mark all cross-pairs within dep set
                         union_into(&mut deps, i, a);
-                        // Safe: we read deps[i] (already updated) — no clone needed
-                        // since mark_all_pairs only reads.
+                        // extract_bits copies the set-bit positions into an
+                        // owned Vec, so the pair loop below borrows nothing
+                        // from deps.
                         let bits = extract_bits(&deps[i], num_inputs);
                         for ii in 0..bits.len() {
                             for jj in 0..=ii {
@@ -392,7 +393,8 @@ impl CsrPattern {
         assert_eq!(coo_vals.len(), coo.nnz());
         assert_eq!(self.nnz(), coo.nnz());
 
-        // Build a map from (row, col) -> value from COO
+        // For each CSR entry, linear-search the COO triples for its value
+        // (O(nnz) per entry; fine at conversion-time scale).
         let mut result = Vec::with_capacity(self.nnz());
 
         for row in 0..self.dim {

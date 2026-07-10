@@ -42,7 +42,7 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     );
     assert!(
         k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
+        "k must be <= 12 for f32 (one order of margin: f32 k! exactness first degrades at 14!; use f64)"
     );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
@@ -185,7 +185,10 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
 /// Stochastic k-th order diagonal estimate: `Σ_j ∂^k u/∂x_j^k`.
 ///
 /// Evaluates only the coordinate indices in `sampled_indices`, then scales
-/// by `n / |J|` to produce an unbiased estimate of the full sum.
+/// by `n / |J|`. The rescaled estimate is unbiased only when
+/// `sampled_indices` is a uniform random draw over `0..n`; a deterministic
+/// subset biases it toward the sampled coordinates (see the sampling
+/// precondition note on [`stde_sparse`](crate::stde::stde_sparse)).
 ///
 /// # Panics
 ///
@@ -208,7 +211,7 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
     );
     assert!(
         k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
+        "k must be <= 12 for f32 (one order of margin: f32 k! exactness first degrades at 14!; use f64)"
     );
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
@@ -251,7 +254,8 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
 
     let (mean, sample_variance, standard_error) = acc.finalize();
 
-    // Unbiased estimator for Σ_j d_j: n * mean(sampled d_j's).
+    // n * mean(sampled d_j's) estimates Σ_j d_j — unbiased iff the sampled
+    // indices are a uniform random draw (see rustdoc precondition).
     // Scale variance/SE to match the rescaled estimate.
     EstimatorResult {
         value,

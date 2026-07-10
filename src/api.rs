@@ -30,7 +30,6 @@ pub fn grad<F: Float + TapeThreadLocal>(
     let n = x.len();
     let mut tape = Tape::take_pooled(n * 10);
 
-    // Create input variables.
     let inputs: Vec<Reverse<F>> = x
         .iter()
         .map(|&val| {
@@ -49,7 +48,6 @@ pub fn grad<F: Float + TapeThreadLocal>(
         return vec![F::zero(); n];
     }
 
-    // Run reverse sweep.
     let adjoints = tape.reverse(output.index);
 
     // Extract gradients for input variables (indices 0..n).
@@ -217,7 +215,6 @@ pub fn record<F: Float + BtapeThreadLocal>(
     let n = x.len();
     let mut tape = BytecodeTape::with_capacity(n * 10);
 
-    // Register inputs.
     let inputs: Vec<BReverse<F>> = x
         .iter()
         .map(|&val| {
@@ -263,7 +260,6 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
     let n = x.len();
     let mut tape = BytecodeTape::with_capacity(n * 10);
 
-    // Register inputs.
     let inputs: Vec<BReverse<F>> = x
         .iter()
         .map(|&val| {

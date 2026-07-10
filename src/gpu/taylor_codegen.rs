@@ -511,12 +511,9 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
     writeln!(s, "    c.v[0] = tan(a.v[0]);").unwrap();
     writeln!(s, "    sc.v[0] = 1.0 + c.v[0] * c.v[0];").unwrap();
     for i in 1..k {
-        // First update sc[i] (c² contribution) from already-computed c[0..i-1]
-        // Actually, we need sc[i-j] in the integration, so we compute sc up to i-1 first
-        // Then compute c[i], then sc[i].
-        // sc[p] = Σ_{j=0}^{p} c[j]*c[p-j] for the c² part
-        // Actually the recurrence is: c[i] = (1/i) * Σ_{j=1}^{i} j*a[j]*sc[i-j]
-        // where sc = 1+c². So sc[0] = 1 + c[0]², sc[p] = Σ_{j=0}^{p} c[j]*c[p-j] for p>0
+        // With sc = 1 + c²: c[i] = (1/i) * Σ_{j=1}^{i} j*a[j]*sc[i-j].
+        // The sum reads only sc[0..i-1] (j >= 1), so c[i] is emitted first,
+        // then sc[i] = Σ_{j=0}^{i} c[j]*c[i-j] (sc[0] = 1 + c[0]² seeds it).
         let inv_i = 1.0 / i as f64;
         let mut terms = Vec::new();
         for j in 1..=i {
@@ -2664,7 +2661,7 @@ mod tests {
         );
     }
 
-    // GPU-low parity: MAX/MIN keep CPU's NaN tie-break (`|| other.is_nan()`), jet_sqrt
+    // MAX/MIN keep CPU's NaN tie-break (`|| other.is_nan()`), jet_sqrt
     // gives a uniform +Inf higher-coeff jet at a0==0 (not sign-dependent Inf/NaN), and
     // REM by a zero-leading divisor returns an all-NaN jet (matching CPU Taylor::rem).
     #[test]
@@ -2702,7 +2699,7 @@ mod tests {
         );
     }
 
-    // GPU-low (WGSL primal conventions): SIGNUM uses the sign-bit helper (so -0.0
+    // WGSL primal conventions: SIGNUM uses the sign-bit helper (so -0.0
     // gives -1, not +1), and ROUND is ties-away-from-zero (WGSL `round()` is
     // ties-to-even). CUDA's `round`/`copysign` are already ties-away / sign-bit.
     #[test]

@@ -207,7 +207,8 @@ pub fn parabolic_diffusion_stochastic<F: Float>(
 
     let (mean, sample_variance, standard_error) = acc.finalize();
 
-    // Unbiased estimator for ½ Σ_i (σ·e_i)^T H (σ·e_i): d * mean * ½.
+    // d * mean * ½ estimates ½ Σ_i (σ·e_i)^T H (σ·e_i) — unbiased iff
+    // `sampled_indices` is a uniform random draw over the d columns.
     // Scale variance/SE to match the rescaled estimate.
     let scale = df * half;
     EstimatorResult {
@@ -232,8 +233,12 @@ pub fn parabolic_diffusion_stochastic<F: Float>(
 /// The caller provides `z_vectors` (standard Gaussian samples) and
 /// `cholesky_rows` (the rows of L — only lower-triangular entries matter).
 ///
-/// **Indefinite C deferred**: For indefinite operators, manually split into
-/// `C⁺ - C⁻`, compute Cholesky factors for each, and call twice.
+/// **Scope**: `C` must be positive-definite (it is consumed as a Cholesky
+/// factor). For indefinite operators use
+/// [`dense_stde_2nd_indefinite`]
+/// (feature `nalgebra`, eigendecomposition-based), or — feature-free —
+/// split manually into `C⁺ - C⁻`, compute Cholesky factors for each, and
+/// call twice.
 ///
 /// **No `rand` dependency**: callers provide z_vectors.
 ///

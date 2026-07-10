@@ -196,10 +196,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 3u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a-b; rt=at-bt; }
             case 4u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a*b; rt=b*at+a*bt; }
             // DIV tangent factored as r*inv (r = a/b) to match
-            // tangent_forward.wgsl and the CUDA kernel. The prior a*inv*inv
-            // form was equivalent and equally overflow-safe — WGSL
-            // left-associativity makes it (a*inv)*inv, never forming
-            // inv*inv. Expression-consistency change only (<= 1 ULP).
+            // tangent_forward.wgsl and the CUDA kernel. WGSL left-
+            // associativity evaluates r*inv*bt as (r*inv)*bt, never
+            // forming inv*inv, so the form is overflow-safe.
             case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-r*inv*bt; }
             // REM is exact only for |a/b| < 2^24 (f32 mantissa) — see rem_f32 in
             // forward.wgsl; CPU/CUDA use exact fmod.

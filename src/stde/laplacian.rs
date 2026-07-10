@@ -162,8 +162,8 @@ pub fn hessian_diagonal_with_buf<F: Float>(
 
     // Constant-output tape (n == 0): the basis-vector loop never runs so
     // `value` would stay at zero. Recover the true constant via a primal
-    // pass, mirroring the fix applied in `hessian`, `hessian_vec`, and
-    // the sparse counterparts.
+    // pass — the same convention as `hessian`, `hessian_vec`, and the
+    // sparse counterparts.
     if n == 0 {
         let mut values_buf = Vec::new();
         tape.forward_into(&[], &mut values_buf);
@@ -209,7 +209,6 @@ fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usi
             }
         }
 
-        // Compute norm
         let norm_sq: F = columns[i].iter().fold(F::zero(), |acc, &v| acc + v * v);
         let norm = norm_sq.sqrt();
 
@@ -218,7 +217,6 @@ fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usi
             columns.swap_remove(i);
             // Don't increment i — swapped element needs processing
         } else {
-            // Normalise
             let inv_norm = F::one() / norm;
             for v in columns[i].iter_mut() {
                 *v = *v * inv_norm;

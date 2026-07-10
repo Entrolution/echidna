@@ -106,7 +106,7 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
 }
 
 // ══════════════════════════════════════════════
-//  Online checkpointing (R9a)
+//  Online checkpointing
 // ══════════════════════════════════════════════
 
 /// Compute gradients through an iterative computation with unknown step count.
@@ -210,7 +210,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 }
 
 // ══════════════════════════════════════════════
-//  Checkpoint placement hints (R9c)
+//  Checkpoint placement hints
 // ══════════════════════════════════════════════
 
 /// Compute gradients with user-specified required checkpoint positions.
@@ -361,7 +361,7 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
 }
 
 // ══════════════════════════════════════════════
-//  Disk-backed checkpointing (R9b)
+//  Disk-backed checkpointing
 // ══════════════════════════════════════════════
 
 /// Compute gradients using disk-backed checkpointing for large state vectors.
@@ -610,8 +610,10 @@ fn backward_from_checkpoints<F: Float + BtapeThreadLocal>(
 
     // Backward pass: VJP through each segment from checkpoints.
     // Checkpoints are sorted by step index (inserted in order).
-    // SPEC: CompletenessProperty — every forward step is covered exactly once by the
-    // reverse segment walk `(0..num_segments).rev()`.
+    // SPEC: CompletenessProperty — every forward step is covered by the
+    // reverse segment walk `(0..num_segments).rev()` (the invariant asserts
+    // set coverage; the at-most-once half follows structurally from the
+    // segments being contiguous and non-overlapping).
     let num_segments = checkpoints.len();
     for seg in (0..num_segments).rev() {
         let (ckpt_step, ref ckpt_state) = checkpoints[seg];

@@ -26,7 +26,8 @@ use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use super::{GpuBackend, GpuError, GpuTapeData};
 
 const KERNEL_SRC: &str = include_str!("kernels/tape_eval.cu");
-// taylor_eval.cu retired in favour of codegen (taylor_codegen.rs K=1..5)
+// Taylor kernels are generated at runtime by taylor_codegen.rs (K = 1..5),
+// so tape_eval.cu is the only bundled kernel source.
 const BLOCK_SIZE: u32 = 256;
 
 // ── Macros to deduplicate f32/f64 CUDA dispatch methods ──

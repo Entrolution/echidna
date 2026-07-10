@@ -118,7 +118,6 @@ impl<F: Float> RemAssign for Dual<F> {
 }
 
 // Mixed ops: Dual<F> with primitive floats.
-// We generate these for f32 and f64 via a macro.
 macro_rules! impl_dual_scalar_ops {
     ($f:ty) => {
         impl Add<$f> for Dual<$f> {

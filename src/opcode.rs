@@ -13,8 +13,11 @@ pub const UNUSED: u32 = u32::MAX;
 /// Elementary operation codes for the bytecode tape.
 ///
 /// Fits in a `u8` (44 variants). Binary ops use both `arg_indices` slots;
-/// unary ops use slot 0 only (slot 1 = [`UNUSED`], except for [`OpCode::Powi`]
-/// which stores the `i32` exponent reinterpreted as `u32` in slot 1).
+/// unary ops use slot 0 only (slot 1 = [`UNUSED`]). Two exceptions store
+/// metadata in slot 1: [`OpCode::Powi`] keeps the `i32` exponent
+/// reinterpreted as `u32` there, and [`OpCode::Custom`] keeps the callback
+/// index there (a binary custom op's second operand lives in the
+/// `custom_second_args` side table).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -212,7 +215,8 @@ pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8)
 
 /// Evaluate a single opcode in the forward direction.
 ///
-/// Generic over `T: Float` so Phase 3 can call it with `Dual<F>`.
+/// Generic over `T: Float` so the tangent sweeps can evaluate it with
+/// `Dual<F>` and nested duals (forward-over-reverse).
 ///
 /// For binary ops, `a` and `b` are the two operand values.
 /// For unary ops, `a` is the operand value and `b` is ignored
@@ -318,8 +322,8 @@ pub fn eval_forward<T: Float>(op: OpCode, a: T, b: T) -> T {
 /// `a`, `b` are the operand values (at recording or re-evaluation time).
 /// `r` is the result value.
 ///
-/// Generic over `T: Float` so Phase 3 can call it with `Dual<F>` for
-/// forward-over-reverse.
+/// Generic over `T: Float` so tangent-carrying reverse sweeps can call it
+/// with `Dual<F>` for forward-over-reverse.
 #[inline]
 pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
     let zero = T::zero();

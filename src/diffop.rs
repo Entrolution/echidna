@@ -299,7 +299,12 @@ pub struct JetPlan<F> {
     multi_indices: Vec<MultiIndex>,
 }
 
-/// First primes for slot assignment.
+/// Slot values for pushforward packing. The packed output index is the
+/// linear combination `k = Σ slot_t · order_t`; prime slots make accidental
+/// equality of two different packings unlikely. `try_slots` verifies
+/// collision freedom exactly (returning `Err` on a clash), and its caller's
+/// retry loop bumps the prime-window offset until a collision-free window
+/// is found.
 const PRIMES: [usize; 20] = [
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
 ];
@@ -545,10 +550,10 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
     let num_results = plan.multi_indices.len();
     let mut derivatives = vec![F::zero(); num_results];
     // `value` is overwritten by the first non-empty group's pushforward.
-    // For the degenerate empty-plan case (no groups), zero is a defensible
-    // default — the previous `Σx[i]` placeholder looked plausible but
-    // silently returned the sum of inputs if the plan had no groups,
-    // which is a latent wrong-answer hazard.
+    // For the degenerate empty-plan case (no groups), zero is the deliberate
+    // default. Do not substitute `Σx[i]` or similar: anything derived from
+    // the inputs looks plausible but silently returns a wrong answer when a
+    // plan has no groups.
     let mut value = F::zero();
 
     for group in &plan.groups {
@@ -599,8 +604,7 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
 /// When every order in `orders` is zero, the function returns
 /// `(u(x), u(x))` — an all-zero multi-index is the identity operator, so
 /// the "derivative" is just `u(x)` itself. This is the mathematically
-/// correct answer and not an error. An earlier version of this docstring
-/// claimed a panic; no such panic exists.
+/// correct answer and not an error.
 ///
 /// # Panics
 ///
@@ -647,9 +651,11 @@ pub fn mixed_partial<F: Float + TaylorArenaLocal>(
 /// - `gradient[i]` = `∂u/∂x_i`
 /// - `hessian[i][j]` = `∂²u/(∂x_i ∂x_j)`
 ///
-/// Each derivative requires its own pushforward group, so this performs
-/// `n + n*(n+1)/2` forward passes. For large n, consider using
-/// `tape.hessian()` instead.
+/// `JetPlan` groups multi-indices by active-variable set, so the `n`
+/// first-order partials share the `n` singleton groups with the diagonal
+/// second-order partials: `n(n+1)/2` forward passes total (`n` singletons
+/// plus `C(n,2)` pairs). For large n, consider using `tape.hessian()`
+/// instead.
 ///
 /// # Panics
 ///
@@ -798,7 +804,7 @@ impl<F: Float> DiffOp<F> {
     /// Expands to `Σ_j ∂⁴/∂x_j⁴ + 2 Σ_{j<k} ∂⁴/(∂x_j² ∂x_k²)`.
     ///
     /// For n=1, equivalent to `diagonal(1, 4)`. For n≥2, includes cross terms.
-    /// Evaluation via [`eval`] uses exact jet arithmetic. Stochastic estimation
+    /// Evaluation via [`DiffOp::eval`] uses exact jet arithmetic. Stochastic estimation
     /// via `stde_sparse` requires importance sampling (full deterministic sampling
     /// is biased when coefficients are non-uniform).
     /// # Panics
@@ -996,7 +1002,7 @@ struct SparseJetEntry<F> {
     sign: F,
 }
 
-/// Read-only view of a [`SparseJetEntry`] for use by [`stde_sparse`](crate::stde::stde_sparse).
+/// Read-only view of a `SparseJetEntry` for use by [`stde_sparse`](crate::stde::stde_sparse).
 pub struct SparseJetEntryRef<'a, F> {
     entry: &'a SparseJetEntry<F>,
 }

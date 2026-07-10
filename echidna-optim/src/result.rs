@@ -135,11 +135,11 @@ impl SolverDiagnostics {
 #[derive(Debug, Clone, Default)]
 pub struct LbfgsDiagnostics {
     /// Number of (s, y) curvature pairs that passed the Cauchy-Schwarz
-    /// filter `sy > F::epsilon() · sqrt(ss · yy)` and entered the
+    /// filter `sy > sqrt(F::epsilon()) · sqrt(ss · yy)` and entered the
     /// history buffer.
     pub pairs_accepted: usize,
     /// Number of curvature pairs rejected by the filter
-    /// `sy > F::epsilon() · sqrt(ss · yy)` (negative or near-zero
+    /// `sy > sqrt(F::epsilon()) · sqrt(ss · yy)` (negative or near-zero
     /// curvature, i.e. cosine angle near 0 between `s` and `y`).
     pub pairs_curvature_rejected: usize,
     /// Number of evict-then-push events: a new accepted pair was added
