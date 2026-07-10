@@ -74,6 +74,12 @@ fn build_compute_pipeline(
 
 impl WgpuContext {
     /// Acquire a GPU device. Returns `None` if no suitable adapter is found.
+    ///
+    /// ```no_run
+    /// use echidna::gpu::WgpuContext;
+    ///
+    /// let ctx = WgpuContext::new().expect("no wgpu adapter available");
+    /// ```
     #[must_use]
     pub fn new() -> Option<Self> {
         pollster::block_on(Self::new_async())

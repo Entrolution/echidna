@@ -1,5 +1,18 @@
 //! Nonsmooth extensions: branch tracking, kink detection, and Clarke subdifferential.
 //!
+//! ```
+//! # #[cfg(feature = "bytecode")] {
+//! use num_traits::Float;
+//!
+//! // |x| at its kink: the Clarke subdifferential is the interval [-1, 1],
+//! // enumerated here as the two limiting Jacobians.
+//! let (mut tape, _) = echidna::record(|x| x[0].abs(), &[0.0_f64]);
+//! let (info, jacobians) = tape.clarke_jacobian(&[0.0], 1e-8, None).unwrap();
+//! assert_eq!(info.kinks.len(), 1);
+//! assert_eq!(jacobians.len(), 2);
+//! # }
+//! ```
+//!
 //! Implements Griewank & Walther, Chapter 14. Provides data structures for
 //! tracking which branch of nonsmooth operations was taken during forward
 //! evaluation, and for computing the Clarke generalized Jacobian via

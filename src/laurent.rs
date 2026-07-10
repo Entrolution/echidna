@@ -1,5 +1,17 @@
 //! Const-generic Laurent coefficient type: `Laurent<F, K>`.
 //!
+//! ```
+//! use echidna::laurent::Laurent;
+//!
+//! // 1/t has a simple pole; squaring it deepens the pole to order -2.
+//! let t: Laurent<f64, 4> = Laurent::variable(0.0);
+//! let inv_t = Laurent::constant(1.0) / t;
+//! assert_eq!(inv_t.pole_order(), -1);
+//! let inv_t2 = inv_t * inv_t;
+//! assert_eq!(inv_t2.pole_order(), -2);
+//! assert_eq!(inv_t2.leading_coefficient(), 1.0);
+//! ```
+//!
 //! A Laurent series extends Taylor series to allow negative powers of t:
 //! `f(t) = Σ_{k=p}^{p+K-1} c_{k-p} · t^k`, where `p = pole_order`.
 //!

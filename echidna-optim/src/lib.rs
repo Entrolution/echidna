@@ -92,3 +92,8 @@ pub use sparse_implicit::{
     implicit_adjoint_sparse, implicit_jacobian_sparse, implicit_tangent_sparse,
     SparseImplicitContext, SparseImplicitError,
 };
+
+/// Compile and run the README examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

@@ -1,5 +1,21 @@
 //! GPU acceleration for batched tape evaluation.
 //!
+//! ```no_run
+//! # #[cfg(feature = "gpu-wgpu")] {
+//! use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
+//!
+//! let ctx = WgpuContext::new().expect("no wgpu adapter available");
+//! let (tape, _) = echidna::record(|x| x[0] * x[0] + x[1], &[3.0_f64, 4.0]);
+//! let data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+//! let bufs = ctx.upload_tape(&data);
+//!
+//! // 3 evaluation points in one dispatch.
+//! let inputs: Vec<f32> = vec![3.0, 4.0, 1.0, 2.0, 0.5, 0.5];
+//! let outputs = ctx.forward_batch(&bufs, &inputs, 3).unwrap();
+//! assert_eq!(outputs.len(), 3);
+//! # }
+//! ```
+//!
 //! Provides two backends:
 //! - **wgpu** (`gpu-wgpu` feature): cross-platform (Metal, Vulkan, DX12), f32 only
 //! - **CUDA** (`gpu-cuda` feature): NVIDIA only, f32 + f64

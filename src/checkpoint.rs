@@ -1,5 +1,17 @@
 //! Compositional gradient checkpointing for iterative computations.
 //!
+//! ```
+//! use echidna::BReverse;
+//! use echidna::checkpoint::grad_checkpointed;
+//!
+//! // State evolves by squaring the entry; the loss reads it out. The
+//! // gradient of loss(step^3(x0)) at x0 = 2 is d(x^8)/dx = 8·x^7 = 1024.
+//! let step = |state: &[BReverse<f64>]| vec![state[0] * state[0]];
+//! let loss = |state: &[BReverse<f64>]| state[0];
+//! let g = grad_checkpointed(step, loss, &[2.0_f64], 3, 2);
+//! assert!((g[0] - 1024.0).abs() < 1e-9);
+//! ```
+//!
 //! Splits the forward sweep into segments bounded by stored checkpoints,
 //! spread evenly so peak backward memory stays at roughly
 //! `num_steps / num_checkpoints` states while each segment is recomputed

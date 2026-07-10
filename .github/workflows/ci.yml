@@ -72,9 +72,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build docs (echidna)
-        run: cargo doc --no-deps --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray"
+        run: cargo doc --no-deps --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu"
         env:
           RUSTDOCFLAGS: -D warnings
+
+      - name: Doc-tests (echidna, GPU examples compile-checked)
+        run: cargo test --doc -p echidna --features "bytecode,taylor,laurent,stde,serde,faer,nalgebra,ndarray,parallel,diffop,gpu-wgpu"
 
       - name: Build docs (echidna-optim)
         run: cargo doc -p echidna-optim --no-deps --all-features

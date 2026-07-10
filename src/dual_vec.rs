@@ -1,5 +1,16 @@
 //! Batched forward-mode dual numbers with `N` tangent lanes.
 //!
+//! ```
+//! use echidna::DualVec;
+//!
+//! // Two tangent lanes at once: d/dx and d/dy of x·y at (3, 4).
+//! let x = DualVec::<f64, 2>::with_tangent(3.0, 0);
+//! let y = DualVec::<f64, 2>::with_tangent(4.0, 1);
+//! let f = x * y;
+//! assert_eq!(f.re, 12.0);
+//! assert_eq!(f.eps, [4.0, 3.0]);
+//! ```
+//!
 //! [`DualVec<F, N>`] carries `N` independent tangent directions simultaneously,
 //! enabling vectorized Jacobian columns or batched Hessian computation via
 //! forward-over-reverse mode.
