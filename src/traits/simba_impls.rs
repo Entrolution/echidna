@@ -219,7 +219,7 @@ impl SubsetOf<Dual<f32>> for f64 {
     }
     #[inline]
     fn from_superset_unchecked(element: &Dual<f32>) -> Self {
-        element.re as f64
+        f64::from(element.re)
     }
     #[inline]
     fn is_in_subset(element: &Dual<f32>) -> bool {
@@ -231,7 +231,7 @@ impl SubsetOf<Dual<f32>> for f64 {
 impl SubsetOf<Dual<f64>> for f32 {
     #[inline]
     fn to_superset(&self) -> Dual<f64> {
-        Dual::constant(*self as f64)
+        Dual::constant(f64::from(*self))
     }
     #[inline]
     fn from_superset_unchecked(element: &Dual<f64>) -> Self {
@@ -300,7 +300,7 @@ impl<const N: usize> SubsetOf<DualVec<f32, N>> for f64 {
     }
     #[inline]
     fn from_superset_unchecked(element: &DualVec<f32, N>) -> Self {
-        element.re as f64
+        f64::from(element.re)
     }
     #[inline]
     fn is_in_subset(element: &DualVec<f32, N>) -> bool {
@@ -312,7 +312,7 @@ impl<const N: usize> SubsetOf<DualVec<f32, N>> for f64 {
 impl<const N: usize> SubsetOf<DualVec<f64, N>> for f32 {
     #[inline]
     fn to_superset(&self) -> DualVec<f64, N> {
-        DualVec::constant(*self as f64)
+        DualVec::constant(f64::from(*self))
     }
     #[inline]
     fn from_superset_unchecked(element: &DualVec<f64, N>) -> Self {
@@ -380,7 +380,7 @@ impl SubsetOf<Reverse<f32>> for f64 {
     }
     #[inline]
     fn from_superset_unchecked(element: &Reverse<f32>) -> Self {
-        element.value as f64
+        f64::from(element.value)
     }
     #[inline]
     fn is_in_subset(element: &Reverse<f32>) -> bool {
@@ -392,7 +392,7 @@ impl SubsetOf<Reverse<f32>> for f64 {
 impl SubsetOf<Reverse<f64>> for f32 {
     #[inline]
     fn to_superset(&self) -> Reverse<f64> {
-        Reverse::constant(*self as f64)
+        Reverse::constant(f64::from(*self))
     }
     #[inline]
     fn from_superset_unchecked(element: &Reverse<f64>) -> Self {

@@ -8,6 +8,7 @@ use std::fmt;
 /// literal.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct OptimResult<F> {
     /// Solution point.
     pub x: Vec<F>,

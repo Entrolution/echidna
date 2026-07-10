@@ -322,35 +322,8 @@ pub fn laplacian_dyn<F: Float + TaylorArenaLocal>(
     x: &[F],
     directions: &[&[F]],
 ) -> (F, F) {
-    assert!(!directions.is_empty(), "directions must not be empty");
-    let n = tape.num_inputs();
-    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
-
-    let _guard = TaylorDynGuard::<F>::new(3);
-
-    let two = F::from(2.0).unwrap();
-    let s = F::from(directions.len()).unwrap();
-    let mut sum = F::zero();
-    let mut value = F::zero();
-    let mut buf: Vec<TaylorDyn<F>> = Vec::new();
-
-    for v in directions {
-        assert_eq!(v.len(), n, "direction length must match tape.num_inputs()");
-
-        let inputs: Vec<TaylorDyn<F>> = x
-            .iter()
-            .zip(v.iter())
-            .map(|(&xi, &vi)| TaylorDyn::from_coeffs(&[xi, vi, F::zero()]))
-            .collect();
-
-        tape.forward_tangent(&inputs, &mut buf);
-
-        let out = buf[tape.output_index()];
-        let coeffs = out.coeffs();
-        value = coeffs[0];
-        let c2 = coeffs[2];
-        sum = sum + two * c2;
-    }
-
-    (value, sum / s)
+    // The estimate is fixed at second order, so the dynamic arena adds
+    // nothing over the const-generic jets `laplacian` uses; kept as a thin
+    // wrapper for API compatibility.
+    crate::stde::laplacian(tape, x, directions)
 }

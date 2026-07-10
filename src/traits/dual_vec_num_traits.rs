@@ -8,18 +8,18 @@ use crate::dual_vec::DualVec;
 use crate::float::Float;
 
 impl<F: Float, const N: usize> Zero for DualVec<F, N> {
-    #[inline(always)]
+    #[inline]
     fn zero() -> Self {
         DualVec::constant(F::zero())
     }
-    #[inline(always)]
+    #[inline]
     fn is_zero(&self) -> bool {
         self.re.is_zero()
     }
 }
 
 impl<F: Float, const N: usize> One for DualVec<F, N> {
-    #[inline(always)]
+    #[inline]
     fn one() -> Self {
         DualVec::constant(F::one())
     }
@@ -33,19 +33,19 @@ impl<F: Float, const N: usize> Num for DualVec<F, N> {
 }
 
 impl<F: Float, const N: usize> FromPrimitive for DualVec<F, N> {
-    #[inline(always)]
+    #[inline]
     fn from_i64(n: i64) -> Option<Self> {
         F::from_i64(n).map(DualVec::constant)
     }
-    #[inline(always)]
+    #[inline]
     fn from_u64(n: u64) -> Option<Self> {
         F::from_u64(n).map(DualVec::constant)
     }
-    #[inline(always)]
+    #[inline]
     fn from_f32(n: f32) -> Option<Self> {
         F::from_f32(n).map(DualVec::constant)
     }
-    #[inline(always)]
+    #[inline]
     fn from_f64(n: f64) -> Option<Self> {
         F::from_f64(n).map(DualVec::constant)
     }
@@ -71,7 +71,7 @@ impl<F: Float, const N: usize> ToPrimitive for DualVec<F, N> {
 }
 
 impl<F: Float, const N: usize> NumCast for DualVec<F, N> {
-    #[inline(always)]
+    #[inline]
     fn from<T: ToPrimitive>(n: T) -> Option<Self> {
         F::from(n).map(DualVec::constant)
     }

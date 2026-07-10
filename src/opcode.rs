@@ -209,6 +209,9 @@ pub fn forced_reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T, sign: i8)
             // integer discontinuity.
             (one, zero)
         }
+        // A new nonsmooth op must get an explicit arm above (and an
+        // `is_nonsmooth`/`has_nontrivial_subdifferential` entry) — this
+        // catch-all silently hands it the smooth partials.
         _ => reverse_partials(op, a, b, r),
     }
 }

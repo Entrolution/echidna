@@ -40,6 +40,13 @@ pub struct BReverse<F: Float> {
     pub(crate) tape_id: u64,
 }
 
+impl<F: Float> From<F> for BReverse<F> {
+    #[inline]
+    fn from(val: F) -> Self {
+        BReverse::constant(val)
+    }
+}
+
 impl<F: Float> BReverse<F> {
     /// Create a constant (not tracked on tape).
     #[inline]

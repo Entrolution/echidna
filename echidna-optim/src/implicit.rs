@@ -188,7 +188,7 @@ pub fn implicit_jacobian<F: Float>(
     // Build result column by column: solve F_z · col_j = -F_x[:, j]
     let mut result = vec![vec![F::zero(); n]; m];
     for j in 0..n {
-        let neg_col: Vec<F> = (0..m).map(|i| F::zero() - f_x[i][j]).collect();
+        let neg_col: Vec<F> = (0..m).map(|i| -f_x[i][j]).collect();
         let col = lu_back_solve(&factors, &neg_col);
 
         // Same non-finite guard as the other publics. When `F_z` is

@@ -57,7 +57,7 @@ impl<F: Float> LinearizedGraph<F> {
                     let [a_idx, cb_idx] = arg_indices[i];
                     let a = values[a_idx as usize];
                     let b_idx_opt = custom_second_args.get(&(i as u32));
-                    let b = b_idx_opt.map(|&bi| values[bi as usize]).unwrap_or(zero);
+                    let b = b_idx_opt.map_or(zero, |&bi| values[bi as usize]);
                     let r = values[i];
                     let (da, db) = custom_ops[cb_idx as usize].partials(a, b, r);
 
@@ -244,12 +244,10 @@ impl<F: Float> LinearizedGraph<F> {
                 let p = pred_idx as usize;
                 assert!(
                     p < n,
-                    "cross-country extract_jacobian: non-input predecessor {} \
-                     remains after elimination (likely because output {} is an \
+                    "cross-country extract_jacobian: non-input predecessor {p} \
+                     remains after elimination (likely because output {out} is an \
                      ancestor of another declared output — cross-country cannot \
                      handle this topology; use `BytecodeTape::jacobian` instead)",
-                    p,
-                    out,
                 );
                 jac[row][p] = jac[row][p] + weight;
             }

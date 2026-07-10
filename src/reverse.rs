@@ -19,6 +19,13 @@ pub struct Reverse<F: Float> {
     pub(crate) index: u32,
 }
 
+impl<F: Float> From<F> for Reverse<F> {
+    #[inline]
+    fn from(val: F) -> Self {
+        Reverse::constant(val)
+    }
+}
+
 impl<F: Float> Reverse<F> {
     /// Create a constant (not tracked on tape).
     #[inline]

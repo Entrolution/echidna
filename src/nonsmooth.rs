@@ -118,8 +118,7 @@ impl fmt::Display for ClarkeError {
             ClarkeError::TooManyKinks { count, limit } => {
                 write!(
                     f,
-                    "too many active kinks for Clarke enumeration: {} (limit {})",
-                    count, limit
+                    "too many active kinks for Clarke enumeration: {count} (limit {limit})"
                 )
             }
         }

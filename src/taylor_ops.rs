@@ -148,6 +148,16 @@ pub fn taylor_ln<F: Float>(a: &[F], c: &mut [F]) {
     }
 }
 
+/// Fill `c` with the vertical-tangent jet at a zero base: zero primal, `+Inf`
+/// every higher coefficient (the sqrt/cbrt convention at `x = 0`).
+#[inline]
+fn vertical_tangent_jet<F: Float>(c: &mut [F]) {
+    c[0] = F::zero();
+    for ci in c.iter_mut().skip(1) {
+        *ci = F::infinity();
+    }
+}
+
 /// `c = sqrt(a)`
 ///
 /// `c[0] = sqrt(a[0])`
@@ -161,10 +171,7 @@ pub fn taylor_sqrt<F: Float>(a: &[F], c: &mut [F]) {
     let n = c.len();
     if a[0] == F::zero() {
         // sqrt(0) = 0, but sqrt'(0) = 1/(2*sqrt(0)) = Inf (vertical tangent).
-        c[0] = F::zero();
-        for ci in c.iter_mut().skip(1) {
-            *ci = F::infinity();
-        }
+        vertical_tangent_jet(c);
         return;
     }
     if a[0] < F::zero() {
@@ -477,11 +484,9 @@ pub fn taylor_powf<F: Float>(
     // Taylor coefficients.
     if b[1..].iter().all(|&bk| bk == F::zero()) {
         let b0 = b[0];
-        if let Some(ni) = b0.to_i32() {
-            if F::from(ni).unwrap() == b0 {
-                taylor_powi(a, ni, c, scratch1, scratch2);
-                return;
-            }
+        if let Some(ni) = b0.to_i32().filter(|&ni| F::from(ni).unwrap() == b0) {
+            taylor_powi(a, ni, c, scratch1, scratch2);
+            return;
         }
     }
     if a[0] == F::zero() {
@@ -645,10 +650,7 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     debug_assert_eq!(a.len(), c.len());
     if a[0] == F::zero() {
         // cbrt(0) = 0, but cbrt'(0) = 1/(3*cbrt(0)^2) = Inf (vertical tangent).
-        c[0] = F::zero();
-        for ci in c.iter_mut().skip(1) {
-            *ci = F::infinity();
-        }
+        vertical_tangent_jet(c);
         return;
     }
     if a[0] < F::zero() {

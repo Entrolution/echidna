@@ -51,7 +51,7 @@ pub fn grad<F: Float + TapeThreadLocal>(
     let adjoints = tape.reverse(output.index);
 
     // Extract gradients for input variables (indices 0..n).
-    let result = (0..n).map(|i| adjoints[i]).collect();
+    let result = adjoints[..n].to_vec();
     Tape::return_to_pool(tape);
     result
 }
@@ -120,7 +120,7 @@ pub fn vjp<F: Float + TapeThreadLocal>(
         .collect();
     let adjoints = tape.reverse_seeded(&seeds);
 
-    let grad: Vec<F> = (0..n).map(|i| adjoints[i]).collect();
+    let grad: Vec<F> = adjoints[..n].to_vec();
     let result = (values, grad);
     Tape::return_to_pool(tape);
     result

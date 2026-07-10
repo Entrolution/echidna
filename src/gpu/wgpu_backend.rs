@@ -158,7 +158,7 @@ impl WgpuContext {
             layout: Some(&fwd_layout),
             module: &fwd_shader,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
 
@@ -182,7 +182,7 @@ impl WgpuContext {
             layout: Some(&rev_layout),
             module: &rev_shader,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
 
@@ -219,7 +219,7 @@ impl WgpuContext {
                 layout: Some(&tfwd_layout),
                 module: &tfwd_shader,
                 entry_point: Some("main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
 
@@ -259,7 +259,7 @@ impl WgpuContext {
                 layout: Some(&trev_layout),
                 module: &trev_shader,
                 entry_point: Some("main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
 
@@ -303,7 +303,7 @@ impl WgpuContext {
                     layout: Some(&taylor2_layout),
                     module: &shader,
                     entry_point: Some("main"),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                     cache: None,
                 })
             })
@@ -1091,8 +1091,7 @@ impl GpuBackend for WgpuContext {
             // All-zero Jacobian
             tape_cpu.forward(x);
             let vals = tape_cpu.output_values();
-            let vals_f32: Vec<f32> = vals.to_vec();
-            return Ok((vals_f32, pattern, vec![]));
+            return Ok((vals, pattern, vec![]));
         }
 
         // Guard against u32 overflow in WGSL `bid * num_variables` index

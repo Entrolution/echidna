@@ -33,7 +33,7 @@ impl<F: Float, const K: usize> Display for Taylor<F, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.coeffs[0])?;
         for (i, c) in self.coeffs.iter().enumerate().skip(1) {
-            write!(f, " + {}·t^{}", c, i)?;
+            write!(f, " + {c}·t^{i}")?;
         }
         Ok(())
     }

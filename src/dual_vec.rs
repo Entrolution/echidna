@@ -38,7 +38,7 @@ impl<F: Float, const N: usize> Display for DualVec<F, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.re)?;
         for (i, e) in self.eps.iter().enumerate() {
-            write!(f, " + {}\u{03b5}{}", e, i)?;
+            write!(f, " + {e}\u{03b5}{i}")?;
         }
         Ok(())
     }
@@ -85,7 +85,7 @@ impl<F: Float, const N: usize> DualVec<F, N> {
     /// otherwise poison the lane with NaN. Matches `Dual::chain`; the check
     /// uses `is_all_zero()` rather than `==` (primal-only) so nested lanes like
     /// `DualVec<Dual<F>, N>` with live second-order components are kept.
-    #[inline(always)]
+    #[inline]
     fn chain(self, f_val: F, f_deriv: F) -> Self {
         DualVec {
             re: f_val,

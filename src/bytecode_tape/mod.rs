@@ -156,19 +156,7 @@ impl<F: Float> BytecodeTape<F> {
     /// Create an empty bytecode tape.
     #[must_use]
     pub fn new() -> Self {
-        BytecodeTape {
-            opcodes: Vec::new(),
-            arg_indices: Vec::new(),
-            values: Vec::new(),
-            num_inputs: 0,
-            num_variables: 0,
-            output_index: 0,
-            output_indices: Vec::new(),
-            custom_ops: Vec::new(),
-            custom_second_args: HashMap::new(),
-            #[cfg(debug_assertions)]
-            tape_id: next_tape_id(),
-        }
+        Self::with_capacity(0)
     }
 
     /// Create a bytecode tape with pre-allocated capacity.
@@ -382,7 +370,7 @@ impl<F: Float> BytecodeTape<F> {
         let idx = self.num_variables;
         self.num_variables += 1;
         self.opcodes.push(OpCode::Custom);
-        self.arg_indices.push([arg0, handle.0 as u32]);
+        self.arg_indices.push([arg0, u32::from(handle.0)]);
         self.values.push(value);
         idx
     }
@@ -400,7 +388,7 @@ impl<F: Float> BytecodeTape<F> {
         let idx = self.num_variables;
         self.num_variables += 1;
         self.opcodes.push(OpCode::Custom);
-        self.arg_indices.push([arg0, handle.0 as u32]);
+        self.arg_indices.push([arg0, u32::from(handle.0)]);
         self.custom_second_args.insert(idx, arg1);
         self.values.push(value);
         idx

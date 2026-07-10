@@ -80,9 +80,9 @@ impl<F: Float, const K: usize> Display for Laurent<F, K> {
             }
             first = false;
             if power == 0 {
-                write!(f, "{}", c)?;
+                write!(f, "{c}")?;
             } else {
-                write!(f, "{}·t^{}", c, power)?;
+                write!(f, "{c}·t^{power}")?;
             }
         }
         if first {
@@ -246,12 +246,11 @@ impl<F: Float, const K: usize> Laurent<F, K> {
                 return;
             }
             self.pole_order += shift as i32;
-            for i in 0..K {
-                self.coeffs[i] = if i + shift < K {
-                    self.coeffs[i + shift]
-                } else {
-                    F::zero()
-                };
+            // In-place left shift by `shift`, zero-filling the tail
+            // (0 < shift < K guaranteed by the gates above).
+            self.coeffs.copy_within(shift..K, 0);
+            for c in &mut self.coeffs[K - shift..] {
+                *c = F::zero();
             }
         }
     }
@@ -320,9 +319,8 @@ impl<F: Float, const K: usize> Laurent<F, K> {
         // `pole_order: i32::MIN` cannot be negated in two's complement; a bare
         // `-self.pole_order` would silently wrap to i32::MIN again, producing
         // a nonsensical Laurent. Treat overflow as a degenerate value.
-        let negated = match self.pole_order.checked_neg() {
-            Some(n) => n,
-            None => return Self::nan_laurent(),
+        let Some(negated) = self.pole_order.checked_neg() else {
+            return Self::nan_laurent();
         };
         let mut l = Laurent {
             coeffs: c,

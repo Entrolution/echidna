@@ -398,7 +398,7 @@ impl<'a, F: TapeThreadLocal> TapeGuard<'a, F> {
     }
 }
 
-impl<'a, F: TapeThreadLocal> Drop for TapeGuard<'a, F> {
+impl<F: TapeThreadLocal> Drop for TapeGuard<'_, F> {
     fn drop(&mut self) {
         F::cell().with(|cell| {
             cell.set(self.prev);

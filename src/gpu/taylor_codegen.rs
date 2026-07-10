@@ -875,7 +875,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     // the `<=` form would admit 2^31 and overflow the `i32(..)` cast below.
     let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && abs(b.v[0]) < 2147483648.0");
     for i in 1..k {
-        b_int_cond.push_str(&format!(" && b.v[{i}] == 0.0"));
+        write!(b_int_cond, " && b.v[{i}] == 0.0").unwrap();
     }
     writeln!(s, "                let b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "                if b_is_int {{").unwrap();
@@ -2026,7 +2026,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     // `<=` form would admit 2^31 and overflow the `(int)` cast below.
     let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && fabs(b.v[0]) < F(2147483648.0)");
     for i in 1..k {
-        b_int_cond.push_str(&format!(" && b.v[{i}] == F(0)"));
+        write!(b_int_cond, " && b.v[{i}] == F(0)").unwrap();
     }
     writeln!(s, "            bool b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "            if (b_is_int) {{").unwrap();

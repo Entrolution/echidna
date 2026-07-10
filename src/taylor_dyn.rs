@@ -179,6 +179,13 @@ pub struct TaylorDyn<F: Float> {
     pub(crate) index: u32,
 }
 
+impl<F: Float> From<F> for TaylorDyn<F> {
+    #[inline]
+    fn from(val: F) -> Self {
+        TaylorDyn::constant(val)
+    }
+}
+
 impl<F: Float> TaylorDyn<F> {
     /// Create a constant (not stored in arena).
     #[inline]
@@ -268,22 +275,9 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
 
     // ── Operation helpers ──
 
-    /// Helper: get coefficients as a slice, using a temporary buffer for constants.
-    fn get_coeffs_vec(&self) -> Vec<F> {
-        if self.index == CONSTANT {
-            with_active_arena(|arena: &mut TaylorArena<F>| {
-                let mut v = vec![F::zero(); arena.degree()];
-                v[0] = self.value;
-                v
-            })
-        } else {
-            with_active_arena(|arena: &mut TaylorArena<F>| arena.coeffs(self.index).to_vec())
-        }
-    }
-
     /// Apply a unary operation that takes input coefficients and writes output coefficients.
     pub(crate) fn unary_op(x: &Self, f: impl FnOnce(&[F], &mut [F])) -> Self {
-        let a = x.get_coeffs_vec();
+        let a = x.coeffs();
         with_active_arena(|arena: &mut TaylorArena<F>| {
             let deg = arena.degree();
             let idx = arena.allocate();
@@ -328,8 +322,8 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
             });
         }
 
-        let a = x.get_coeffs_vec();
-        let b = y.get_coeffs_vec();
+        let a = x.coeffs();
+        let b = y.coeffs();
         with_active_arena(|arena: &mut TaylorArena<F>| {
             let deg = arena.degree();
             let idx = arena.allocate();
@@ -383,7 +377,7 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Floating-point power.
     #[inline]
     pub fn powf(self, n: Self) -> Self {
-        let b = n.get_coeffs_vec();
+        let b = n.coeffs();
         Self::unary_op(&self, |a, c| {
             let deg = c.len();
             let mut s1 = vec![F::zero(); deg];
@@ -471,7 +465,7 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Simultaneous sine and cosine.
     #[inline]
     pub fn sin_cos(self) -> (Self, Self) {
-        let a = self.get_coeffs_vec();
+        let a = self.coeffs();
         with_active_arena(|arena: &mut TaylorArena<F>| {
             let deg = arena.degree();
             let sin_idx = arena.allocate();
@@ -540,7 +534,7 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        let b = other.get_coeffs_vec();
+        let b = other.coeffs();
         Self::unary_op(&self, |a, c| {
             let n = c.len();
             let mut s1 = vec![F::zero(); n];

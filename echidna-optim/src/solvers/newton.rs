@@ -94,7 +94,7 @@ pub fn newton<F: Float, O: Objective<F>>(
 
     for iter in 0..config.convergence.max_iter {
         // Solve H * delta = -g
-        let neg_grad: Vec<F> = grad.iter().map(|&g| F::zero() - g).collect();
+        let neg_grad: Vec<F> = grad.iter().map(|&g| -g).collect();
         let raw_delta = lu_solve(&hess, &neg_grad);
 
         // Check whether `delta` is a descent direction (gᵀ·delta < 0). An
@@ -108,7 +108,7 @@ pub fn newton<F: Float, O: Objective<F>>(
             Some(d) if dot(&grad, &d) < F::zero() => d,
             _ => {
                 diag.fallback_steps += 1;
-                neg_grad.clone()
+                neg_grad
             }
         };
 

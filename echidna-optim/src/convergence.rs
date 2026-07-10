@@ -87,16 +87,7 @@ fn kahan_sum<F: Float, I: Iterator<Item = F>>(iter: I) -> F {
         return s;
     }
     // Long case: Neumaier compensated summation.
-    for &x in prefix.iter() {
-        let t = s + x;
-        if s.abs() >= x.abs() {
-            c = c + ((s - t) + x);
-        } else {
-            c = c + ((x - t) + s);
-        }
-        s = t;
-    }
-    for x in it {
+    for x in prefix.iter().copied().chain(it) {
         let t = s + x;
         if s.abs() >= x.abs() {
             c = c + ((s - t) + x);

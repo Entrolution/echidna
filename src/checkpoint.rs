@@ -67,7 +67,7 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
         return tape.gradient(x0);
     }
 
-    let num_checkpoints = num_checkpoints.max(1).min(num_steps);
+    let num_checkpoints = num_checkpoints.clamp(1, num_steps);
 
     // Stored positions are spread evenly so the largest reverse segment —
     // and with it peak backward memory, since `backward_from_checkpoints`
@@ -144,8 +144,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 ) -> Vec<F> {
     assert!(
         num_checkpoints >= 2,
-        "online checkpointing requires at least 2 checkpoint slots, got {}",
-        num_checkpoints,
+        "online checkpointing requires at least 2 checkpoint slots, got {num_checkpoints}"
     );
 
     let dim = x0.len();
@@ -249,7 +248,7 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
         return tape.gradient(x0);
     }
 
-    let num_checkpoints = num_checkpoints.max(1).min(num_steps);
+    let num_checkpoints = num_checkpoints.clamp(1, num_steps);
 
     // Filter, sort, dedup required positions to valid range [1, num_steps-1].
     let mut required: Vec<usize> = required_positions
@@ -346,7 +345,8 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
                 (i, exact - alloc[i] as f64)
             })
             .collect();
-        remainders.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        // Descending remainder; finite by construction (weight_sum > 0).
+        remainders.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         for (idx, _) in remainders {
             if remaining == 0 {
@@ -413,7 +413,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
         return tape.gradient(x0);
     }
 
-    let num_checkpoints = num_checkpoints.max(1).min(num_steps);
+    let num_checkpoints = num_checkpoints.clamp(1, num_steps);
 
     // Evenly spread positions bound the largest reverse segment — see
     // `grad_checkpointed`.
@@ -452,7 +452,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 
         let next_step = s + 1;
         if next_step < num_steps && checkpoint_positions.contains(&next_step) {
-            let path = run_dir.join(format!("ckpt_{}.bin", next_step));
+            let path = run_dir.join(format!("ckpt_{next_step}.bin"));
             guard.files.push(path.clone());
             write_checkpoint(&current_state, &path);
         }
@@ -486,7 +486,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
         let seg_len = seg_end - ckpt_step;
 
         // Read checkpoint state from disk.
-        let path = run_dir.join(format!("ckpt_{}.bin", ckpt_step));
+        let path = run_dir.join(format!("ckpt_{ckpt_step}.bin"));
         let ckpt_state = read_checkpoint::<F>(&path, dim);
 
         // Recompute states in this segment from the checkpoint.

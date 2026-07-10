@@ -161,9 +161,8 @@ impl<F: Float> super::BytecodeTape<F> {
 
         for i in 0..n {
             let op = self.opcodes[i];
-            match op {
-                OpCode::Input | OpCode::Const => continue,
-                _ => {}
+            if matches!(op, OpCode::Input | OpCode::Const) {
+                continue;
             }
 
             let [mut a, mut b] = self.arg_indices[i];

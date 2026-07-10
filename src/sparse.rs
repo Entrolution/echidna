@@ -187,8 +187,7 @@ pub(crate) fn detect_sparsity_impl(
     interactions.dedup();
     let entries = interactions;
 
-    let rows: Vec<u32> = entries.iter().map(|&(r, _)| r).collect();
-    let cols: Vec<u32> = entries.iter().map(|&(_, c)| c).collect();
+    let (rows, cols): (Vec<u32>, Vec<u32>) = entries.iter().copied().unzip();
 
     SparsityPattern {
         dim: num_inputs,
