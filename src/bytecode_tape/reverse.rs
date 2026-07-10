@@ -71,15 +71,7 @@ impl<F: Float> super::BytecodeTape<F> {
                     let a = values[a_idx as usize];
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
-                        let da = if exp == 0 {
-                            F::zero()
-                        } else if exp == i32::MIN {
-                            let n = F::from(exp).unwrap();
-                            n * values[i] / a
-                        } else {
-                            let n = F::from(exp).unwrap();
-                            n * a.powi(exp - 1)
-                        };
+                        let da = opcode::powi_reverse_partial(exp, a, values[i]);
                         if da != F::zero() {
                             adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                         }
@@ -193,6 +185,12 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Returns one gradient vector per input point.
     pub fn gradient_batch(&mut self, inputs: &[&[F]]) -> Vec<Vec<F>> {
-        inputs.iter().map(|x| self.gradient(x)).collect()
+        // One adjoint buffer reused across the batch instead of a fresh
+        // num_variables-sized allocation per point.
+        let mut adjoint_buf = Vec::new();
+        inputs
+            .iter()
+            .map(|x| self.gradient_with_buf(x, &mut adjoint_buf))
+            .collect()
     }
 }

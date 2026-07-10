@@ -301,17 +301,17 @@ impl<F: Float> super::BytecodeTape<F> {
 
         let out_indices = self.all_output_indices();
 
+        let mut seeds: Vec<F> = Vec::with_capacity(m);
         for color in 0..num_colors {
             // Build seeds: weight = 1 for outputs with this color
-            let seeds: Vec<F> = (0..m)
-                .map(|i| {
-                    if colors[i] == color {
-                        F::one()
-                    } else {
-                        F::zero()
-                    }
-                })
-                .collect();
+            seeds.clear();
+            seeds.extend((0..m).map(|i| {
+                if colors[i] == color {
+                    F::one()
+                } else {
+                    F::zero()
+                }
+            }));
 
             let adjoints = self.reverse_seeded_full(&seeds, out_indices);
 

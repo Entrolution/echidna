@@ -77,19 +77,7 @@ impl<F: Float> LinearizedGraph<F> {
                     let a = values[a_idx as usize];
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
-                        let da = if exp == 0 {
-                            F::zero()
-                        } else if exp == i32::MIN {
-                            // `exp - 1` overflows i32 at i32::MIN, so use the
-                            // algebraic rewrite n * a^n / a = n * a^(n-1),
-                            // valid for a != 0 (a == 0 already yields the
-                            // 0/Inf/NaN family either way).
-                            let n = F::from(exp).unwrap();
-                            n * values[i] / a
-                        } else {
-                            let n = F::from(exp).unwrap();
-                            n * a.powi(exp - 1)
-                        };
+                        let da = opcode::powi_reverse_partial(exp, a, values[i]);
                         if opcodes[a_idx as usize] != OpCode::Const && da != zero {
                             preds[i].push((a_idx, da));
                             succs[a_idx as usize].push((i as u32, da));

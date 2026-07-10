@@ -113,8 +113,10 @@ impl<F: Float> super::BytecodeTape<F> {
         let num_combos = 1usize << k;
         let mut jacobians = Vec::with_capacity(num_combos);
 
+        // One map for all combos: every active key is overwritten each
+        // iteration, so no per-combo clone of the full base map is needed.
+        let mut sign_map = base_signs;
         for combo in 0..num_combos {
-            let mut sign_map = base_signs.clone();
             for (bit, &idx) in active_indices.iter().enumerate() {
                 let sign: i8 = if (combo >> bit) & 1 == 0 { 1 } else { -1 };
                 sign_map.insert(idx, sign);

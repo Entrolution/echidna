@@ -401,7 +401,12 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         // Unary
         OpCode::Neg => (-one, zero),
         OpCode::Recip => {
-            // d/da (1/a) = -1/a²
+            // d/da (1/a) = -1/a². Deliberately recomputes 1/a instead of
+            // reading the stored primal r: on the plain-float sweep the two
+            // are bit-identical, but at T = Dual (HVP sweeps) the eps of
+            // `one / a` and of the forward-stored r take different rounding
+            // routes (Dual Div vs chain-mul), so reusing r would shift HVP
+            // results by ~1 ULP.
             let inv = one / a;
             (-inv * inv, zero)
         }
@@ -427,16 +432,7 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
                  powi_exp_decode_raw"
             );
             let exp = powi_exp_decode_raw(raw.unwrap_or(0));
-            if exp == 0 {
-                (zero, zero) // d/dx(x^0) = 0
-            } else if exp == i32::MIN {
-                // exp - 1 would overflow i32; use r/a to avoid precision loss
-                let n = T::from(exp).unwrap();
-                (n * r / a, zero)
-            } else {
-                let n = T::from(exp).unwrap();
-                (n * a.powi(exp - 1), zero)
-            }
+            (powi_reverse_partial(exp, a, r), zero)
         }
 
         // Exp/Log. Domain-restricted logs delegate to the guarded `kernels`
@@ -444,7 +440,7 @@ pub fn reverse_partials<T: Float>(op: OpCode, a: T, b: T, r: T) -> (T, T) {
         // and keep the IEEE ±Inf one-sided limit at the boundary — one source of
         // truth shared with the CPU AD types.
         OpCode::Exp => (r, zero), // d/da e^a = e^a = r
-        OpCode::Exp2 => (r * T::ln(T::from(2.0).unwrap()), zero),
+        OpCode::Exp2 => (r * T::from(std::f64::consts::LN_2).unwrap(), zero),
         OpCode::ExpM1 => (r + one, zero), // d/da (e^a - 1) = e^a = r+1
         OpCode::Ln => (kernels::ln_deriv(a), zero),
         OpCode::Log2 => (kernels::log2_deriv(a), zero),
@@ -496,6 +492,24 @@ pub fn powi_exp_decode_raw(b_idx: u32) -> i32 {
     b_idx as i32
 }
 
+/// Reverse partial `d(a^exp)/da` for a decoded `Powi` exponent.
+///
+/// The single home for the branch structure shared by [`reverse_partials`]
+/// and the reverse/tangent/cross-country sweeps: `exp == 0` has zero
+/// derivative; `exp == i32::MIN` uses the `n * r / a` rewrite because
+/// `exp - 1` would overflow `i32` (valid for `a != 0`; at `a == 0` both
+/// forms land in the same 0/Inf/NaN family); otherwise `n * a^(exp - 1)`.
+#[inline]
+pub(crate) fn powi_reverse_partial<T: Float>(exp: i32, a: T, r: T) -> T {
+    if exp == 0 {
+        T::zero()
+    } else if exp == i32::MIN {
+        T::from(exp).unwrap() * r / a
+    } else {
+        T::from(exp).unwrap() * a.powi(exp - 1)
+    }
+}
+
 /// Encode a `powi` exponent as a value that can be stored in `arg_indices[1]`.
 ///
 /// This is a bit-preserving reinterpretation (`i32 as u32`), NOT a numeric
@@ -505,4 +519,30 @@ pub fn powi_exp_decode_raw(b_idx: u32) -> i32 {
 #[must_use]
 pub fn powi_exp_encode(exp: i32) -> u32 {
     exp as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::powi_reverse_partial;
+
+    #[test]
+    fn powi_reverse_partial_closed_forms() {
+        assert_eq!(powi_reverse_partial(0, 2.0_f64, 1.0), 0.0);
+        assert_eq!(powi_reverse_partial(1, 2.0_f64, 2.0), 1.0);
+        assert_eq!(powi_reverse_partial(3, 2.0_f64, 8.0), 12.0);
+        assert_eq!(powi_reverse_partial(-1, 2.0_f64, 0.5), -0.25);
+        assert_eq!(powi_reverse_partial(2, 0.0_f64, 0.0), 0.0);
+    }
+
+    #[test]
+    fn powi_reverse_partial_i32_min_avoids_overflow() {
+        // exp - 1 would wrap at i32::MIN; the n * r / a form must not.
+        // |a| > 1: r = a^MIN underflows to 0, so da = n * 0 / a = ±0.
+        assert_eq!(powi_reverse_partial(i32::MIN, 2.0_f64, 0.0), 0.0);
+        // |a| < 1: r overflows to +Inf, so da = n * Inf / a = -Inf.
+        let da = powi_reverse_partial(i32::MIN, 0.5_f64, f64::INFINITY);
+        assert!(da.is_infinite() && da.is_sign_negative());
+        // a = 0: lands in the Inf/NaN family rather than panicking.
+        assert!(!powi_reverse_partial(i32::MIN, 0.0_f64, f64::INFINITY).is_finite());
+    }
 }

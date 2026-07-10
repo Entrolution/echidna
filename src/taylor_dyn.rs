@@ -279,14 +279,15 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     pub(crate) fn unary_op(x: &Self, f: impl FnOnce(&[F], &mut [F])) -> Self {
         let a = x.coeffs();
         with_active_arena(|arena: &mut TaylorArena<F>| {
-            let deg = arena.degree();
+            // Allocate first, then let `f` write directly into the zeroed
+            // slot — no intermediate result Vec. The operand staging copy
+            // above stays: `f` must not read arena memory that `allocate`
+            // may have moved.
             let idx = arena.allocate();
-            let mut result = vec![F::zero(); deg];
-            f(&a, &mut result);
             let slot = arena.coeffs_mut(idx);
-            slot.copy_from_slice(&result);
+            f(&a, slot);
             TaylorDyn {
-                value: result[0],
+                value: slot[0],
                 index: idx,
             }
         })
@@ -325,14 +326,12 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
         let a = x.coeffs();
         let b = y.coeffs();
         with_active_arena(|arena: &mut TaylorArena<F>| {
-            let deg = arena.degree();
+            // Same slot-direct write as `unary_op`; staging copies stay.
             let idx = arena.allocate();
-            let mut result = vec![F::zero(); deg];
-            f(&a, &b, &mut result);
             let slot = arena.coeffs_mut(idx);
-            slot.copy_from_slice(&result);
+            f(&a, &b, slot);
             TaylorDyn {
-                value: result[0],
+                value: slot[0],
                 index: idx,
             }
         })

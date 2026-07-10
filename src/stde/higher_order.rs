@@ -1,7 +1,9 @@
 use super::types::{EstimatorResult, WelfordAccumulator};
 use crate::bytecode_tape::BytecodeTape;
 use crate::taylor::Taylor;
-use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
+use crate::taylor_dyn::{
+    with_active_arena, TaylorArena, TaylorArenaLocal, TaylorDyn, TaylorDynGuard,
+};
 use crate::Float;
 
 /// Exact k-th order diagonal: `[∂^k u/∂x_j^k for j in 0..n]`.
@@ -70,6 +72,9 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     let mut value = F::zero();
 
     for j in 0..n {
+        // Entries from the previous pushforward are dead — reset the arena
+        // (capacity retained) so it stops growing O(samples × tape_ops).
+        with_active_arena(|arena: &mut TaylorArena<F>| arena.clear());
         // Build TaylorDyn inputs: coeffs_j = [x_j, 1, 0, ..., 0], others = [x_i, 0, ..., 0]
         let inputs: Vec<TaylorDyn<F>> = (0..n)
             .map(|i| {
@@ -231,8 +236,11 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
     let mut buf: Vec<TaylorDyn<F>> = Vec::new();
 
     for &j in sampled_indices {
-        assert!(j < n, "sampled index {} out of bounds (n={})", j, n);
+        assert!(j < n, "sampled index {j} out of bounds (n={n})");
 
+        // Entries from the previous pushforward are dead — reset the arena
+        // (capacity retained) so it stops growing O(samples × tape_ops).
+        with_active_arena(|arena: &mut TaylorArena<F>| arena.clear());
         let inputs: Vec<TaylorDyn<F>> = (0..n)
             .map(|i| {
                 let mut coeffs = vec![F::zero(); order];
