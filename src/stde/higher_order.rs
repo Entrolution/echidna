@@ -6,6 +6,22 @@ use crate::taylor_dyn::{
 };
 use crate::Float;
 
+/// Panics unless a `k`-th order extraction is factorial-exact for `F`.
+///
+/// `k!` must be exactly representable: `18!` is the last factorial below
+/// 2^53 (f64), and the f32 guard keeps one order of margin below the first
+/// degradation at `14!`.
+fn assert_kth_order_exact<F: Float>(k: usize) {
+    assert!(
+        k <= 18,
+        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
+    );
+    assert!(
+        k < 13 || std::mem::size_of::<F>() > 4,
+        "k must be <= 12 for f32 (one order of margin: f32 k! exactness first degrades at 14!; use f64)"
+    );
+}
+
 /// Exact k-th order diagonal: `[∂^k u/∂x_j^k for j in 0..n]`.
 ///
 /// Pushes n basis vectors through order-(k+1) `TaylorDyn` jets. For each
@@ -38,14 +54,7 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     buf: &mut Vec<TaylorDyn<F>>,
 ) -> (F, Vec<F>) {
     assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
-    assert!(
-        k <= 18,
-        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
-    );
-    assert!(
-        k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be <= 12 for f32 (one order of margin: f32 k! exactness first degrades at 14!; use f64)"
-    );
+    assert_kth_order_exact::<F>(k);
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
     if n == 0 {
@@ -56,10 +65,7 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     let order = k + 1; // number of Taylor coefficients
     let _guard = TaylorDynGuard::<F>::new(order);
 
-    let mut k_factorial = F::one();
-    for i in 2..=k {
-        k_factorial = k_factorial * F::from(i).unwrap();
-    }
+    let k_factorial = crate::taylor_ops::factorial::<F>(k);
 
     let mut diag = Vec::with_capacity(n);
     let mut value = F::zero();
@@ -68,17 +74,8 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
         // Entries from the previous pushforward are dead — reset the arena
         // (capacity retained) so it stops growing O(samples × tape_ops).
         with_active_arena(|arena: &mut TaylorArena<F>| arena.clear());
-        // Build TaylorDyn inputs: coeffs_j = [x_j, 1, 0, ..., 0], others = [x_i, 0, ..., 0]
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); order];
-                coeffs[0] = x[i];
-                if i == j {
-                    coeffs[1] = F::one();
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        // Coordinate-basis jets: coeffs_j = [x_j, 1, 0, ...], others [x_i, 0, ...]
+        let inputs = crate::taylor_dyn::seed_taylor_dyn_jets(x, order, &[(j, 1, F::one())]);
 
         tape.forward_tangent(&inputs, buf);
 
@@ -126,16 +123,7 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
     const { assert!(ORDER >= 3, "ORDER must be >= 3 (k=ORDER-1 >= 2)") }
 
     let k = ORDER - 1;
-    assert!(
-        k <= 18,
-        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
-    );
-    // Conservative f32 bound: k! exactness degrades from 14! (the guard
-    // leaves one order of margin below that).
-    assert!(
-        k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be <= 12 for f32 (k! exactness degrades; use f64)"
-    );
+    assert_kth_order_exact::<F>(k);
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
     if n == 0 {
@@ -143,10 +131,7 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
         return (tape.constant_output_value(), Vec::new());
     }
 
-    let mut k_factorial = F::one();
-    for i in 2..=k {
-        k_factorial = k_factorial * F::from(i).unwrap();
-    }
+    let k_factorial = crate::taylor_ops::factorial::<F>(k);
 
     let mut diag = Vec::with_capacity(n);
     let mut value = F::zero();
@@ -196,24 +181,14 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
         "sampled_indices must not be empty"
     );
     assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
-    assert!(
-        k <= 18,
-        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
-    );
-    assert!(
-        k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be <= 12 for f32 (one order of margin: f32 k! exactness first degrades at 14!; use f64)"
-    );
+    assert_kth_order_exact::<F>(k);
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 
     let order = k + 1;
     let _guard = TaylorDynGuard::<F>::new(order);
 
-    let mut k_factorial = F::one();
-    for i in 2..=k {
-        k_factorial = k_factorial * F::from(i).unwrap();
-    }
+    let k_factorial = crate::taylor_ops::factorial::<F>(k);
 
     let nf = F::from(n).unwrap();
 
@@ -227,16 +202,7 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
         // Entries from the previous pushforward are dead — reset the arena
         // (capacity retained) so it stops growing O(samples × tape_ops).
         with_active_arena(|arena: &mut TaylorArena<F>| arena.clear());
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); order];
-                coeffs[0] = x[i];
-                if i == j {
-                    coeffs[1] = F::one();
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        let inputs = crate::taylor_dyn::seed_taylor_dyn_jets(x, order, &[(j, 1, F::one())]);
 
         tape.forward_tangent(&inputs, &mut buf);
 

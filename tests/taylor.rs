@@ -971,3 +971,37 @@ fn hypot_nan_leading_coefficient_propagates() {
         r2.coeffs[0]
     );
 }
+
+#[test]
+fn taylor_dyn_matches_taylor_two_scratch_ops() {
+    // The 2-slab elementals route their kernel work buffers through the
+    // arena scratch pool; running two back-to-back catches stale scratch
+    // between loans, and order 5 exercises multi-coefficient recurrences.
+    let x0 = 0.4;
+    let ts = Taylor::<f64, 5>::variable(x0).atanh().asin();
+    let _guard = TaylorDynGuard::<f64>::new(5);
+    let td = TaylorDyn::<f64>::variable(x0).atanh().asin();
+    let td_coeffs = td.coeffs();
+    for k in 0..5 {
+        assert_relative_eq!(ts.coeffs[k], td_coeffs[k], epsilon = 1e-12);
+    }
+}
+
+#[test]
+fn taylor_dyn_matches_taylor_hypot_variables() {
+    // Variable-operand hypot: both inputs are read from the arena while the
+    // kernel writes the output slot and uses two scratch slabs.
+    let ts = {
+        let a = Taylor::<f64, 5>::variable(3.0);
+        let b = Taylor::<f64, 5>::new([4.0, 2.0, 1.0, 0.0, 0.0]);
+        a.hypot(b)
+    };
+    let _guard = TaylorDynGuard::<f64>::new(5);
+    let a = TaylorDyn::<f64>::variable(3.0);
+    let b = TaylorDyn::<f64>::from_coeffs(&[4.0, 2.0, 1.0, 0.0, 0.0]);
+    let td = a.hypot(b);
+    let td_coeffs = td.coeffs();
+    for k in 0..5 {
+        assert_relative_eq!(ts.coeffs[k], td_coeffs[k], epsilon = 1e-12);
+    }
+}

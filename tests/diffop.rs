@@ -548,6 +548,9 @@ fn sparse_distribution_inverse_cdf() {
     assert_eq!(dist.sample_index(0.99), 2);
     // u=0.5 should give middle entry
     assert_eq!(dist.sample_index(0.5), 1);
+    // u=1.0 lands exactly on the last cumulative weight; the clamp keeps
+    // the sample in range
+    assert_eq!(dist.sample_index(1.0), 2);
 }
 
 #[test]

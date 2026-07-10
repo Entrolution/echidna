@@ -111,7 +111,7 @@ pub fn laplacian_with_control<F: Float>(
     let mut value = F::zero();
     let mut acc = WelfordAccumulator::new();
 
-    for v in directions.iter() {
+    for v in directions {
         let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
 
@@ -125,15 +125,7 @@ pub fn laplacian_with_control<F: Float>(
         acc.update(raw - cv + trace_control);
     }
 
-    let (estimate, sample_variance, standard_error) = acc.finalize();
-
-    EstimatorResult {
-        value,
-        estimate,
-        sample_variance,
-        standard_error,
-        num_samples: acc.contributing(),
-    }
+    acc.into_result(value)
 }
 
 /// Exact Hessian diagonal via n coordinate-direction evaluations.
@@ -210,7 +202,7 @@ fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usi
             // Don't increment i — swapped element needs processing
         } else {
             let inv_norm = F::one() / norm;
-            for v in columns[i].iter_mut() {
+            for v in &mut columns[i] {
                 *v = *v * inv_norm;
             }
             // Move accepted column to rank position. Note: i == rank is a loop invariant
@@ -311,7 +303,7 @@ pub fn laplacian_hutchpp<F: Float>(
     let mut acc = WelfordAccumulator::new();
     let mut projected = vec![F::zero(); n];
 
-    for g in stochastic_directions.iter() {
+    for g in stochastic_directions {
         assert_eq!(
             g.len(),
             n,
@@ -338,6 +330,8 @@ pub fn laplacian_hutchpp<F: Float>(
         acc.update(two * c2);
     }
 
+    // Deliberately NOT WelfordAccumulator::into_result: the exact-trace
+    // offset below transforms the raw mean, and that stays visible here.
     let (residual_mean, sample_variance, standard_error) = acc.finalize();
 
     EstimatorResult {

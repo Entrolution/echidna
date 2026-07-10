@@ -65,7 +65,7 @@
 //! Inhomogeneous operators can be decomposed with [`DiffOp::split_by_order`].
 
 use crate::bytecode_tape::BytecodeTape;
-use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
+use crate::taylor_dyn::{TaylorArenaLocal, TaylorDynGuard};
 use crate::Float;
 
 // ══════════════════════════════════════════════
@@ -109,7 +109,7 @@ impl MultiIndex {
     /// Panics if `var >= num_vars` or `order == 0`.
     #[must_use]
     pub fn diagonal(num_vars: usize, var: usize, order: u8) -> Self {
-        assert!(var < num_vars, "var ({}) >= num_vars ({})", var, num_vars);
+        assert!(var < num_vars, "var ({var}) >= num_vars ({num_vars})");
         assert!(order > 0, "order must be > 0");
         let mut orders = vec![0u8; num_vars];
         orders[var] = order;
@@ -222,14 +222,8 @@ fn partitions_recurse(
 fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
     let mut prefactor = F::one();
     for &(slot, order) in slot_assignments {
-        let mut q_fact = F::one();
-        for i in 2..=(order as usize) {
-            q_fact = q_fact * F::from(i).unwrap();
-        }
-        let mut j_fact = F::one();
-        for i in 2..=slot {
-            j_fact = j_fact * F::from(i).unwrap();
-        }
+        let q_fact = crate::taylor_ops::factorial::<F>(order as usize);
+        let j_fact = crate::taylor_ops::factorial::<F>(slot);
         let mut j_fact_pow = F::one();
         for _ in 0..order {
             j_fact_pow = j_fact_pow * j_fact;
@@ -244,6 +238,9 @@ fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
     // from any earlier `inf * 1` multiply.
     let mut log_pref = F::zero();
     for &(slot, order) in slot_assignments {
+        // Summed as Σ ln(i), NOT ln(factorial(...)): the product form is what
+        // just overflowed, and routing through one ln would trade the sum's
+        // sub-ULP error for the product's saturation.
         for i in 2..=(order as usize) {
             log_pref = log_pref + F::from(i).unwrap().ln();
         }
@@ -414,11 +411,11 @@ fn plan_group<F: Float>(
             let input_coeffs: Vec<(usize, usize, F)> = var_slot
                 .iter()
                 .map(|&(var, slot)| {
-                    let mut factorial = F::one();
-                    for i in 2..=slot {
-                        factorial = factorial * F::from(i).unwrap();
-                    }
-                    (var, slot, F::one() / factorial)
+                    (
+                        var,
+                        slot,
+                        F::one() / crate::taylor_ops::factorial::<F>(slot),
+                    )
                 })
                 .collect();
 
@@ -430,11 +427,12 @@ fn plan_group<F: Float>(
         }
     }
 
-    panic!(
-        "failed to find collision-free slot assignment for active vars {:?}",
-        active_var_set
-    );
+    panic!("failed to find collision-free slot assignment for active vars {active_var_set:?}");
 }
+
+/// One planned group: its active variable set and the (index, multi-index)
+/// pairs that share it.
+type GroupEntry<'a> = (Vec<usize>, Vec<(usize, &'a MultiIndex)>);
 
 impl<F: Float> JetPlan<F> {
     /// Plan jet evaluation for a set of multi-indices.
@@ -463,7 +461,6 @@ impl<F: Float> JetPlan<F> {
         }
 
         // Group multi-indices by their active variable set
-        type GroupEntry<'a> = (Vec<usize>, Vec<(usize, &'a MultiIndex)>);
         let mut group_map: Vec<GroupEntry<'_>> = Vec::new();
 
         for (i, mi) in multi_indices.iter().enumerate() {
@@ -554,18 +551,8 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
         let _guard = TaylorDynGuard::<F>::new(group.jet_order);
 
         // Build inputs: only set slot coefficients for this group's active variables
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); group.jet_order];
-                coeffs[0] = x[i];
-                for &(var, slot, inv_fact) in &group.input_coeffs {
-                    if var == i && slot < group.jet_order {
-                        coeffs[slot] = inv_fact;
-                    }
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        let inputs =
+            crate::taylor_dyn::seed_taylor_dyn_jets(x, group.jet_order, &group.input_coeffs);
 
         let mut buf = Vec::new();
         tape.forward_tangent(&inputs, &mut buf);
@@ -927,7 +914,7 @@ impl<F: Float + TaylorArenaLocal> DiffOp<F> {
             cumulative = cumulative + abs_c;
 
             // Use plan_group to get collision-free slot assignments
-            let active_set = mi.active_vars().iter().map(|&(v, _)| v).collect::<Vec<_>>();
+            let active_set = mi.active_var_set();
             let group = plan_group::<F>(&active_set, &[(0, mi)]);
 
             // There should be exactly one extraction
@@ -1021,18 +1008,13 @@ impl<F: Float> SparseSamplingDistribution<F> {
     /// Caller generates the uniform variate (no `rand` dependency).
     pub fn sample_index(&self, uniform_01: F) -> usize {
         let target = uniform_01 * self.total_weight;
-        // Binary search on cumulative weights
-        let mut lo = 0;
-        let mut hi = self.entries.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.entries[mid].cumulative_weight <= target {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo.min(self.entries.len() - 1)
+        // Inverse-CDF lookup: cumulative weights are nondecreasing, so the
+        // first entry whose cumulative weight exceeds `target` is the sample;
+        // the clamp absorbs u == 1 (and any float spill past the last bin).
+        let idx = self
+            .entries
+            .partition_point(|e| e.cumulative_weight <= target);
+        idx.min(self.entries.len() - 1)
     }
 
     /// The normalization constant `Z = Σ|C_α|`.

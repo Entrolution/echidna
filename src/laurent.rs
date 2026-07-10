@@ -203,16 +203,16 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// - `pole_order > 0` → `F::zero()`
     #[inline]
     pub fn value(&self) -> F {
-        if self.pole_order < 0 {
-            if self.coeffs[0].is_sign_negative() {
-                F::neg_infinity()
-            } else {
-                F::infinity()
+        match self.pole_order.cmp(&0) {
+            std::cmp::Ordering::Less => {
+                if self.coeffs[0].is_sign_negative() {
+                    F::neg_infinity()
+                } else {
+                    F::infinity()
+                }
             }
-        } else if self.pole_order == 0 {
-            self.coeffs[0]
-        } else {
-            F::zero()
+            std::cmp::Ordering::Equal => self.coeffs[0],
+            std::cmp::Ordering::Greater => F::zero(),
         }
     }
 
@@ -331,88 +331,51 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     }
 
     /// Square root.
+    ///
+    /// `sqrt(t^p · f(t)) = t^(p/2) · sqrt(f(t))`, so the pole order must be
+    /// even (in either direction; an order-0 pole is trivially so) — an odd
+    /// pole has no single-valued square root and yields the NaN jet.
     #[inline]
     pub fn sqrt(self) -> Self {
         if self.is_all_zero() {
             return Self::zero();
         }
-        if self.pole_order < 0 {
-            if self.pole_order % 2 != 0 {
-                return Self::nan_laurent(); // Odd pole order → no clean sqrt
-            }
-            let mut c = [F::zero(); K];
-            taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
-            Laurent {
-                coeffs: c,
-                pole_order: self.pole_order / 2,
-            }
-        } else if self.pole_order > 0 {
-            if self.pole_order % 2 != 0 {
-                return Self::nan_laurent();
-            }
-            // pole_order is even: sqrt of t^p * f(t) = t^(p/2) * sqrt(f(t))
-            // where f(t) has coeffs[0] != 0 after normalization (except the
-            // all-subnormal collapse case, where taylor_sqrt's zero-leading
-            // branch applies).
-            let mut c = [F::zero(); K];
-            taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
-            Laurent {
-                coeffs: c,
-                pole_order: self.pole_order / 2,
-            }
-        } else {
-            let mut c = [F::zero(); K];
-            taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
-            Laurent {
-                coeffs: c,
-                pole_order: 0,
-            }
+        if self.pole_order % 2 != 0 {
+            return Self::nan_laurent();
+        }
+        // f(t) has coeffs[0] != 0 after normalization, except the
+        // all-subnormal collapse case, where taylor_sqrt's zero-leading
+        // branch applies. Construct raw: normalization would reinterpret
+        // that branch's [0, Inf, …] output.
+        let mut c = [F::zero(); K];
+        taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
+        Laurent {
+            coeffs: c,
+            pole_order: self.pole_order / 2,
         }
     }
 
     /// Cube root.
+    ///
+    /// `cbrt(t^p · f(t)) = t^(p/3) · cbrt(f(t))`, so the pole order must be
+    /// divisible by 3 (an order-0 pole trivially is) — otherwise there is no
+    /// clean cube root and the result is the NaN jet.
     #[inline]
     pub fn cbrt(self) -> Self {
         if self.is_all_zero() {
             return Self::zero();
         }
-        if self.pole_order < 0 {
-            if self.pole_order % 3 != 0 {
-                return Self::nan_laurent();
-            }
-            let mut c = [F::zero(); K];
-            let mut s1 = [F::zero(); K];
-            let mut s2 = [F::zero(); K];
-            taylor_ops::taylor_cbrt(&self.coeffs, &mut c, &mut s1, &mut s2);
-            Laurent {
-                coeffs: c,
-                pole_order: self.pole_order / 3,
-            }
-        } else if self.pole_order > 0 {
-            if self.pole_order % 3 != 0 {
-                return Self::nan_laurent();
-            }
-            // pole_order divisible by 3: cbrt of t^p * f(t) = t^(p/3) * cbrt(f(t))
-            // where f(t) has coeffs[0] != 0 after normalization (except the
-            // all-subnormal collapse case, where taylor_cbrt's zero-leading
-            // branch applies).
-            let mut c = [F::zero(); K];
-            let mut s1 = [F::zero(); K];
-            let mut s2 = [F::zero(); K];
-            taylor_ops::taylor_cbrt(&self.coeffs, &mut c, &mut s1, &mut s2);
-            Laurent {
-                coeffs: c,
-                pole_order: self.pole_order / 3,
-            }
-        } else {
-            let mut c = [F::zero(); K];
-            let mut s1 = [F::zero(); K];
-            let mut s2 = [F::zero(); K];
-            taylor_ops::taylor_cbrt(&self.coeffs, &mut c, &mut s1, &mut s2);
-            Laurent {
-                coeffs: c,
-                pole_order: 0,
-            }
+        if self.pole_order % 3 != 0 {
+            return Self::nan_laurent();
+        }
+        // Raw construction for the same reason as `sqrt`.
+        let mut c = [F::zero(); K];
+        let mut s1 = [F::zero(); K];
+        let mut s2 = [F::zero(); K];
+        taylor_ops::taylor_cbrt(&self.coeffs, &mut c, &mut s1, &mut s2);
+        Laurent {
+            coeffs: c,
+            pole_order: self.pole_order / 3,
         }
     }
 
@@ -521,38 +484,27 @@ impl<F: Float, const K: usize> Laurent<F, K> {
     /// Natural logarithm.
     #[inline]
     pub fn ln(self) -> Self {
-        if self.is_all_zero() {
-            return Self::nan_laurent(); // ln(0)
-        }
-        if self.pole_order != 0 {
-            // ln of something with a pole or zero at origin → NaN
-            return Self::nan_laurent();
-        }
-        if self.coeffs[0] <= F::zero() {
-            return Self::nan_laurent();
-        }
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_ln(&self.coeffs, &mut c);
-        Laurent::new(c, 0)
+        self.log_family(|a, c| taylor_ops::taylor_ln(a, c))
     }
 
     /// Base-2 logarithm.
     #[inline]
     pub fn log2(self) -> Self {
-        if self.pole_order != 0 {
-            return Self::nan_laurent();
-        }
-        if self.coeffs[0] <= F::zero() {
-            return Self::nan_laurent();
-        }
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_log2(&self.coeffs, &mut c);
-        Laurent::new(c, 0)
+        self.log_family(|a, c| taylor_ops::taylor_log2(a, c))
     }
 
     /// Base-10 logarithm.
     #[inline]
     pub fn log10(self) -> Self {
+        self.log_family(|a, c| taylor_ops::taylor_log10(a, c))
+    }
+
+    /// The shared logarithm domain guards and delegation: a pole or zero at
+    /// the origin has no logarithm (this also covers the all-zero value,
+    /// whose normalized pole order is 0 with `coeffs[0] == 0`), and neither
+    /// does a non-positive leading coefficient.
+    #[inline]
+    fn log_family(self, apply: impl FnOnce(&[F], &mut [F])) -> Self {
         if self.pole_order != 0 {
             return Self::nan_laurent();
         }
@@ -560,7 +512,7 @@ impl<F: Float, const K: usize> Laurent<F, K> {
             return Self::nan_laurent();
         }
         let mut c = [F::zero(); K];
-        taylor_ops::taylor_log10(&self.coeffs, &mut c);
+        apply(&self.coeffs, &mut c);
         Laurent::new(c, 0)
     }
 

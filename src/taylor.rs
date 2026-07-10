@@ -46,6 +46,36 @@ impl<F: Float, const K: usize> From<F> for Taylor<F, K> {
     }
 }
 
+/// Emits the uniform elemental wrappers around the `taylor_ops` kernels:
+/// stack-array output plus the kernel call, differing only in the kernel
+/// name and its scratch-array count. The recurrence math stays in
+/// `taylor_ops`; ops with extra arguments or reused two-output kernels
+/// (`powi`, `powf`, `sin`/`cos`/`sin_cos`, `sinh`/`cosh`, `atan2`,
+/// `hypot`) remain hand-written below.
+macro_rules! taylor_elementals {
+    ($( $(#[$doc:meta])* $name:ident => $kernel:ident / $scratch:tt; )+) => {$(
+        $(#[$doc])*
+        #[inline]
+        pub fn $name(self) -> Self {
+            let mut c = [F::zero(); K];
+            taylor_elementals!(@call $kernel, self, c, $scratch);
+            Taylor { coeffs: c }
+        }
+    )+};
+    (@call $kernel:ident, $self:ident, $c:ident, 0) => {
+        taylor_ops::$kernel(&$self.coeffs, &mut $c)
+    };
+    (@call $kernel:ident, $self:ident, $c:ident, 1) => {{
+        let mut s = [F::zero(); K];
+        taylor_ops::$kernel(&$self.coeffs, &mut $c, &mut s);
+    }};
+    (@call $kernel:ident, $self:ident, $c:ident, 2) => {{
+        let mut s1 = [F::zero(); K];
+        let mut s2 = [F::zero(); K];
+        taylor_ops::$kernel(&$self.coeffs, &mut $c, &mut s1, &mut s2);
+    }};
+}
+
 impl<F: Float, const K: usize> Taylor<F, K> {
     /// Create a Taylor number from raw coefficients.
     #[inline]
@@ -115,30 +145,43 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     // ── Elemental methods ──
     // Each delegates to taylor_ops with stack arrays as scratch.
 
-    /// Reciprocal (1/x).
-    #[inline]
-    pub fn recip(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_recip(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// Square root.
-    #[inline]
-    pub fn sqrt(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_sqrt(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// Cube root.
-    #[inline]
-    pub fn cbrt(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_cbrt(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
+    taylor_elementals! {
+        /// Reciprocal (1/x).
+        recip => taylor_recip / 0;
+        /// Square root.
+        sqrt => taylor_sqrt / 0;
+        /// Cube root.
+        cbrt => taylor_cbrt / 2;
+        /// Natural exponential (e^x).
+        exp => taylor_exp / 0;
+        /// Base-2 exponential (2^x).
+        exp2 => taylor_exp2 / 1;
+        /// e^x - 1, accurate near zero.
+        exp_m1 => taylor_exp_m1 / 0;
+        /// Natural logarithm.
+        ln => taylor_ln / 0;
+        /// Base-2 logarithm.
+        log2 => taylor_log2 / 0;
+        /// Base-10 logarithm.
+        log10 => taylor_log10 / 0;
+        /// ln(1+x), accurate near zero.
+        ln_1p => taylor_ln_1p / 1;
+        /// Tangent.
+        tan => taylor_tan / 1;
+        /// Arcsine.
+        asin => taylor_asin / 2;
+        /// Arccosine.
+        acos => taylor_acos / 2;
+        /// Arctangent.
+        atan => taylor_atan / 2;
+        /// Hyperbolic tangent.
+        tanh => taylor_tanh / 1;
+        /// Inverse hyperbolic sine.
+        asinh => taylor_asinh / 2;
+        /// Inverse hyperbolic cosine.
+        acosh => taylor_acosh / 2;
+        /// Inverse hyperbolic tangent.
+        atanh => taylor_atanh / 2;
     }
 
     /// Integer power.
@@ -158,64 +201,6 @@ impl<F: Float, const K: usize> Taylor<F, K> {
         let mut s1 = [F::zero(); K];
         let mut s2 = [F::zero(); K];
         taylor_ops::taylor_powf(&self.coeffs, &n.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
-    }
-
-    /// Natural exponential (e^x).
-    #[inline]
-    pub fn exp(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_exp(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// Base-2 exponential (2^x).
-    #[inline]
-    pub fn exp2(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s = [F::zero(); K];
-        taylor_ops::taylor_exp2(&self.coeffs, &mut c, &mut s);
-        Taylor { coeffs: c }
-    }
-
-    /// e^x - 1, accurate near zero.
-    #[inline]
-    pub fn exp_m1(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_exp_m1(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// Natural logarithm.
-    #[inline]
-    pub fn ln(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_ln(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// Base-2 logarithm.
-    #[inline]
-    pub fn log2(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_log2(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// Base-10 logarithm.
-    #[inline]
-    pub fn log10(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_log10(&self.coeffs, &mut c);
-        Taylor { coeffs: c }
-    }
-
-    /// ln(1+x), accurate near zero.
-    #[inline]
-    pub fn ln_1p(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s = [F::zero(); K];
-        taylor_ops::taylor_ln_1p(&self.coeffs, &mut c, &mut s);
         Taylor { coeffs: c }
     }
 
@@ -250,45 +235,6 @@ impl<F: Float, const K: usize> Taylor<F, K> {
         let mut co = [F::zero(); K];
         taylor_ops::taylor_sin_cos(&self.coeffs, &mut s, &mut co);
         (Taylor { coeffs: s }, Taylor { coeffs: co })
-    }
-
-    /// Tangent.
-    #[inline]
-    pub fn tan(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s = [F::zero(); K];
-        taylor_ops::taylor_tan(&self.coeffs, &mut c, &mut s);
-        Taylor { coeffs: c }
-    }
-
-    /// Arcsine.
-    #[inline]
-    pub fn asin(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_asin(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
-    }
-
-    /// Arccosine.
-    #[inline]
-    pub fn acos(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_acos(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
-    }
-
-    /// Arctangent.
-    #[inline]
-    pub fn atan(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_atan(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
     }
 
     /// Two-argument arctangent.
@@ -327,45 +273,6 @@ impl<F: Float, const K: usize> Taylor<F, K> {
         Taylor { coeffs: ch }
     }
 
-    /// Hyperbolic tangent.
-    #[inline]
-    pub fn tanh(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s = [F::zero(); K];
-        taylor_ops::taylor_tanh(&self.coeffs, &mut c, &mut s);
-        Taylor { coeffs: c }
-    }
-
-    /// Inverse hyperbolic sine.
-    #[inline]
-    pub fn asinh(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_asinh(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
-    }
-
-    /// Inverse hyperbolic cosine.
-    #[inline]
-    pub fn acosh(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_acosh(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
-    }
-
-    /// Inverse hyperbolic tangent.
-    #[inline]
-    pub fn atanh(self) -> Self {
-        let mut c = [F::zero(); K];
-        let mut s1 = [F::zero(); K];
-        let mut s2 = [F::zero(); K];
-        taylor_ops::taylor_atanh(&self.coeffs, &mut c, &mut s1, &mut s2);
-        Taylor { coeffs: c }
-    }
-
     /// Absolute value.
     #[inline]
     pub fn abs(self) -> Self {
@@ -394,33 +301,25 @@ impl<F: Float, const K: usize> Taylor<F, K> {
     /// Floor (zero derivative).
     #[inline]
     pub fn floor(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_discontinuous(self.coeffs[0].floor(), &mut c);
-        Taylor { coeffs: c }
+        Self::constant(self.coeffs[0].floor())
     }
 
     /// Ceiling (zero derivative).
     #[inline]
     pub fn ceil(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_discontinuous(self.coeffs[0].ceil(), &mut c);
-        Taylor { coeffs: c }
+        Self::constant(self.coeffs[0].ceil())
     }
 
     /// Round to nearest integer (zero derivative).
     #[inline]
     pub fn round(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_discontinuous(self.coeffs[0].round(), &mut c);
-        Taylor { coeffs: c }
+        Self::constant(self.coeffs[0].round())
     }
 
     /// Truncate toward zero (zero derivative).
     #[inline]
     pub fn trunc(self) -> Self {
-        let mut c = [F::zero(); K];
-        taylor_ops::taylor_discontinuous(self.coeffs[0].trunc(), &mut c);
-        Taylor { coeffs: c }
+        Self::constant(self.coeffs[0].trunc())
     }
 
     /// Fractional part.

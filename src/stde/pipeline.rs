@@ -28,21 +28,13 @@ pub fn estimate<F: Float>(
     let mut value = F::zero();
     let mut acc = WelfordAccumulator::new();
 
-    for v in directions.iter() {
+    for v in directions {
         let (c0, c1, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
         acc.update(estimator.sample(c0, c1, c2));
     }
 
-    let (estimate, sample_variance, standard_error) = acc.finalize();
-
-    EstimatorResult {
-        value,
-        estimate,
-        sample_variance,
-        standard_error,
-        num_samples: acc.contributing(),
-    }
+    acc.into_result(value)
 }
 
 /// Estimate a quantity using importance-weighted samples (West's 1979 algorithm).

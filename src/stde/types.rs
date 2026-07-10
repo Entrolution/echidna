@@ -78,6 +78,21 @@ impl<F: Float> WelfordAccumulator<F> {
         self.count
     }
 
+    /// Package the finalized statistics into an [`EstimatorResult`].
+    ///
+    /// For the plain estimators only — variants that transform the raw mean
+    /// (variance rescaling, exact-trace offsets) call [`finalize`](Self::finalize)
+    /// directly so the transform stays visible at the estimator.
+    pub(super) fn into_result(self, value: F) -> EstimatorResult<F> {
+        let (estimate, sample_variance, standard_error) = self.finalize();
+        EstimatorResult {
+            value,
+            estimate,
+            sample_variance,
+            standard_error,
+            num_samples: self.contributing(),
+        }
+    }
     /// Finalize into `(mean, sample_variance, standard_error)`.
     ///
     /// With zero contributing samples the estimator has no information and

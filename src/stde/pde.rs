@@ -21,7 +21,7 @@ fn stde_2nd_inner<F: Float>(
     let mut value = F::zero();
     let mut acc = WelfordAccumulator::new();
 
-    for z in z_vectors.iter() {
+    for z in z_vectors {
         assert_eq!(z.len(), n, "z_vector length must match tape.num_inputs()");
         matvec(z, &mut v);
         let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, &v, &mut buf);
@@ -29,15 +29,7 @@ fn stde_2nd_inner<F: Float>(
         acc.update(two * c2);
     }
 
-    let (estimate, sample_variance, standard_error) = acc.finalize();
-
-    EstimatorResult {
-        value,
-        estimate,
-        sample_variance,
-        standard_error,
-        num_samples: acc.contributing(),
-    }
+    acc.into_result(value)
 }
 
 /// Estimate the divergence (trace of Jacobian) of a vector field f: R^n → R^n.
@@ -67,8 +59,7 @@ pub fn divergence<F: Float>(
     let m = tape.num_outputs();
     assert_eq!(
         m, n,
-        "divergence requires num_outputs ({}) == num_inputs ({})",
-        m, n
+        "divergence requires num_outputs ({m}) == num_inputs ({n})"
     );
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 
@@ -193,7 +184,7 @@ pub fn parabolic_diffusion_stochastic<F: Float>(
     let mut acc = WelfordAccumulator::new();
 
     for &i in sampled_indices {
-        assert!(i < d, "sampled index {} out of bounds (d={})", i, d);
+        assert!(i < d, "sampled index {i} out of bounds (d={d})");
         let col = sigma_columns[i];
         assert_eq!(
             col.len(),
@@ -209,7 +200,9 @@ pub fn parabolic_diffusion_stochastic<F: Float>(
 
     // d * mean * ½ estimates ½ Σ_i (σ·e_i)^T H (σ·e_i) — unbiased iff
     // `sampled_indices` is a uniform random draw over the d columns.
-    // Scale variance/SE to match the rescaled estimate.
+    // Scale variance/SE to match the rescaled estimate. Deliberately NOT
+    // WelfordAccumulator::into_result: transformed estimates (rescaled here,
+    // exact-trace offset in hutch++) keep the transform visible at the site.
     let scale = df * half;
     EstimatorResult {
         value,
@@ -401,32 +394,26 @@ pub fn dense_stde_2nd_indefinite(
         None
     };
 
+    // Dense mat-vec v = M·z, shared by every branch below.
+    fn matvec(m: &nalgebra::DMatrix<f64>, z: &[f64], v: &mut [f64]) {
+        for i in 0..m.nrows() {
+            let mut sum = 0.0;
+            for j in 0..m.ncols() {
+                sum += m[(i, j)] * z[j];
+            }
+            v[i] = sum;
+        }
+    }
+
     // Optimization: if all eigenvalues have same sign, use single-pass
     if has_positive && !has_negative {
         let lp = l_pos.as_ref().unwrap();
-        return stde_2nd_inner(tape, x, z_vectors, |z, v| {
-            // Full mat-vec: v = L⁺ · z
-            for i in 0..n {
-                let mut sum = 0.0;
-                for j in 0..n {
-                    sum += lp[(i, j)] * z[j];
-                }
-                v[i] = sum;
-            }
-        });
+        return stde_2nd_inner(tape, x, z_vectors, |z, v| matvec(lp, z, v));
     }
     if !has_positive && has_negative {
         let ln = l_neg.as_ref().unwrap();
         // All negative: tr(C·H) = -E[v⁻ᵀ H v⁻], so negate
-        let mut result = stde_2nd_inner(tape, x, z_vectors, |z, v| {
-            for i in 0..n {
-                let mut sum = 0.0;
-                for j in 0..n {
-                    sum += ln[(i, j)] * z[j];
-                }
-                v[i] = sum;
-            }
-        });
+        let mut result = stde_2nd_inner(tape, x, z_vectors, |z, v| matvec(ln, z, v));
         result.estimate = -result.estimate;
         // variance and SE stay the same magnitude (negation doesn't change variance)
         return result;
@@ -445,22 +432,8 @@ pub fn dense_stde_2nd_indefinite(
     for z in z_vectors.iter() {
         assert_eq!(z.len(), n, "z_vector length must match tape.num_inputs()");
 
-        // v⁺ = L⁺ · z
-        for i in 0..n {
-            let mut sum = 0.0;
-            for j in 0..n {
-                sum += lp[(i, j)] * z[j];
-            }
-            v_pos[i] = sum;
-        }
-        // v⁻ = L⁻ · z
-        for i in 0..n {
-            let mut sum = 0.0;
-            for j in 0..n {
-                sum += ln[(i, j)] * z[j];
-            }
-            v_neg[i] = sum;
-        }
+        matvec(lp, z, &mut v_pos);
+        matvec(ln, z, &mut v_neg);
 
         let (c0, _, c2_pos) = taylor_jet_2nd_with_buf(tape, x, &v_pos, &mut buf);
         let (_, _, c2_neg) = taylor_jet_2nd_with_buf(tape, x, &v_neg, &mut buf);
@@ -469,13 +442,5 @@ pub fn dense_stde_2nd_indefinite(
         acc.update(2.0 * c2_pos - 2.0 * c2_neg);
     }
 
-    let (estimate, sample_variance, standard_error) = acc.finalize();
-
-    EstimatorResult {
-        value,
-        estimate,
-        sample_variance,
-        standard_error,
-        num_samples: acc.contributing(),
-    }
+    acc.into_result(value)
 }
