@@ -91,6 +91,14 @@ struct TapeMeta {
 const F32_SIGN_MASK: u32 = 0x80000000u;
 const F32_ABS_MASK:  u32 = 0x7fffffffu;
 const F32_INF_BITS:  u32 = 0x7f800000u;
+
+fn is_nan_f32(x: f32) -> bool {
+    // NaN iff exponent is all-ones and mantissa is non-zero. Inspect the bits
+    // directly — `x != x` can be folded away by Metal's fast-math. Matches
+    // forward.wgsl's helper.
+    return (bitcast<u32>(x) & F32_ABS_MASK) > F32_INF_BITS;
+}
+
 const F32_QNAN_BITS: u32 = 0x7fc00000u;
 
 fn sinh_f32(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
@@ -285,18 +293,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
                 // Pick the non-NaN operand when one is NaN (matches IEEE `max`).
-                // `b != b` is NaN-detection but can be folded away by
-                // optimizers; use an explicit bit-pattern test instead.
-                let b_bits = bitcast<u32>(b);
-                let b_is_nan = ((b_bits >> 23u) & 0xffu) == 0xffu && (b_bits & 0x7fffffu) != 0u;
-                if a >= b || b_is_nan { r = a; rt = at; } else { r = b; rt = bt; }
+                if a >= b || is_nan_f32(b) { r = a; rt = at; } else { r = b; rt = bt; }
             }
             case 11u /* MIN */: {
                 let b = primals[p_base + b_idx];
                 let bt = tangents[t_base + b_idx];
-                let b_bits = bitcast<u32>(b);
-                let b_is_nan = ((b_bits >> 23u) & 0xffu) == 0xffu && (b_bits & 0x7fffffu) != 0u;
-                if a <= b || b_is_nan { r = a; rt = at; } else { r = b; rt = bt; }
+                if a <= b || is_nan_f32(b) { r = a; rt = at; } else { r = b; rt = bt; }
             }
 
             // Unary

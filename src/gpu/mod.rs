@@ -224,6 +224,24 @@ pub struct TaylorBatchResult<F> {
     pub c2s: Vec<F>,
 }
 
+/// Split a flat `[c0..c_{K-1}]`-per-output jet buffer into one `Vec` per
+/// coefficient order. Shared by both backends' Taylor readbacks — the index
+/// arithmetic must stay identical or coefficients silently mis-map.
+#[cfg(feature = "stde")]
+pub(crate) fn deinterleave_coefficients<T: Copy>(
+    raw: &[T],
+    total_out: usize,
+    order: usize,
+) -> Vec<Vec<T>> {
+    let mut coefficients: Vec<Vec<T>> = (0..order).map(|_| Vec::with_capacity(total_out)).collect();
+    for i in 0..total_out {
+        for (c, coeff) in coefficients.iter_mut().enumerate() {
+            coeff.push(raw[i * order + c]);
+        }
+    }
+    coefficients
+}
+
 /// Result of a batched K-th order Taylor forward propagation.
 ///
 /// `coefficients[k]` has `batch_size * num_outputs` elements for coefficient index k.

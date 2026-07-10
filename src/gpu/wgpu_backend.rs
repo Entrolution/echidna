@@ -42,6 +42,36 @@ pub struct WgpuContext {
     taylor_fwd_2nd_io_bind_group_layout: wgpu::BindGroupLayout,
 }
 
+/// Build one compute pipeline from the shared triple every entry point
+/// repeats: a layout over `[tape_bgl, io_bgl]`, the shader module, and the
+/// pipeline itself with the crate's fixed defaults (`main` entry, default
+/// compilation options, no cache). `name` seeds the three labels.
+fn build_compute_pipeline(
+    device: &wgpu::Device,
+    name: &str,
+    tape_bgl: &wgpu::BindGroupLayout,
+    io_bgl: &wgpu::BindGroupLayout,
+    wgsl_src: &str,
+) -> wgpu::ComputePipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(&format!("echidna_{name}_pl")),
+        bind_group_layouts: &[Some(tape_bgl), Some(io_bgl)],
+        immediate_size: 0,
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(&format!("echidna_{name}_shader")),
+        source: wgpu::ShaderSource::Wgsl(wgsl_src.into()),
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(&format!("echidna_{name}_pipeline")),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some("main"),
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
+        cache: None,
+    })
+}
+
 impl WgpuContext {
     /// Acquire a GPU device. Returns `None` if no suitable adapter is found.
     #[must_use]
@@ -139,52 +169,22 @@ impl WgpuContext {
             });
 
         // Forward pipeline
-        let fwd_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("echidna_forward_pl"),
-            bind_group_layouts: &[
-                Some(&tape_bind_group_layout),
-                Some(&forward_io_bind_group_layout),
-            ],
-            immediate_size: 0,
-        });
-
-        let fwd_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("echidna_forward_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/forward.wgsl").into()),
-        });
-
-        let forward_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("echidna_forward_pipeline"),
-            layout: Some(&fwd_layout),
-            module: &fwd_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let forward_pipeline = build_compute_pipeline(
+            &device,
+            "forward",
+            &tape_bind_group_layout,
+            &forward_io_bind_group_layout,
+            include_str!("shaders/forward.wgsl"),
+        );
 
         // Reverse pipeline
-        let rev_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("echidna_reverse_pl"),
-            bind_group_layouts: &[
-                Some(&tape_bind_group_layout),
-                Some(&reverse_io_bind_group_layout),
-            ],
-            immediate_size: 0,
-        });
-
-        let rev_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("echidna_reverse_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reverse.wgsl").into()),
-        });
-
-        let reverse_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("echidna_reverse_pipeline"),
-            layout: Some(&rev_layout),
-            module: &rev_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let reverse_pipeline = build_compute_pipeline(
+            &device,
+            "reverse",
+            &tape_bind_group_layout,
+            &reverse_io_bind_group_layout,
+            include_str!("shaders/reverse.wgsl"),
+        );
 
         // Tangent forward pipeline
         let tangent_fwd_io_bind_group_layout =
@@ -199,29 +199,13 @@ impl WgpuContext {
                 ],
             });
 
-        let tfwd_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("echidna_tangent_fwd_pl"),
-            bind_group_layouts: &[
-                Some(&tape_bind_group_layout),
-                Some(&tangent_fwd_io_bind_group_layout),
-            ],
-            immediate_size: 0,
-        });
-
-        let tfwd_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("echidna_tangent_fwd_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/tangent_forward.wgsl").into()),
-        });
-
-        let tangent_fwd_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("echidna_tangent_fwd_pipeline"),
-                layout: Some(&tfwd_layout),
-                module: &tfwd_shader,
-                entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
+        let tangent_fwd_pipeline = build_compute_pipeline(
+            &device,
+            "tangent_fwd",
+            &tape_bind_group_layout,
+            &tangent_fwd_io_bind_group_layout,
+            include_str!("shaders/tangent_forward.wgsl"),
+        );
 
         // Tangent reverse pipeline (forward-over-reverse for HVP)
         let tangent_rev_io_bind_group_layout =
@@ -239,29 +223,13 @@ impl WgpuContext {
                 ],
             });
 
-        let trev_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("echidna_tangent_rev_pl"),
-            bind_group_layouts: &[
-                Some(&tape_bind_group_layout),
-                Some(&tangent_rev_io_bind_group_layout),
-            ],
-            immediate_size: 0,
-        });
-
-        let trev_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("echidna_tangent_rev_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/tangent_reverse.wgsl").into()),
-        });
-
-        let tangent_rev_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("echidna_tangent_rev_pipeline"),
-                layout: Some(&trev_layout),
-                module: &trev_shader,
-                entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                cache: None,
-            });
+        let tangent_rev_pipeline = build_compute_pipeline(
+            &device,
+            "tangent_rev",
+            &tape_bind_group_layout,
+            &tangent_rev_io_bind_group_layout,
+            include_str!("shaders/tangent_reverse.wgsl"),
+        );
 
         // Taylor forward 2nd-order pipeline (STDE only)
         #[cfg(feature = "stde")]
@@ -420,21 +388,7 @@ impl WgpuContext {
             "direction_seeds length mismatch"
         );
 
-        let meta = TapeMeta {
-            num_ops: tape.num_ops,
-            num_inputs: ni,
-            num_variables: nv,
-            num_outputs: no,
-            batch_size,
-            _pad: [0; 3],
-        };
-        let meta_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("taylor_kth_meta"),
-                contents: bytemuck::bytes_of(&meta),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let meta_buf = self.create_meta_buffer(tape, batch_size, "taylor_kth_meta");
 
         let primal_buf = self
             .device
@@ -516,51 +470,21 @@ impl WgpuContext {
             pass.set_pipeline(&self.taylor_fwd_kth_pipelines[order - 1]);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
-            self.check_dispatch_1d(batch_size.div_ceil(256))?;
-            pass.dispatch_workgroups(batch_size.div_ceil(256), 1, 1);
+            self.dispatch_1d(&mut pass, batch_size.div_ceil(256))?;
         }
 
         encoder.copy_buffer_to_buffer(&jet_out_buf, 0, &staging_buf, 0, out_size);
         let sub_idx = self.queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = staging_buf.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        // Propagate `device.poll` failures rather than swallowing them —
-        // on device loss (driver reset, OOM in another submission) a
-        // silently-ignored poll error turned into an indefinite wait on
-        // the `rx.recv()` below, looking like a deadlock to callers.
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(sub_idx),
-                timeout: None,
-            })
-            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
-
-        rx.recv()
-            .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
-            .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
-
-        let data = slice
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let raw: &[f32] = bytemuck::cast_slice(&data);
-
-        // Deinterleave: raw is [c0, c1, ..., c_{K-1}] per output per batch element
+        // Deinterleave straight from the mapped range — no intermediate Vec.
         let total_out = (batch_size as usize) * (no as usize);
-        let mut coefficients: Vec<Vec<f32>> =
-            (0..order).map(|_| Vec::with_capacity(total_out)).collect();
-
-        for i in 0..total_out {
-            for c in 0..order {
-                coefficients[c].push(raw[i * order + c]);
-            }
-        }
-
-        drop(data);
-        staging_buf.unmap();
+        let coefficients = self.read_staging_with(&staging_buf, sub_idx, |bytes| {
+            super::deinterleave_coefficients(
+                bytemuck::cast_slice::<_, f32>(bytes),
+                total_out,
+                order,
+            )
+        })?;
 
         Ok(super::TaylorKthBatchResult {
             coefficients,
@@ -584,6 +508,270 @@ impl WgpuContext {
             )));
         }
         Ok(())
+    }
+
+    /// Run one 1-D compute dispatch after validating the workgroup count.
+    fn dispatch_1d(
+        &self,
+        pass: &mut wgpu::ComputePass<'_>,
+        workgroups: u32,
+    ) -> Result<(), GpuError> {
+        self.check_dispatch_1d(workgroups)?;
+        pass.dispatch_workgroups(workgroups, 1, 1);
+        Ok(())
+    }
+
+    /// Build the per-dispatch `TapeMeta` uniform buffer.
+    fn create_meta_buffer(
+        &self,
+        tape: &WgpuTapeBuffers,
+        batch_size: u32,
+        label: &str,
+    ) -> wgpu::Buffer {
+        use wgpu::util::DeviceExt;
+        let meta = TapeMeta {
+            num_ops: tape.num_ops,
+            num_inputs: tape.num_inputs,
+            num_variables: tape.num_variables,
+            num_outputs: tape.num_outputs,
+            batch_size,
+            _pad: [0; 3],
+        };
+        self.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::bytes_of(&meta),
+                usage: wgpu::BufferUsages::UNIFORM,
+            })
+    }
+
+    /// Wait for `sub_idx` to retire, then hand `staging`'s mapped bytes to
+    /// `f` and unmap.
+    ///
+    /// Propagates `device.poll` failures rather than swallowing them — on
+    /// device loss (driver reset, OOM in another submission) a silently
+    /// ignored poll error turned into an indefinite wait on the `rx.recv()`
+    /// below, looking like a deadlock to callers.
+    ///
+    /// Entry points with two staging buffers call this once per buffer:
+    /// the first call's poll retires the whole submission, so the second
+    /// buffer's map is already satisfied and its poll returns immediately —
+    /// equivalent to the previous map-both-then-poll-once sequence, taken
+    /// one buffer at a time.
+    fn read_staging_with<R>(
+        &self,
+        staging: &wgpu::Buffer,
+        sub_idx: wgpu::SubmissionIndex,
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<R, GpuError> {
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(sub_idx),
+                timeout: None,
+            })
+            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
+        rx.recv()
+            .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
+            .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
+        let out = {
+            let data = slice
+                .get_mapped_range()
+                .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
+            f(&data)
+        };
+        staging.unmap();
+        Ok(out)
+    }
+
+    /// [`read_staging_with`](Self::read_staging_with), copied out as `f32`s.
+    fn read_staging_f32(
+        &self,
+        staging: &wgpu::Buffer,
+        sub_idx: wgpu::SubmissionIndex,
+    ) -> Result<Vec<f32>, GpuError> {
+        self.read_staging_with(staging, sub_idx, |bytes| {
+            bytemuck::cast_slice::<_, f32>(bytes).to_vec()
+        })
+    }
+
+    /// [`hvp_batch`](GpuBackend::hvp_batch) with the gradient readback
+    /// truncated to `grad_read_len` floats. With identical primals across
+    /// the batch every element computes the same gradient, so
+    /// `sparse_hessian` reads back one copy (`num_inputs`) instead of
+    /// `num_colors` of them; the device-side gradient buffer stays full
+    /// size (the kernel writes every element).
+    fn hvp_batch_with_grad_len(
+        &self,
+        tape: &WgpuTapeBuffers,
+        x: &[f32],
+        tangent_dirs: &[f32],
+        batch_size: u32,
+        grad_read_len: u32,
+    ) -> Result<(Vec<f32>, Vec<f32>), GpuError> {
+        use wgpu::util::DeviceExt;
+
+        super::validate_batch_args(tape.num_inputs, batch_size)?;
+        let ni = tape.num_inputs;
+        let nv = tape.num_variables;
+
+        assert_eq!(x.len(), ni as usize);
+        assert_eq!(tangent_dirs.len(), (batch_size as usize) * (ni as usize));
+
+        // Guard against u32 overflow in WGSL index arithmetic
+        assert!(
+            (batch_size as u64) * (nv as u64) <= u32::MAX as u64,
+            "batch_size * num_variables overflows u32 in WGSL shader index arithmetic"
+        );
+
+        // Build primal inputs: same x replicated for each batch element
+        let mut primal_inputs = Vec::with_capacity((batch_size as usize) * (ni as usize));
+        for _ in 0..batch_size {
+            primal_inputs.extend_from_slice(x);
+        }
+
+        let meta_buf = self.create_meta_buffer(tape, batch_size, "meta");
+        let primal_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("primals_in"),
+                contents: bytemuck::cast_slice(&primal_inputs),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let seed_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("seeds"),
+                contents: bytemuck::cast_slice(tangent_dirs),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+
+        let buf_size = (batch_size as u64) * (nv as u64) * 4;
+        let grad_size = (batch_size as u64) * (ni as u64) * 4;
+
+        let primals_work = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pw"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let tangents_work = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("tw"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let adj_re_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ar"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let adj_eps_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ae"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let grad_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("go"),
+            size: grad_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let hvp_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ho"),
+            size: grad_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let grad_read_size = (grad_read_len as u64) * 4;
+        debug_assert!(
+            grad_read_size <= grad_size,
+            "gradient readback exceeds buffer"
+        );
+        let grad_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gs"),
+            size: grad_read_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let hvp_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hs"),
+            size: grad_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let tape_bg = self.create_tape_bind_group(tape, &meta_buf);
+
+        let io_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trev_io"),
+            layout: &self.tangent_rev_io_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: primal_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: seed_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: primals_work.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: tangents_work.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: adj_re_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: adj_eps_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: grad_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: hvp_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hvp_enc"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("trev_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.tangent_rev_pipeline);
+            pass.set_bind_group(0, &tape_bg, &[]);
+            pass.set_bind_group(1, &io_bg, &[]);
+            self.dispatch_1d(&mut pass, batch_size.div_ceil(256))?;
+        }
+
+        encoder.copy_buffer_to_buffer(&grad_buf, 0, &grad_staging, 0, grad_read_size);
+        encoder.copy_buffer_to_buffer(&hvp_buf, 0, &hvp_staging, 0, grad_size);
+        let sub_idx = self.queue.submit(std::iter::once(encoder.finish()));
+
+        let grads = self.read_staging_f32(&grad_staging, sub_idx.clone())?;
+        let hvps = self.read_staging_f32(&hvp_staging, sub_idx)?;
+
+        Ok((grads, hvps))
     }
 }
 
@@ -695,21 +883,7 @@ impl GpuBackend for WgpuContext {
         );
 
         // Create per-dispatch meta uniform with batch_size
-        let meta = TapeMeta {
-            num_ops: tape.num_ops,
-            num_inputs,
-            num_variables,
-            num_outputs,
-            batch_size,
-            _pad: [0; 3],
-        };
-        let meta_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("tape_meta"),
-                contents: bytemuck::bytes_of(&meta),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let meta_buf = self.create_meta_buffer(tape, batch_size, "tape_meta");
 
         // Input buffer (read-only from shader)
         let input_buf = self
@@ -784,41 +958,13 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.forward_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
-            self.check_dispatch_1d(batch_size.div_ceil(256))?;
-            pass.dispatch_workgroups(batch_size.div_ceil(256), 1, 1);
+            self.dispatch_1d(&mut pass, batch_size.div_ceil(256))?;
         }
 
         encoder.copy_buffer_to_buffer(&output_buf, 0, &staging_buf, 0, output_size);
         let sub_idx = self.queue.submit(std::iter::once(encoder.finish()));
 
-        // Readback
-        let slice = staging_buf.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        // Propagate `device.poll` failures rather than swallowing them —
-        // on device loss (driver reset, OOM in another submission) a
-        // silently-ignored poll error turned into an indefinite wait on
-        // the `rx.recv()` below, looking like a deadlock to callers.
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(sub_idx),
-                timeout: None,
-            })
-            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
-
-        rx.recv()
-            .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
-            .map_err(|e| GpuError::Other(format!("buffer map failed: {e}")))?;
-
-        let data = slice
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-        drop(data);
-        staging_buf.unmap();
-
+        let result = self.read_staging_f32(&staging_buf, sub_idx)?;
         Ok(result)
     }
 
@@ -855,21 +1001,7 @@ impl GpuBackend for WgpuContext {
         );
 
         // Create per-dispatch meta uniform
-        let meta = TapeMeta {
-            num_ops: tape.num_ops,
-            num_inputs,
-            num_variables,
-            num_outputs,
-            batch_size,
-            _pad: [0; 3],
-        };
-        let meta_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("tape_meta"),
-                contents: bytemuck::bytes_of(&meta),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let meta_buf = self.create_meta_buffer(tape, batch_size, "tape_meta");
 
         // Input buffer
         let input_buf = self
@@ -975,7 +1107,6 @@ impl GpuBackend for WgpuContext {
         });
 
         let workgroups = batch_size.div_ceil(256);
-        self.check_dispatch_1d(workgroups)?;
 
         // Encode: forward pass → reverse pass → copy results
         let mut encoder = self
@@ -993,7 +1124,7 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.forward_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &fwd_io_bg, &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
+            self.dispatch_1d(&mut pass, workgroups)?;
         }
 
         // Reverse pass
@@ -1005,57 +1136,15 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.reverse_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &rev_io_bg, &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
+            self.dispatch_1d(&mut pass, workgroups)?;
         }
 
         encoder.copy_buffer_to_buffer(&output_buf, 0, &output_staging, 0, output_size);
         encoder.copy_buffer_to_buffer(&grad_buf, 0, &grad_staging, 0, grad_size);
         let sub_idx = self.queue.submit(std::iter::once(encoder.finish()));
 
-        // Readback both buffers
-        let out_slice = output_staging.slice(..);
-        let grad_slice = grad_staging.slice(..);
-
-        let (tx1, rx1) = std::sync::mpsc::channel();
-        let (tx2, rx2) = std::sync::mpsc::channel();
-        out_slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx1.send(r);
-        });
-        grad_slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx2.send(r);
-        });
-
-        // Propagate `device.poll` failures rather than swallowing them —
-        // on device loss (driver reset, OOM in another submission) a
-        // silently-ignored poll error turned into an indefinite wait on
-        // the `rx.recv()` below, looking like a deadlock to callers.
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(sub_idx),
-                timeout: None,
-            })
-            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
-
-        rx1.recv()
-            .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
-            .map_err(|e| GpuError::Other(format!("output map failed: {e}")))?;
-        rx2.recv()
-            .map_err(|e| GpuError::Other(format!("channel recv failed: {e}")))?
-            .map_err(|e| GpuError::Other(format!("grad map failed: {e}")))?;
-
-        let out_data = out_slice
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let outputs: Vec<f32> = bytemuck::cast_slice(&out_data).to_vec();
-        drop(out_data);
-        output_staging.unmap();
-
-        let grad_data = grad_slice
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let grads: Vec<f32> = bytemuck::cast_slice(&grad_data).to_vec();
-        drop(grad_data);
-        grad_staging.unmap();
+        let outputs = self.read_staging_f32(&output_staging, sub_idx.clone())?;
+        let grads = self.read_staging_f32(&grad_staging, sub_idx)?;
 
         Ok((outputs, grads))
     }
@@ -1117,21 +1206,7 @@ impl GpuBackend for WgpuContext {
         }
 
         // Create per-dispatch meta
-        let meta = TapeMeta {
-            num_ops: tape.num_ops,
-            num_inputs: tape.num_inputs,
-            num_variables,
-            num_outputs: tape.num_outputs,
-            batch_size: batch,
-            _pad: [0; 3],
-        };
-        let meta_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("tape_meta"),
-                contents: bytemuck::bytes_of(&meta),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
+        let meta_buf = self.create_meta_buffer(tape, batch, "tape_meta");
 
         let primal_buf = self
             .device
@@ -1218,37 +1293,12 @@ impl GpuBackend for WgpuContext {
             pass.set_pipeline(&self.tangent_fwd_pipeline);
             pass.set_bind_group(0, &tape_bg, &[]);
             pass.set_bind_group(1, &io_bg, &[]);
-            self.check_dispatch_1d(batch.div_ceil(256))?;
-            pass.dispatch_workgroups(batch.div_ceil(256), 1, 1);
+            self.dispatch_1d(&mut pass, batch.div_ceil(256))?;
         }
         encoder.copy_buffer_to_buffer(&tangent_out_buf, 0, &staging, 0, out_size);
         let sub_idx = self.queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        // Propagate `device.poll` failures rather than swallowing them —
-        // on device loss (driver reset, OOM in another submission) a
-        // silently-ignored poll error turned into an indefinite wait on
-        // the `rx.recv()` below, looking like a deadlock to callers.
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(sub_idx),
-                timeout: None,
-            })
-            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
-        rx.recv()
-            .map_err(|e| GpuError::Other(format!("recv: {e}")))?
-            .map_err(|e| GpuError::Other(format!("map: {e}")))?;
-
-        let data = slice
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let tangent_results: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-        drop(data);
-        staging.unmap();
+        let tangent_results = self.read_staging_f32(&staging, sub_idx)?;
 
         // CPU: extract Jacobian entries from compressed tangent results
         // tangent_results[c * num_outputs + o] = sum over {i : colors[i]==c} J[o][i] * 1
@@ -1285,215 +1335,8 @@ impl GpuBackend for WgpuContext {
         tangent_dirs: &[f32],
         batch_size: u32,
     ) -> Result<(Vec<f32>, Vec<f32>), GpuError> {
-        use wgpu::util::DeviceExt;
-
-        super::validate_batch_args(tape.num_inputs, batch_size)?;
         let ni = tape.num_inputs;
-        let nv = tape.num_variables;
-
-        assert_eq!(x.len(), ni as usize);
-        assert_eq!(tangent_dirs.len(), (batch_size as usize) * (ni as usize));
-
-        // Guard against u32 overflow in WGSL index arithmetic
-        assert!(
-            (batch_size as u64) * (nv as u64) <= u32::MAX as u64,
-            "batch_size * num_variables overflows u32 in WGSL shader index arithmetic"
-        );
-
-        // Build primal inputs: same x replicated for each batch element
-        let mut primal_inputs = Vec::with_capacity((batch_size as usize) * (ni as usize));
-        for _ in 0..batch_size {
-            primal_inputs.extend_from_slice(x);
-        }
-
-        let meta = TapeMeta {
-            num_ops: tape.num_ops,
-            num_inputs: ni,
-            num_variables: nv,
-            num_outputs: tape.num_outputs,
-            batch_size,
-            _pad: [0; 3],
-        };
-
-        let meta_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("meta"),
-                contents: bytemuck::bytes_of(&meta),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let primal_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("primals_in"),
-                contents: bytemuck::cast_slice(&primal_inputs),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-        let seed_buf = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("seeds"),
-                contents: bytemuck::cast_slice(tangent_dirs),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-
-        let buf_size = (batch_size as u64) * (nv as u64) * 4;
-        let grad_size = (batch_size as u64) * (ni as u64) * 4;
-
-        let primals_work = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("pw"),
-            size: buf_size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let tangents_work = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("tw"),
-            size: buf_size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let adj_re_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ar"),
-            size: buf_size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let adj_eps_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ae"),
-            size: buf_size,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let grad_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("go"),
-            size: grad_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let hvp_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ho"),
-            size: grad_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let grad_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gs"),
-            size: grad_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let hvp_staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hs"),
-            size: grad_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let tape_bg = self.create_tape_bind_group(tape, &meta_buf);
-
-        let io_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("trev_io"),
-            layout: &self.tangent_rev_io_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: primal_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: seed_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: primals_work.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: tangents_work.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: adj_re_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: adj_eps_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: grad_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: hvp_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("hvp_enc"),
-            });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("trev_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.tangent_rev_pipeline);
-            pass.set_bind_group(0, &tape_bg, &[]);
-            pass.set_bind_group(1, &io_bg, &[]);
-            self.check_dispatch_1d(batch_size.div_ceil(256))?;
-            pass.dispatch_workgroups(batch_size.div_ceil(256), 1, 1);
-        }
-
-        encoder.copy_buffer_to_buffer(&grad_buf, 0, &grad_staging, 0, grad_size);
-        encoder.copy_buffer_to_buffer(&hvp_buf, 0, &hvp_staging, 0, grad_size);
-        let sub_idx = self.queue.submit(std::iter::once(encoder.finish()));
-
-        let gs = grad_staging.slice(..);
-        let hs = hvp_staging.slice(..);
-        let (tx1, rx1) = std::sync::mpsc::channel();
-        let (tx2, rx2) = std::sync::mpsc::channel();
-        gs.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx1.send(r);
-        });
-        hs.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx2.send(r);
-        });
-        // Propagate `device.poll` failures rather than swallowing them —
-        // on device loss (driver reset, OOM in another submission) a
-        // silently-ignored poll error turned into an indefinite wait on
-        // the `rx.recv()` below, looking like a deadlock to callers.
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(sub_idx),
-                timeout: None,
-            })
-            .map_err(|e| GpuError::Other(format!("device poll failed: {e}")))?;
-
-        rx1.recv()
-            .map_err(|e| GpuError::Other(format!("{e}")))?
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-        rx2.recv()
-            .map_err(|e| GpuError::Other(format!("{e}")))?
-            .map_err(|e| GpuError::Other(format!("{e}")))?;
-
-        let gd = gs
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let grads: Vec<f32> = bytemuck::cast_slice(&gd).to_vec();
-        drop(gd);
-        grad_staging.unmap();
-
-        let hd = hs
-            .get_mapped_range()
-            .map_err(|e| GpuError::Other(format!("buffer map read failed: {e}")))?;
-        let hvps: Vec<f32> = bytemuck::cast_slice(&hd).to_vec();
-        drop(hd);
-        hvp_staging.unmap();
-
-        Ok((grads, hvps))
+        self.hvp_batch_with_grad_len(tape, x, tangent_dirs, batch_size, batch_size * ni)
     }
 
     /// Compute a sparse Hessian using forward-over-reverse HVP sweeps on GPU.
@@ -1530,7 +1373,9 @@ impl GpuBackend for WgpuContext {
             }
         }
 
-        let (grads, hvps) = self.hvp_batch(tape, x, &tangent_dirs, batch)?;
+        // Identical primals across colors → one gradient copy suffices.
+        let (grads, hvps) =
+            self.hvp_batch_with_grad_len(tape, x, &tangent_dirs, batch, ni as u32)?;
 
         // Extract gradient from first HVP (all share the same gradient)
         let gradient: Vec<f32> = grads[..ni].to_vec();

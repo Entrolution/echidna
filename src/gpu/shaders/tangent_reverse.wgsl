@@ -97,6 +97,14 @@ struct TapeMeta {
 const F32_SIGN_MASK: u32 = 0x80000000u;
 const F32_ABS_MASK:  u32 = 0x7fffffffu;
 const F32_INF_BITS:  u32 = 0x7f800000u;
+
+fn is_nan_f32(x: f32) -> bool {
+    // NaN iff exponent is all-ones and mantissa is non-zero. Inspect the bits
+    // directly — `x != x` can be folded away by Metal's fast-math. Matches
+    // forward.wgsl's helper.
+    return (bitcast<u32>(x) & F32_ABS_MASK) > F32_INF_BITS;
+}
+
 const F32_QNAN_BITS: u32 = 0x7fc00000u;
 
 fn sinh_f32(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
@@ -216,8 +224,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // a*at + b*bt is left un-rescaled (it overflows only when the true
             // tangent magnitude does).
             case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=hypot_f32(a,b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
-            case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a>=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
-            case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a<=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
+            case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; if a>=b || is_nan_f32(b) {r=a;rt=at;} else {r=b;rt=bt;} }
+            case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; if a<=b || is_nan_f32(b) {r=a;rt=at;} else {r=b;rt=bt;} }
             case 12u: { r=-a; rt=-at; }
             case 13u: { r=1.0/a; rt=-at/(a*a); }
             case 14u: { r=sqrt(a); rt=at/(2.0*r); }
@@ -409,15 +417,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // fast-math, which would route the adjoint to the wrong operand.
             case 10u /* MAX */: {
                 let b=primals[base+bi];
-                let bb=bitcast<u32>(b);
-                let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u;
-                if a>=b || bn { da_re=1.0; } else { db_re=1.0; }
+                if a>=b || is_nan_f32(b) { da_re=1.0; } else { db_re=1.0; }
             }
             case 11u /* MIN */: {
                 let b=primals[base+bi];
-                let bb=bitcast<u32>(b);
-                let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u;
-                if a<=b || bn { da_re=1.0; } else { db_re=1.0; }
+                if a<=b || is_nan_f32(b) { da_re=1.0; } else { db_re=1.0; }
             }
 
             // Unary ops: da_re = f'(a), da_eps = f''(a)*at

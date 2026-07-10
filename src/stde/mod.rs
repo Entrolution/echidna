@@ -135,6 +135,8 @@ pub use laplacian::{
 pub use pde::dense_stde_2nd_indefinite;
 pub use pde::{dense_stde_2nd, divergence, parabolic_diffusion, parabolic_diffusion_stochastic};
 pub use pipeline::{estimate, estimate_weighted};
+#[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
+pub(crate) use types::WelfordAccumulator;
 pub use types::{DivergenceResult, EstimatorResult};
 
 #[cfg(feature = "diffop")]

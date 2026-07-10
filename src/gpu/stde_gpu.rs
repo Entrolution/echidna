@@ -10,6 +10,35 @@
 use super::{GpuBackend, GpuError, TaylorBatchResult};
 use crate::stde::EstimatorResult;
 
+/// Reject multi-output tapes: every estimator here indexes `result.c2s[i]`
+/// as one c2 per batch element, which only holds for a single scalar output
+/// (the batched layout is `[batch * num_outputs + out]`).
+fn require_scalar_output<B: GpuBackend>(
+    backend: &B,
+    tape: &B::TapeBuffers,
+    caller: &str,
+) -> Result<(), GpuError> {
+    let outputs = backend.num_outputs(tape);
+    if outputs != 1 {
+        return Err(GpuError::Other(format!(
+            "{caller} requires a scalar-output tape; got {outputs} outputs"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject an empty evaluation point: a zero-input tape has no `quantity`,
+/// and zero-sized GPU buffers would panic downstream.
+fn require_nonempty_x(n: usize, caller: &str, quantity: &str) -> Result<(), GpuError> {
+    if n == 0 {
+        return Err(GpuError::Other(format!(
+            "{caller} requires a non-empty x (a zero-input tape has no \
+             {quantity}); zero-sized GPU buffers would panic"
+        )));
+    }
+    Ok(())
+}
+
 /// GPU-accelerated Laplacian estimation via Hutchinson + Taylor-mode.
 ///
 /// Estimates `tr(H_f(x))` using S random directions. Each direction is pushed
@@ -25,25 +54,9 @@ pub fn laplacian_gpu<B: GpuBackend>(
     x: &[f32],
     directions: &[&[f32]],
 ) -> Result<EstimatorResult<f32>, GpuError> {
-    // `aggregate_laplacian` reads `result.c2s[i]` assuming the `i`-th entry is
-    // the c2 coefficient for the tape's single scalar output. On multi-output
-    // tapes the layout is `c2s[batch * num_outputs + out]`, and indexing
-    // `c2s[i]` would silently mix outputs. Enforce single-output so the
-    // aggregation matches the layout the backend produces.
-    if backend.num_outputs(tape) != 1 {
-        return Err(GpuError::Other(format!(
-            "laplacian_gpu requires a scalar-output tape; got {} outputs",
-            backend.num_outputs(tape)
-        )));
-    }
+    require_scalar_output(backend, tape, "laplacian_gpu")?;
     let n = x.len();
-    if n == 0 {
-        return Err(GpuError::Other(
-            "laplacian_gpu requires a non-empty x (a zero-input tape has no \
-             Laplacian); zero-sized GPU buffers would panic"
-                .into(),
-        ));
-    }
+    require_nonempty_x(n, "laplacian_gpu", "Laplacian")?;
     let s = directions.len();
     if s == 0 {
         return Err(GpuError::Other("no directions provided".into()));
@@ -73,46 +86,14 @@ fn aggregate_laplacian(result: &TaylorBatchResult<f32>, s: usize) -> EstimatorRe
     // The factor n (dimension) is NOT needed here because Hutchinson estimator
     // already gives tr(H) = E[v^T H v] when E[vv^T] = I.
     let value = result.values[0]; // All batch elements share the same primal
-    let mut mean = 0.0f32;
-    let mut m2 = 0.0f32;
-    // Skip-and-count non-finite samples, matching the CPU estimators: a NaN
-    // or Inf sample (overflowed f32 jet) carries no usable magnitude and
-    // must not poison the running statistics.
-    let mut count = 0usize;
+
+    // The CPU estimators' accumulator: skips non-finite samples, reports NaN
+    // when nothing contributed, and clamps rounding-negative variance at 0.
+    let mut acc = crate::stde::WelfordAccumulator::new();
     for i in 0..s {
-        let sample = 2.0 * result.c2s[i]; // v^T H v
-        if !sample.is_finite() {
-            continue;
-        }
-        count += 1;
-        let delta = sample - mean;
-        mean += delta / count as f32;
-        let delta2 = sample - mean;
-        m2 += delta * delta2;
+        acc.update(2.0 * result.c2s[i]); // v^T H v
     }
-    if count == 0 {
-        // No contributing samples: surface NaN, not a confident 0.
-        mean = f32::NAN;
-    }
-
-    let sample_variance = if count > 1 {
-        m2 / (count - 1) as f32
-    } else {
-        0.0
-    };
-    let standard_error = if count > 1 {
-        (sample_variance / count as f32).sqrt()
-    } else {
-        0.0
-    };
-
-    EstimatorResult {
-        value,
-        estimate: mean,
-        sample_variance,
-        standard_error,
-        num_samples: count,
-    }
+    acc.into_result(value)
 }
 
 /// GPU-accelerated exact Hessian diagonal via n basis-vector pushforwards.
@@ -124,24 +105,9 @@ pub fn hessian_diagonal_gpu<B: GpuBackend>(
     tape: &B::TapeBuffers,
     x: &[f32],
 ) -> Result<(f32, Vec<f32>), GpuError> {
-    // `result.values[0]` and the per-element `c2s` mapping assume the tape has a
-    // single scalar output; on multi-output tapes the batched layout is
-    // `[batch * num_outputs + out]`, so indexing would silently interleave
-    // outputs. Enforce single-output, matching `laplacian_gpu`.
-    if backend.num_outputs(tape) != 1 {
-        return Err(GpuError::Other(format!(
-            "hessian_diagonal_gpu requires a scalar-output tape; got {} outputs",
-            backend.num_outputs(tape)
-        )));
-    }
+    require_scalar_output(backend, tape, "hessian_diagonal_gpu")?;
     let n = x.len();
-    if n == 0 {
-        return Err(GpuError::Other(
-            "hessian_diagonal_gpu requires a non-empty x (a zero-input tape \
-             has no Hessian diagonal); zero-sized GPU buffers would panic"
-                .into(),
-        ));
-    }
+    require_nonempty_x(n, "hessian_diagonal_gpu", "Hessian diagonal")?;
 
     // Build n basis directions
     let mut primals = Vec::with_capacity(n * n);
@@ -173,22 +139,9 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
     directions: &[&[f32]],
     control_diagonal: &[f32],
 ) -> Result<EstimatorResult<f32>, GpuError> {
-    // Same single-output constraint as `laplacian_gpu`: the per-sample
-    // `result.c2s[i]` indexing assumes one c2 per batch element.
-    if backend.num_outputs(tape) != 1 {
-        return Err(GpuError::Other(format!(
-            "laplacian_with_control_gpu requires a scalar-output tape; got {} outputs",
-            backend.num_outputs(tape)
-        )));
-    }
+    require_scalar_output(backend, tape, "laplacian_with_control_gpu")?;
     let n = x.len();
-    if n == 0 {
-        return Err(GpuError::Other(
-            "laplacian_with_control_gpu requires a non-empty x; zero-sized \
-             GPU buffers would panic"
-                .into(),
-        ));
-    }
+    require_nonempty_x(n, "laplacian_with_control_gpu", "Laplacian")?;
     let s = directions.len();
     assert_eq!(
         control_diagonal.len(),
@@ -218,11 +171,9 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
     let trace_diag: f32 = control_diagonal.iter().sum();
 
     let value = result.values[0];
-    let mut mean = 0.0f32;
-    let mut m2 = 0.0f32;
-    // Skip-and-count non-finite COMBINED samples (residual after the
-    // control variate), matching the CPU laplacian_with_control.
-    let mut count = 0usize;
+    // Residual samples (after the control variate) through the CPU
+    // estimators' accumulator, matching laplacian_with_control.
+    let mut acc = crate::stde::WelfordAccumulator::new();
     for (i, dir) in directions.iter().enumerate() {
         let vhv = 2.0 * result.c2s[i]; // v^T H v
                                        // v^T diag(H) v = Σ_j diag[j] * v[j]²
@@ -231,37 +182,19 @@ pub fn laplacian_with_control_gpu<B: GpuBackend>(
             .zip(control_diagonal.iter())
             .map(|(&vj, &dj)| dj * vj * vj)
             .sum();
-        let sample = vhv - v_diag_v; // residual (off-diagonal contribution)
-        if !sample.is_finite() {
-            continue;
-        }
-        count += 1;
-        let delta = sample - mean;
-        mean += delta / count as f32;
-        let delta2 = sample - mean;
-        m2 += delta * delta2;
+        acc.update(vhv - v_diag_v); // residual (off-diagonal contribution)
     }
-    if count == 0 {
-        mean = f32::NAN;
-    }
-
-    let estimate = trace_diag + mean;
-    let sample_variance = if count > 1 {
-        m2 / (count - 1) as f32
-    } else {
-        0.0
-    };
-    let standard_error = if count > 1 {
-        (sample_variance / count as f32).sqrt()
-    } else {
-        0.0
-    };
+    // Deliberately NOT into_result: the exact-trace offset below transforms
+    // the raw mean, and that stays visible here (same exemption as the CPU
+    // control-variate estimators).
+    let (residual_mean, sample_variance, standard_error) = acc.finalize();
+    let estimate = trace_diag + residual_mean;
 
     Ok(EstimatorResult {
         value,
         estimate,
         sample_variance,
         standard_error,
-        num_samples: count,
+        num_samples: acc.contributing(),
     })
 }

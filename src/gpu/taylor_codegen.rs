@@ -173,6 +173,11 @@ fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
 fn powf_real(base: f32, b: f32) -> f32 {{
     // WGSL `pow(x, y)` is undefined for x < 0. Rust/C `powf` define x^y for
     // x < 0 only at integer y: sign(x)^y * |x|^y; non-integer y is NaN.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly. The
+    // callers currently peel the reachable 0^0 cases, but every powf primal
+    // routes through here so the convention cannot regress.
+    if base == 0.0 && b == 0.0 {{ return 1.0; }}
     if base >= 0.0 {{ return pow(base, b); }}
     let rb = round(b);
     if rb != b {{ return bitcast<f32>(0x7fc00000u); }}
@@ -774,7 +779,7 @@ fn write_wgsl_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
         "                    r = jet_exp(jet_scale(jet_ln(a), n));"
     )
     .unwrap();
-    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], n);").unwrap();
     writeln!(s, "                }}").unwrap();
 }
 
@@ -915,7 +920,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .unwrap();
     }
     writeln!(s, "                    }} else {{").unwrap();
-    writeln!(s, "                        r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(
+        s,
+        "                        r.v[0] = powf_real(a.v[0], b.v[0]);"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(
             s,
@@ -928,7 +937,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
     writeln!(s, "                    let product = jet_mul(b, lna);").unwrap();
     writeln!(s, "                    r = jet_exp(product);").unwrap();
-    writeln!(s, "                    r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], b.v[0]);").unwrap();
     writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
@@ -2617,6 +2626,19 @@ mod tests {
         assert!(
             cuda.contains("if (a.v[0] < (F)-1 || a.v[0] > (F)1) {"),
             "CUDA jet_atanh domain guard"
+        );
+    }
+
+    #[test]
+    fn wgsl_powf_real_guards_zero_base_zero_exponent() {
+        // The emitted powf_real must keep the 0^0 = 1 guard (naga lowers
+        // pow(0,0) to exp2(0*log2(0)) = NaN). The kernel call sites peel
+        // the reachable 0^0 cases today, so only a source-level pin can
+        // protect the guard against regression.
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(
+            wgsl.contains("if base == 0.0 && b == 0.0 { return 1.0; }"),
+            "generated powf_real lost its 0^0 guard"
         );
     }
 
