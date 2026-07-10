@@ -10,7 +10,7 @@ Optimization solvers and implicit differentiation for [echidna](https://crates.i
 Three unconstrained optimizers operating on bytecode-tape objectives:
 
 - **L-BFGS** — limited-memory quasi-Newton (default choice for smooth, large-scale problems)
-- **Newton** — exact Hessian with Cholesky factorization (quadratic convergence, moderate `n`)
+- **Newton** — exact Hessian with LU factorization (partial pivoting, steepest-descent fallback on indefinite Hessians; quadratic convergence, moderate `n`)
 - **Trust-region** — Steihaug-Toint CG subproblem (robust on indefinite/ill-conditioned Hessians)
 
 All solvers use Armijo backtracking line search.

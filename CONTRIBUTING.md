@@ -212,14 +212,15 @@ src/
 ├── taylor_dyn.rs          # TaylorDyn<F> arena-based type [taylor]
 ├── taylor_ops.rs          # Shared Taylor propagation rules [taylor]
 ├── laurent.rs             # Laurent<F, K> singularity analysis [laurent]
-├── stde.rs                # Stochastic derivative estimators [stde]
+├── stde/                  # Stochastic derivative estimators [stde]
 ├── diffop.rs              # Arbitrary differential operators via jets [diffop]
 ├── gpu/
 │   ├── mod.rs             # GpuBackend trait, GpuTapeData, GpuError
 │   ├── wgpu_backend.rs    # WgpuContext (Metal/Vulkan/DX12, f32) [gpu-wgpu]
 │   ├── cuda_backend.rs    # CudaContext (NVIDIA, f32+f64) [gpu-cuda]
 │   ├── stde_gpu.rs        # GPU-accelerated STDE functions [stde]
-│   ├── shaders/           # 5 WGSL compute shaders [gpu-wgpu]
+│   ├── taylor_codegen.rs  # Generates the WGSL/CUDA Taylor kernels [gpu-wgpu, gpu-cuda]
+│   ├── shaders/           # 4 hand-written WGSL compute shaders [gpu-wgpu]
 │   └── kernels/           # CUDA kernels (tape_eval.cu) [gpu-cuda]
 ├── faer_support.rs        # faer integration [faer]
 ├── nalgebra_support.rs    # nalgebra integration [nalgebra]

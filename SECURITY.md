@@ -14,15 +14,16 @@ inaccurate security note about RUSTSEC-2026-0097's reachability (corrected
 in 0.14.1's changelog).
 
 Only the latest release of each crate receives security updates.
-`echidna` 0.13.0 and `echidna-optim` 0.13.3 are a coordinated release
-(`echidna-optim` 0.13.3 depends on `echidna = "0.13.0"`).
-
-0.13.0 is a minor bump over 0.12.0: the optional `nalgebra` and `simba`
-integrations move to new major versions (`nalgebra` 0.35, `simba` 0.10), an
-ABI-breaking change for consumers of those features. No echidna API or
-numerical behaviour changed.
+`echidna` 0.14.1 and `echidna-optim` 0.14.1 are a coordinated release
+(`echidna-optim` 0.14.1 depends on `echidna = "0.14.1"`).
 
 ### Known issues in unsupported versions
+
+**0.13.x** is unsupported because 0.14 supersedes it. 0.13.0 was a minor
+bump over 0.12.0: the optional `nalgebra` and `simba` integrations moved to
+new major versions (`nalgebra` 0.35, `simba` 0.10), an ABI-breaking change
+for consumers of those features, with no echidna API or numerical behaviour
+change.
 
 **0.12.0** has no known numerical correctness bugs; it is unsupported only
 because 0.13.0 supersedes it (dependency currency — `nalgebra` 0.35 /

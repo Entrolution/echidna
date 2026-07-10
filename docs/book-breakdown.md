@@ -5,6 +5,12 @@ by Andreas Griewank and Andrea Walther (SIAM, 2008)
 
 **Purpose**: Technical reference for building the **echidna** Rust library — a comprehensive implementation of algorithmic differentiation (AD) techniques.
 
+> **Reference snapshot** — this is the chapter-by-chapter companion that guided
+> the initial build-out. The book→module mapping rows are kept accurate against
+> the current source; the phase/planning material (e.g. "Suggested Implementation
+> Phases") is historical — every planned feature has shipped. For planning state
+> see the [deferred-work ADR](adr-deferred-work.md).
+
 ---
 
 ## How to Read This Document
@@ -78,9 +84,12 @@ Ch 1-3 (Foundations) → Ch 4 (Forward Mode) → Ch 5 (Reverse Mode)
 - **Elemental functions**: unary (sin, cos, exp, log, sqrt, abs, ...) and binary (+, −, ×, /, pow, ...)
 - **Table 2.2**: Key notation reference used throughout the book
 
-**Implementation Relevance**: This chapter defines echidna's core data model:
-- **`EvalProcedure`**: The central representation of a differentiable computation
-- **`ComputationalGraph`**: DAG with typed nodes (input, intermediate, output) and weighted edges
+**Implementation Relevance**: This chapter defines echidna's core data model
+(shipped as):
+- **`BytecodeTape`**: the central representation of a differentiable computation
+  (SoA opcode/arg/value arrays; `src/bytecode_tape/`)
+- **`Tape` + `LinearizedGraph`**: the eager-mode two-stack tape (`src/tape.rs`)
+  and the weighted DAG used by cross-country elimination (`src/cross_country.rs`)
 - **Elemental operations**: Need a trait/enum for all supported elementary functions with their local derivatives
 - The three-part variable structure (inputs, intermediates, outputs) shapes the API
 
@@ -530,7 +539,7 @@ Ch 1-3 (Foundations) → Ch 4 (Forward Mode) → Ch 5 (Reverse Mode)
 
 **Implementation Relevance**:
 - **Implicit differentiation**: Core feature for differentiating through linear/nonlinear solvers
-  - `implicit_tangent(F, z_star, x, x_dot)` and `implicit_adjoint(F, z_star, x, y_bar)` operations
+  - shipped in `echidna-optim`: tape-based `implicit_tangent(tape, z_star, x, x_dot)` and `implicit_adjoint(tape, z_star, x, z_bar)` (plus `implicit_jacobian` / `implicit_hvp` / `implicit_hessian`)
 - **Fixed-point iteration differentiation**: Piggyback approach for iterative methods
   - Record single iteration step, not entire history (Rule 26)
 - **Integration with linear algebra**: Needs linear solves (F_z^{-1} · rhs) for implicit diff
@@ -695,10 +704,10 @@ These cross-cutting decisions are resolved in [design-principles.md](design-prin
 1. **Numeric type**: Generic over `Float` trait (`f32`/`f64`)
 2. **Tape representation**: SoA bytecode tape (opcodes, arg_indices, values, adjoints as separate contiguous arrays)
 3. **Implementation approach**: Operator overloading via Rust traits (eager mode), with optional deferred graph mode for advanced optimisations
-4. **Memory allocation**: `bumpalo` arena for tapes, const-generic stack allocation for small tangent vectors
-5. **Parallelism**: SIMD (intra-core via `wide`) + `rayon` (inter-core), coarse-grained parallelism only
+4. **Memory allocation**: `Vec`-backed SoA tape storage plus thread-local arenas; const-generic stack allocation for small tangent vectors (a `bumpalo` arena was planned for tapes but not ultimately used)
+5. **Parallelism**: `rayon` (inter-core, coarse-grained, behind `parallel`); SIMD lands via the `simba` `SimdValue` integration rather than a dedicated `wide` dependency
 6. **GPU**: `wgpu` (cross-platform) primary, `cudarc` (NVIDIA) optional, all behind feature flags with CPU fallback
-7. **Linear algebra**: `nalgebra` for both fixed and dynamic sizes
+7. **Linear algebra**: `nalgebra` for fixed/dynamic sizes, `faer` as the sparse/dense solver backend (`sparse-implicit`, `faer_support`), `ndarray` shims — all optional feature-gated integrations
 8. **Error handling**: NaN propagation on hot paths (per Ch 14), `Result` on cold paths
 9. **API**: Closure-based for common cases, builder pattern for advanced config, trait-based for library integration
 10. **Composability**: Mode nesting via generic type composition (forward-over-reverse = `Dual<Tape<T>>`)

@@ -15,7 +15,7 @@ A high-performance automatic differentiation library for Rust.
 - **Taylor-mode higher-order derivatives** -- const-generic and arena-based dynamic implementations
 - **Sparse Jacobian/Hessian** -- automatic sparsity detection and graph coloring
 - **GPU acceleration** -- wgpu (Metal/Vulkan/DX12) and CUDA batch evaluation, including GPU-accelerated STDE
-- **Nonsmooth AD** -- branch tracking, kink detection for abs/min/max/signum/floor/ceil/round/trunc, Clarke generalized Jacobians
+- **Nonsmooth AD** -- branch tracking, kink detection for abs/min/max/signum/floor/ceil/round/trunc/fract, Clarke generalized Jacobians
 - **Gradient checkpointing** -- binomial, online, disk-backed, and hint-guided strategies
 - **Cross-country elimination** -- Markowitz vertex elimination for optimal Jacobian accumulation
 - **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, higher-order diagonals, sparse STDE for arbitrary operators, parabolic PDE σ-transform, variance reduction
@@ -35,7 +35,7 @@ A high-performance automatic differentiation library for Rust.
 | Checkpointing | Binomial, online, disk-backed, and hint-guided gradient checkpointing |
 | STDE | Stochastic Taylor Derivative Estimators -- Laplacian, Hessian diagonal, higher-order diagonals, const-generic diagonal, dense STDE, sparse STDE, parabolic σ-transform |
 | Differential operators | `diffop::mixed_partial`, `diffop::hessian`, `JetPlan`, `DiffOp` -- arbitrary mixed partials and operator evaluation |
-| Nonsmooth AD | Branch tracking, kink detection (8 nonsmooth ops), Clarke generalized Jacobian |
+| Nonsmooth AD | Branch tracking, kink detection (9 nonsmooth ops), Clarke generalized Jacobian |
 | Laurent series | `Laurent<F, K>` -- singularity analysis via Laurent expansion |
 | GPU acceleration | wgpu (Metal/Vulkan/DX12, f32) and CUDA (NVIDIA, f32+f64) batch evaluation + GPU STDE |
 | Composable nesting | `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for higher-order |
@@ -78,7 +78,7 @@ let g = echidna::grad(|x| rosenbrock(x), &[1.5, 2.0]);
 use echidna::{record, record_multi};
 
 // Record a scalar function to tape
-let (tape, value) = echidna::record(|x| x[0] * x[0] + x[1] * x[1], &[3.0, 4.0]);
+let (mut tape, value) = echidna::record(|x| x[0] * x[0] + x[1] * x[1], &[3.0, 4.0]);
 
 // Re-evaluate at new points without re-recording
 let g = tape.gradient(&[1.0, 2.0]);
@@ -98,14 +98,15 @@ let (vals, pattern, jac_vals) = tape.sparse_jacobian(&[1.0, 2.0]);
 ### Taylor mode: higher-order derivatives
 
 ```rust,ignore
-use echidna::{Taylor64, record};
+use echidna::record;
+use num_traits::Float; // brings sin/exp into scope for the AD types
 
 // Record function, then compute Taylor coefficients via taylor_grad
 let (tape, _) = echidna::record(|x| x[0].sin() + x[1].exp(), &[0.0, 0.0]);
 
 // K=4 Taylor coefficients along direction v
 let (output, adjoints) = tape.taylor_grad::<4>(&[0.0, 0.0], &[1.0, 0.0]);
-// output.coeffs() gives [f(x), f'(x)*v, f''(x)*v^2/2!, ...]
+// output.coeffs holds [f(x), f'(x)*v, f''(x)*v^2/2!, ...]
 ```
 
 ### Arbitrary mixed partials via jet extraction
@@ -114,7 +115,7 @@ let (output, adjoints) = tape.taylor_grad::<4>(&[0.0, 0.0], &[1.0, 0.0]);
 use echidna::diffop::{JetPlan, MultiIndex};
 
 // Record f(x, y) = x²y + y³
-let (tape, _) = echidna::record(|x| x[0] * x[0] * x[1] + x[1] * x[1] * x[1], &[1.0, 2.0]);
+let (tape, _) = echidna::record(|x| x[0] * x[0] * x[1] + x[1] * x[1] * x[1], &[1.0_f64, 2.0]);
 
 // Plan which derivatives to compute
 let indices = vec![
@@ -259,6 +260,14 @@ echidna uses a two-tier AD architecture:
 
 Types compose via nesting: `Dual<BReverse<f64>>` gives forward-over-reverse for Hessian-vector products, `Taylor<BReverse<f64>, K>` gives Taylor-over-reverse, and `Dual<Dual<f64>>` gives forward-over-forward.
 
+## Documentation
+
+- [Algorithm guide](docs/algorithms.md) — the theory behind each mode and where it lives in the source
+- [Formal specifications](specs/README.md) — TLA+ models of checkpointing and the tape optimizer, with the invariant cross-reference
+- [API reference](https://docs.rs/echidna) — rustdoc for `echidna`; see also [`echidna-optim` on docs.rs](https://docs.rs/echidna-optim)
+- [Contributing](CONTRIBUTING.md) — build, test, and review workflow
+- Historical reference: [design principles](docs/design-principles.md) and the [Griewank & Walther chapter mapping](docs/book-breakdown.md) that guided the initial build-out; planning state lives in the [deferred-work ADR](docs/adr-deferred-work.md)
+
 ## Formal Specifications
 
 Core algorithms are modelled in TLA+ and verified with the TLC model checker:
@@ -268,7 +277,7 @@ Core algorithms are modelled in TLA+ and verified with the TLC model checker:
 
 Spec-to-code alignment is enforced by two mechanisms, both gated by the [TLA+ Specs workflow](.github/workflows/specs.yml):
 
-1. **Source anchors.** Every invariant carries a `// SPEC: <InvariantName>` comment next to the code line that upholds it. `specs/verify_anchors.sh` parses `specs/README.md` and greps each declared source file for the corresponding anchor, failing if any is missing. (The check catches deletion, renames, and file moves; it does not catch an anchor pasted next to the wrong line within the same file — that remains a reviewer responsibility.)
+1. **Source anchors.** Every invariant carries a `// SPEC: <InvariantName>` comment next to the code line that upholds it. `specs/verify_anchors.sh` parses `specs/README.md` and greps each declared source file for the corresponding anchor, failing if any is missing. (The check catches deletions, renames, and file moves; it does not catch an anchor pasted next to the wrong line within the same file — that remains a reviewer responsibility.)
 2. **Semantic property tests.** `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties against the real Rust implementation (gradient correctness across checkpoint strategies, `optimize ∘ optimize = optimize`, post-optimise structural assertions).
 
 See [`specs/README.md`](specs/README.md) for the full invariant cross-reference and local model-checking instructions.
@@ -313,7 +322,7 @@ Results from `cargo bench --bench comparison` on Apple M4 Pro. See `benches/comp
 
 The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and implicit differentiation built on `echidna`:
 
-**Solvers**: L-BFGS, Newton (Cholesky), trust-region (Steihaug-Toint CG), with Armijo line search.
+**Solvers**: L-BFGS, Newton (LU with partial pivoting, steepest-descent fallback for indefinite Hessians), trust-region (Steihaug-Toint CG), with Armijo line search.
 
 **Implicit differentiation**: Differentiate through the fixed point of an optimization problem or nonlinear solve -- `implicit_tangent`, `implicit_adjoint`, `implicit_jacobian`, `implicit_hvp`, `implicit_hessian`.
 
@@ -323,7 +332,7 @@ The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and im
 
 ```toml
 [dependencies]
-echidna-optim = "0.13"
+echidna-optim = "0.14"
 ```
 
 Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).
