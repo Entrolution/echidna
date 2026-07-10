@@ -405,20 +405,70 @@ impl GpuTapeData {
         const OP_POWI: u32 = 16;
         const OP_FRACT: u32 = 42;
         const UNUSED: u32 = u32::MAX;
-        // These mirror `OpCode`'s discriminants (as do the OP_* tables in
-        // the WGSL/CUDA kernels). Inserting an opcode mid-enum shifts every
-        // later discriminant; fail the build rather than misclassify.
-        // Neg (12) pins that 2..=11 is exactly the binary range, and
-        // Custom (43) that `> OP_FRACT` rejects exactly Custom and beyond.
-        const _: () = assert!(
-            OpCode::Input as u32 == OP_INPUT
-                && OpCode::Const as u32 == OP_CONST
-                && OpCode::Add as u32 == OP_ADD
-                && OpCode::Min as u32 == OP_MIN
-                && OpCode::Neg as u32 == OP_MIN + 1
-                && OpCode::Powi as u32 == OP_POWI
-                && OpCode::Fract as u32 == OP_FRACT
-                && OpCode::Custom as u32 == OP_FRACT + 1
+        // Pin every `OpCode` discriminant. The classification ranges below
+        // and the OP_* tables mirrored in the static WGSL/CUDA kernels and
+        // the generated tables in `taylor_codegen.rs` all hardcode these
+        // values with no compile-time tie to the enum; the per-variant
+        // asserts fail the build on any reorder (including count-preserving
+        // swaps), and the exhaustive match forces a new variant to be
+        // pinned here before it can ship.
+        macro_rules! pin_opcodes {
+            ($($variant:ident = $disc:literal),* $(,)?) => {
+                const _: () = {
+                    const fn pin(op: OpCode) -> u32 {
+                        match op {
+                            $(OpCode::$variant => $disc,)*
+                        }
+                    }
+                    $(assert!(pin(OpCode::$variant) == OpCode::$variant as u32);)*
+                };
+            };
+        }
+        pin_opcodes!(
+            Input = 0,
+            Const = 1,
+            Add = 2,
+            Sub = 3,
+            Mul = 4,
+            Div = 5,
+            Rem = 6,
+            Powf = 7,
+            Atan2 = 8,
+            Hypot = 9,
+            Max = 10,
+            Min = 11,
+            Neg = 12,
+            Recip = 13,
+            Sqrt = 14,
+            Cbrt = 15,
+            Powi = 16,
+            Exp = 17,
+            Exp2 = 18,
+            ExpM1 = 19,
+            Ln = 20,
+            Log2 = 21,
+            Log10 = 22,
+            Ln1p = 23,
+            Sin = 24,
+            Cos = 25,
+            Tan = 26,
+            Asin = 27,
+            Acos = 28,
+            Atan = 29,
+            Sinh = 30,
+            Cosh = 31,
+            Tanh = 32,
+            Asinh = 33,
+            Acosh = 34,
+            Atanh = 35,
+            Abs = 36,
+            Signum = 37,
+            Floor = 38,
+            Ceil = 39,
+            Round = 40,
+            Trunc = 41,
+            Fract = 42,
+            Custom = 43,
         );
 
         let n = self.num_ops as usize;
