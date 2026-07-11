@@ -79,9 +79,14 @@ A key advantage of the graph representation is that it enables optimization
 passes before evaluation. echidna implements four tape transformations: Common
 Subexpression Elimination (CSE) merges duplicate operations sharing the same
 opcode and operands; Dead Code Elimination (DCE) removes operations that do
-not contribute to any output; algebraic simplification catches identity
-patterns (`x + 0 -> x`, `x * 1 -> x`) and absorbing patterns (`x * 0 -> 0`,
-`x - x -> 0`) at recording time; and constant folding evaluates operations
+not contribute to any output; algebraic simplification folds identity
+patterns at recording time — `x * 1 -> x` and `x / 1 -> x` (exact for all
+inputs) plus the sign-safe zero identities `x + (-0.0) -> x` and
+`x - (+0.0) -> x`, while absorbing and self patterns (`x * 0`, `x - x`,
+`x / x`) are deliberately NOT folded: their record-time value does not
+determine the value at other inputs (`x / x` at `x = 0` is `0/0 = NaN`;
+`x * 0` and `x - x` at `±Inf` are `NaN`), so folding would silently mask a
+genuine singularity; and constant folding evaluates operations
 on known constants at recording time. These optimizations are composable and
 can be applied in sequence. The tape also enables second-order derivative
 computation (Hessians), sparsity pattern detection, cross-country elimination,
@@ -136,7 +141,8 @@ avoids the need to differentiate the elemental functions symbolically.
 echidna provides two Taylor types. `Taylor<F, K>` is const-generic and
 stack-allocated: the degree `K` is a compile-time constant, enabling
 monomorphization and eliminating heap allocation. `TaylorDyn<F>` is
-arena-based (using `bumpalo`), implements `Copy`, and allows the degree to be
+arena-based (a thread-local, `Vec`-backed `TaylorArena` — bumpalo is not
+involved), implements `Copy`, and allows the degree to be
 chosen at runtime. Both types implement the full `num_traits::Float` trait and
 echidna's `Scalar` trait, so they flow through `BytecodeTape::forward_tangent`
 without any tape modifications. Shared propagation logic lives in
@@ -262,8 +268,9 @@ to estimate these quantities without materializing the full Hessian. The core
 idea is the Hutchinson trace estimator: for a random vector `v` drawn from a
 distribution with identity covariance, `E[v^T H v] = tr(H)`, where `H` is the
 Hessian. By pushing `Taylor<F, 3>` inputs with a random tangent direction
-through the bytecode tape, the second-order Taylor coefficient at the output
-yields `v^T H v` for that direction. Averaging over `S` random directions
+through the bytecode tape, the second-order Taylor coefficient `c2` at the
+output yields `v^T H v / 2` for that direction (the estimators multiply by
+two to recover `v^T H v`). Averaging over `S` random directions
 gives the Laplacian estimate `tr(H) ~ (1/S) * sum_s v_s^T H v_s`.
 
 echidna provides several estimators built on this primitive. `laplacian`
@@ -382,24 +389,27 @@ generalized derivative, which is the appropriate generalized derivative concept
 for Lipschitz-continuous functions.
 
 `BytecodeTape::forward_nonsmooth` performs a standard forward evaluation while
-recording a `KinkEntry` for each of the 8 nonsmooth operations. Each entry
+recording a `KinkEntry` for each of the 9 nonsmooth operations. Each entry
 stores the tape index, opcode, switching value, and the branch that was taken.
 For `abs`/`min`/`max`/`signum`, the switching value is the operand value
-(kink at zero). For `floor`/`ceil`/`round`/`trunc`, the switching value is
+(kink at zero). For `floor`/`ceil`/`trunc`/`fract`, the switching value is
 the distance to the nearest integer (`a - a.round()`), which is zero exactly
-at discontinuity points. The resulting `NonsmoothInfo` provides
+at the discontinuity points; `round` kinks at half-integers instead, so its
+switching value is shifted by 0.5. The resulting `NonsmoothInfo` provides
 `active_kinks(tol)` to query kinks within a given tolerance,
 `is_smooth(tol)` to check whether the evaluation point lies in a smooth
 region, and `signature()` to characterize the combinatorial branch structure.
 
 echidna uses a two-tier classification for nonsmooth operations.
-`is_nonsmooth()` returns true for all 8 ops and is used for proximity
+`is_nonsmooth()` returns true for all 9 ops and is used for proximity
 detection — knowing whether the evaluation point is near any kink.
 `has_nontrivial_subdifferential()` returns true only for `abs`/`min`/`max`,
 where forced branch choices produce distinct partial derivatives (e.g.,
 `abs` has slope +1 vs -1). Step functions (`signum`/`floor`/`ceil`/`round`/
-`trunc`) have zero derivative on both sides of the kink, so enumerating
-forced branches would add 2^k cost with no new information.
+`trunc`) have zero derivative on both sides of the kink, and `fract` has an
+identical unit derivative on both sides (a value discontinuity rather than a
+derivative kink); in both cases enumerating forced branches would add 2^k
+cost with no new information.
 
 When kinks with nontrivial subdifferentials are present,
 `BytecodeTape::clarke_jacobian` enumerates all `2^k` sign combinations for
@@ -505,12 +515,16 @@ numerically intensive phase. Custom operations are rejected at tape upload
 time since they cannot be compiled to GPU code.
 
 The wgpu backend (feature `gpu-wgpu`) provides cross-platform GPU access via
-Metal, Vulkan, and DX12. It implements five WGSL compute shaders: `forward`
-(batched forward evaluation), `reverse` (batched adjoint sweep),
-`tangent_forward` (forward tangent for JVP and sparse Jacobian),
-`tangent_reverse` (forward-over-reverse for HVP and sparse Hessian), and
-`taylor_forward_2nd` (batched second-order Taylor forward propagation for STDE).
-All 44 opcodes are implemented in each shader. The backend is limited to f32 due to
+Metal, Vulkan, and DX12. It ships four hand-written WGSL compute shaders:
+`forward` (batched forward evaluation), `reverse` (batched adjoint sweep),
+`tangent_forward` (forward tangent for JVP and sparse Jacobian), and
+`tangent_reverse` (forward-over-reverse for HVP and sparse Hessian); a fifth
+kernel, `taylor_forward_2nd` (batched second-order Taylor forward propagation
+for STDE), is generated at runtime by `gpu/taylor_codegen.rs` when the `stde`
+feature is enabled. Of the 44 opcodes, the 41 computational ones appear as
+dispatch cases in each shader; `Input` and `Const` are structural leaf loads,
+and `Custom` is rejected at tape upload — 43 of 44 opcodes are GPU-supported.
+The backend is limited to f32 due to
 WGSL's lack of native f64 support. The CUDA backend (feature `gpu-cuda`)
 targets NVIDIA GPUs and supports both f32 and f64. It uses a single templated
 CUDA kernel file compiled via NVRTC at runtime, instantiated for both `float`
@@ -520,13 +534,14 @@ and `sparse_hessian`.
 
 ### GPU-Accelerated STDE
 
-When the `stde` feature is enabled alongside a GPU backend, a fifth compute
-shader `taylor_forward_2nd` provides batched second-order Taylor forward
-propagation. Each thread processes one batch element, propagating a `(c0, c1,
-c2)` triple through the tape where `c0` is the primal value, `c1` is the
-directional first derivative, and `c2 = v^T H v / 2`. The memory layout is
-interleaved per variable per thread: `[c0_i, c1_i, c2_i]` contiguous per
-variable, optimizing per-thread locality. All 44 opcodes implement full
+When the `stde` feature is enabled alongside a GPU backend, the generated
+`taylor_forward_2nd` kernel (introduced above) provides batched second-order
+Taylor forward propagation. Each thread processes one batch element,
+propagating a `(c0, c1, c2)` triple through the tape where `c0` is the primal
+value, `c1` is the directional first derivative, and `c2 = v^T H v / 2`. The
+memory layout is interleaved per variable per thread: `[c0_i, c1_i, c2_i]`
+contiguous per variable, optimizing per-thread locality. Every dispatched
+computational opcode implements full
 second-order Taylor propagation rules: arithmetic via Cauchy products,
 transcendentals via logarithmic derivative recurrences, and coupled
 recurrences for sin/cos, sinh/cosh, and tan/tanh.
@@ -601,9 +616,10 @@ optimization.
 
 **Newton's method** computes the exact Hessian at each iteration via
 forward-over-reverse AD and solves the Newton equation `H * d = -g` using
-Cholesky factorization. This yields quadratic convergence near the solution
-but requires O(n^2) storage and O(n^3) factorization per step, making it
-practical only for moderate dimensions.
+LU factorization with partial pivoting, falling back to steepest descent
+when the Hessian is indefinite. This yields quadratic convergence near the
+solution but requires O(n^2) storage and O(n^3) factorization per step,
+making it practical only for moderate dimensions.
 
 **Trust-region** uses the Steihaug-Toint truncated conjugate gradient method
 to approximately solve the trust-region subproblem `min_d m(d) s.t. ||d|| <=

@@ -12,7 +12,7 @@ use crate::tape::{Tape, TapeGuard, TapeThreadLocal};
 #[cfg(feature = "bytecode")]
 use crate::breverse::BReverse;
 #[cfg(feature = "bytecode")]
-use crate::bytecode_tape::{BtapeGuard, BtapeThreadLocal, BytecodeTape, CONSTANT};
+use crate::bytecode_tape::{BtapeGuard, BtapeThreadLocal, BytecodeTape};
 
 /// Compute the gradient of a scalar function `f : R^n → R` using reverse mode.
 ///
@@ -29,15 +29,7 @@ pub fn grad<F: Float + TapeThreadLocal>(
 ) -> Vec<F> {
     let n = x.len();
     let mut tape = Tape::take_pooled(n * 10);
-
-    // Create input variables.
-    let inputs: Vec<Reverse<F>> = x
-        .iter()
-        .map(|&val| {
-            let (idx, v) = tape.new_variable(val);
-            Reverse::from_tape(v, idx)
-        })
-        .collect();
+    let inputs = tape.new_variables(x);
 
     let guard = TapeGuard::new(&mut tape);
     let output = f(&inputs);
@@ -49,11 +41,10 @@ pub fn grad<F: Float + TapeThreadLocal>(
         return vec![F::zero(); n];
     }
 
-    // Run reverse sweep.
     let adjoints = tape.reverse(output.index);
 
     // Extract gradients for input variables (indices 0..n).
-    let result = (0..n).map(|i| adjoints[i]).collect();
+    let result = adjoints[..n].to_vec();
     Tape::return_to_pool(tape);
     result
 }
@@ -92,14 +83,7 @@ pub fn vjp<F: Float + TapeThreadLocal>(
 ) -> (Vec<F>, Vec<F>) {
     let n = x.len();
     let mut tape = Tape::take_pooled(n * 10);
-
-    let inputs: Vec<Reverse<F>> = x
-        .iter()
-        .map(|&val| {
-            let (idx, v) = tape.new_variable(val);
-            Reverse::from_tape(v, idx)
-        })
-        .collect();
+    let inputs = tape.new_variables(x);
 
     let guard = TapeGuard::new(&mut tape);
     let outputs = f(&inputs);
@@ -122,7 +106,7 @@ pub fn vjp<F: Float + TapeThreadLocal>(
         .collect();
     let adjoints = tape.reverse_seeded(&seeds);
 
-    let grad: Vec<F> = (0..n).map(|i| adjoints[i]).collect();
+    let grad: Vec<F> = adjoints[..n].to_vec();
     let result = (values, grad);
     Tape::return_to_pool(tape);
     result
@@ -216,15 +200,7 @@ pub fn record<F: Float + BtapeThreadLocal>(
 ) -> (BytecodeTape<F>, F) {
     let n = x.len();
     let mut tape = BytecodeTape::with_capacity(n * 10);
-
-    // Register inputs.
-    let inputs: Vec<BReverse<F>> = x
-        .iter()
-        .map(|&val| {
-            let idx = tape.new_input(val);
-            BReverse::from_tape_of(&tape, val, idx)
-        })
-        .collect();
+    let inputs = tape.new_inputs(x);
 
     let output = {
         let _guard = BtapeGuard::new(&mut tape);
@@ -233,11 +209,7 @@ pub fn record<F: Float + BtapeThreadLocal>(
 
     // Promote constant outputs (index == CONSTANT) to a tape entry so
     // set_output has a valid index. The gradient will correctly be zero.
-    let output_index = if output.index == CONSTANT {
-        tape.push_const(output.value)
-    } else {
-        output.index
-    };
+    let output_index = crate::breverse::ensure_on_tape(&output, &mut tape);
     tape.set_output(output_index);
     let value = output.value;
     (tape, value)
@@ -262,15 +234,7 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
 ) -> (BytecodeTape<F>, Vec<F>) {
     let n = x.len();
     let mut tape = BytecodeTape::with_capacity(n * 10);
-
-    // Register inputs.
-    let inputs: Vec<BReverse<F>> = x
-        .iter()
-        .map(|&val| {
-            let idx = tape.new_input(val);
-            BReverse::from_tape_of(&tape, val, idx)
-        })
-        .collect();
+    let inputs = tape.new_inputs(x);
 
     let outputs = {
         let _guard = BtapeGuard::new(&mut tape);
@@ -292,13 +256,7 @@ pub fn record_multi<F: Float + BtapeThreadLocal>(
     // Promote constant outputs to tape entries (see record() for rationale).
     let indices: Vec<u32> = outputs
         .iter()
-        .map(|o| {
-            if o.index == CONSTANT {
-                tape.push_const(o.value)
-            } else {
-                o.index
-            }
-        })
+        .map(|o| crate::breverse::ensure_on_tape(o, &mut tape))
         .collect();
 
     tape.set_outputs(&indices);

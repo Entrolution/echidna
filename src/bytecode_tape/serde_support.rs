@@ -21,7 +21,9 @@ impl<F: Float + Serialize> Serialize for BytecodeTape<F> {
         s.serialize_field("arg_indices", &self.arg_indices)?;
         s.serialize_field("values", &self.values)?;
         s.serialize_field("num_inputs", &self.num_inputs)?;
-        s.serialize_field("num_variables", &self.num_variables)?;
+        // The tape no longer stores an entry count, but the wire format keeps
+        // the field so existing payloads round-trip unchanged.
+        s.serialize_field("num_variables", &(self.opcodes.len() as u32))?;
         s.serialize_field("output_index", &self.output_index)?;
         s.serialize_field("output_indices", &self.output_indices)?;
         s.serialize_field("custom_second_args", &self.custom_second_args)?;
@@ -63,12 +65,23 @@ impl<'de, F: Float + Deserialize<'de>> Deserialize<'de> for BytecodeTape<F> {
             ));
         }
 
+        // The in-memory tape derives its entry count from `opcodes.len()`,
+        // so the payload's `num_variables` exists only as a consistency
+        // stamp — reject a mismatch here, since `validate()` can no longer
+        // see the transmitted value.
+        if data.num_variables as usize != data.opcodes.len() {
+            return Err(serde::de::Error::custom(format!(
+                "num_variables ({}) != opcodes.len() ({})",
+                data.num_variables,
+                data.opcodes.len()
+            )));
+        }
+
         let tape = BytecodeTape {
             opcodes: data.opcodes,
             arg_indices: data.arg_indices,
             values: data.values,
             num_inputs: data.num_inputs,
-            num_variables: data.num_variables,
             output_index: data.output_index,
             output_indices: data.output_indices,
             custom_ops: Vec::new(),

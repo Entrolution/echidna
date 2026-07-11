@@ -25,6 +25,7 @@ tarpaulin-report.html
 # Bug hunt artifacts (local-only working documents)
 BUG_HUNT_*.md
 QUALITY.md
+.quality-accepted.jsonl
 
 # TLA+ model checking artifacts
 states/

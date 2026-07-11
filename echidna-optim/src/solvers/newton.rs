@@ -1,6 +1,6 @@
 use num_traits::Float;
 
-use crate::convergence::{dot, norm, ConvergenceParams};
+use crate::convergence::{check_convergence, dot, norm, ConvergenceParams};
 use crate::linalg::lu_solve;
 use crate::line_search::{backtracking_armijo_with_evals, ArmijoParams};
 use crate::objective::Objective;
@@ -15,16 +15,13 @@ pub struct NewtonConfig<F> {
     pub line_search: ArmijoParams<F>,
 }
 
-impl Default for NewtonConfig<f64> {
-    fn default() -> Self {
-        NewtonConfig {
-            convergence: ConvergenceParams::default(),
-            line_search: ArmijoParams::default(),
-        }
-    }
-}
-
-impl Default for NewtonConfig<f32> {
+// One generic impl, same shape as LbfgsConfig's (TrustRegionConfig stays
+// per-precision: a generic Default there would need F::from(100.0).unwrap()).
+impl<F: Float> Default for NewtonConfig<F>
+where
+    ConvergenceParams<F>: Default,
+    ArmijoParams<F>: Default,
+{
     fn default() -> Self {
         NewtonConfig {
             convergence: ConvergenceParams::default(),
@@ -48,16 +45,16 @@ pub fn newton<F: Float, O: Objective<F>>(
     let mut diag = NewtonDiagnostics::default();
 
     if config.convergence.max_iter == 0 {
-        return OptimResult {
-            x: x0.to_vec(),
-            value: F::nan(),
-            gradient: vec![F::nan(); n],
-            gradient_norm: F::nan(),
-            iterations: 0,
-            func_evals: 0,
-            termination: TerminationReason::NumericalError,
-            diagnostics: SolverDiagnostics::Newton(diag),
-        };
+        return OptimResult::assemble(
+            x0.to_vec(),
+            F::nan(),
+            vec![F::nan(); n],
+            F::nan(),
+            0,
+            0,
+            TerminationReason::NumericalError,
+            SolverDiagnostics::Newton(diag),
+        );
     }
 
     let mut x = x0.to_vec();
@@ -67,34 +64,34 @@ pub fn newton<F: Float, O: Objective<F>>(
 
     // NaN/Inf detection
     if !grad_norm.is_finite() || !f_val.is_finite() {
-        return OptimResult {
+        return OptimResult::assemble(
             x,
-            value: f_val,
-            gradient: grad,
-            gradient_norm: grad_norm,
-            iterations: 0,
+            f_val,
+            grad,
+            grad_norm,
+            0,
             func_evals,
-            termination: TerminationReason::NumericalError,
-            diagnostics: SolverDiagnostics::Newton(diag),
-        };
+            TerminationReason::NumericalError,
+            SolverDiagnostics::Newton(diag),
+        );
     }
 
     if grad_norm < config.convergence.grad_tol {
-        return OptimResult {
+        return OptimResult::assemble(
             x,
-            value: f_val,
-            gradient: grad,
-            gradient_norm: grad_norm,
-            iterations: 0,
+            f_val,
+            grad,
+            grad_norm,
+            0,
             func_evals,
-            termination: TerminationReason::GradientNorm,
-            diagnostics: SolverDiagnostics::Newton(diag),
-        };
+            TerminationReason::GradientNorm,
+            SolverDiagnostics::Newton(diag),
+        );
     }
 
     for iter in 0..config.convergence.max_iter {
         // Solve H * delta = -g
-        let neg_grad: Vec<F> = grad.iter().map(|&g| F::zero() - g).collect();
+        let neg_grad: Vec<F> = grad.iter().map(|&g| -g).collect();
         let raw_delta = lu_solve(&hess, &neg_grad);
 
         // Check whether `delta` is a descent direction (gᵀ·delta < 0). An
@@ -108,7 +105,7 @@ pub fn newton<F: Float, O: Objective<F>>(
             Some(d) if dot(&grad, &d) < F::zero() => d,
             _ => {
                 diag.fallback_steps += 1;
-                neg_grad.clone()
+                neg_grad
             }
         };
 
@@ -124,16 +121,16 @@ pub fn newton<F: Float, O: Objective<F>>(
         ) {
             Some(ls) => ls,
             None => {
-                return OptimResult {
+                return OptimResult::assemble(
                     x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter,
+                    f_val,
+                    grad,
+                    grad_norm,
+                    iter,
                     func_evals,
-                    termination: TerminationReason::LineSearchFailed,
-                    diagnostics: SolverDiagnostics::Newton(diag),
-                };
+                    TerminationReason::LineSearchFailed,
+                    SolverDiagnostics::Newton(diag),
+                );
             }
         };
         // `func_evals` already includes this search's evaluations via the
@@ -160,75 +157,49 @@ pub fn newton<F: Float, O: Objective<F>>(
 
         // NaN/Inf detection
         if !grad_norm.is_finite() || !f_val.is_finite() {
-            return OptimResult {
+            return OptimResult::assemble(
                 x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
+                f_val,
+                grad,
+                grad_norm,
+                iter + 1,
                 func_evals,
-                termination: TerminationReason::NumericalError,
-                diagnostics: SolverDiagnostics::Newton(diag),
-            };
+                TerminationReason::NumericalError,
+                SolverDiagnostics::Newton(diag),
+            );
         }
 
-        // Convergence checks
-        if grad_norm < config.convergence.grad_tol {
-            return OptimResult {
+        // Convergence checks (gradient, step, relative function change).
+        if let Some(reason) = check_convergence(
+            grad_norm,
+            step_norm_sq.sqrt(),
+            f_prev,
+            f_val,
+            &config.convergence,
+        ) {
+            return OptimResult::assemble(
                 x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
+                f_val,
+                grad,
+                grad_norm,
+                iter + 1,
                 func_evals,
-                termination: TerminationReason::GradientNorm,
-                diagnostics: SolverDiagnostics::Newton(diag),
-            };
-        }
-
-        if step_norm_sq.sqrt() < config.convergence.step_tol {
-            return OptimResult {
-                x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
-                func_evals,
-                termination: TerminationReason::StepSize,
-                diagnostics: SolverDiagnostics::Newton(diag),
-            };
-        }
-
-        // Relative func_tol: absolute `|f_prev - f_val| < tol` is scale-
-        // blind — a tolerance of 1e-8 means ULP-precision on large-
-        // magnitude objectives (|f| ≈ 1e8) and impossibly tight on tiny
-        // ones. Scale by `(1 + |f|)` so the criterion tracks the problem.
-        if config.convergence.func_tol > F::zero()
-            && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
-        {
-            return OptimResult {
-                x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
-                func_evals,
-                termination: TerminationReason::FunctionChange,
-                diagnostics: SolverDiagnostics::Newton(diag),
-            };
+                reason,
+                SolverDiagnostics::Newton(diag),
+            );
         }
     }
 
-    OptimResult {
+    OptimResult::assemble(
         x,
-        value: f_val,
-        gradient: grad,
-        gradient_norm: grad_norm,
-        iterations: config.convergence.max_iter,
+        f_val,
+        grad,
+        grad_norm,
+        config.convergence.max_iter,
         func_evals,
-        termination: TerminationReason::MaxIterations,
-        diagnostics: SolverDiagnostics::Newton(diag),
-    }
+        TerminationReason::MaxIterations,
+        SolverDiagnostics::Newton(diag),
+    )
 }
 
 #[cfg(test)]

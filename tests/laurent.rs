@@ -122,6 +122,30 @@ fn sqrt_even_pole() {
 }
 
 #[test]
+fn sqrt_odd_pole_is_nan() {
+    // An odd pole has no single-valued square root.
+    let t: L4 = Laurent::variable(0.0);
+    let inv_t = Laurent::constant(1.0) / t;
+    assert!(inv_t.sqrt().leading_coefficient().is_nan());
+    // Positive odd order too: sqrt(t·(1 + t)) at a simple zero.
+    let zero_t = t * (Laurent::constant(1.0) + t);
+    assert!(zero_t.sqrt().leading_coefficient().is_nan());
+}
+
+#[test]
+fn cbrt_pole_divisibility() {
+    let t: L4 = Laurent::variable(0.0);
+    // Pole of order -3 divides: cbrt(1/t³) = 1/t.
+    let inv_t3 = Laurent::constant(1.0) / (t * t * t);
+    let ok = inv_t3.cbrt();
+    assert_eq!(ok.pole_order(), -1);
+    assert_relative_eq!(ok.leading_coefficient(), 1.0, max_relative = 1e-10);
+    // Pole of order -2 does not divide by 3 → NaN jet.
+    let inv_t2 = Laurent::constant(1.0) / (t * t);
+    assert!(inv_t2.cbrt().leading_coefficient().is_nan());
+}
+
+#[test]
 fn exp_of_pole_is_nan() {
     // exp(1/t) → essential singularity → NaN
     let t: L4 = Laurent::variable(0.0);

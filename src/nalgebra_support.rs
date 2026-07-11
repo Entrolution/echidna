@@ -13,10 +13,8 @@ pub fn grad_nalgebra<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &DVector<F>,
 ) -> DVector<F> {
-    let xs = x.as_slice();
-    let (mut tape, _) = crate::api::record(f, xs);
-    let g = tape.gradient(xs);
-    DVector::from_vec(g)
+    let (mut tape, _) = crate::api::record(f, x.as_slice());
+    tape_gradient_nalgebra(&mut tape, x)
 }
 
 /// Record a function, compute value and gradient, returning `(value, DVector)`.
@@ -24,10 +22,8 @@ pub fn grad_nalgebra_val<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &DVector<F>,
 ) -> (F, DVector<F>) {
-    let xs = x.as_slice();
-    let (mut tape, val) = crate::api::record(f, xs);
-    let g = tape.gradient(xs);
-    (val, DVector::from_vec(g))
+    let (mut tape, val) = crate::api::record(f, x.as_slice());
+    (val, tape_gradient_nalgebra(&mut tape, x))
 }
 
 /// Record and compute the Hessian, returning `(value, gradient, hessian)`.
@@ -35,16 +31,8 @@ pub fn hessian_nalgebra<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
     x: &DVector<F>,
 ) -> (F, DVector<F>, DMatrix<F>) {
-    let xs = x.as_slice();
-    let (tape, _) = crate::api::record(f, xs);
-    let (val, grad, hess) = tape.hessian(xs);
-    let n = xs.len();
-    let hess_flat: Vec<F> = hess.into_iter().flat_map(|row| row.into_iter()).collect();
-    (
-        val,
-        DVector::from_vec(grad),
-        DMatrix::from_row_slice(n, n, &hess_flat),
-    )
+    let (tape, _) = crate::api::record(f, x.as_slice());
+    tape_hessian_nalgebra(&tape, x)
 }
 
 /// Compute the Jacobian of a multi-output function, returning `DMatrix<F>`.
@@ -59,8 +47,7 @@ pub fn jacobian_nalgebra<F: Float + BtapeThreadLocal>(
     let jac = tape.jacobian(xs);
     let m = jac.len();
     let n = if m > 0 { jac[0].len() } else { xs.len() };
-    let flat: Vec<F> = jac.into_iter().flat_map(|row| row.into_iter()).collect();
-    DMatrix::from_row_slice(m, n, &flat)
+    DMatrix::from_fn(m, n, |i, j| jac[i][j])
 }
 
 /// Evaluate gradient on a pre-recorded tape, accepting and returning nalgebra types.
@@ -78,10 +65,9 @@ pub fn tape_hessian_nalgebra<F: Float>(
     let xs = x.as_slice();
     let (val, grad, hess) = tape.hessian(xs);
     let n = xs.len();
-    let hess_flat: Vec<F> = hess.into_iter().flat_map(|row| row.into_iter()).collect();
     (
         val,
         DVector::from_vec(grad),
-        DMatrix::from_row_slice(n, n, &hess_flat),
+        DMatrix::from_fn(n, n, |i, j| hess[i][j]),
     )
 }

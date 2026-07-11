@@ -4,9 +4,10 @@
 //!
 //! All functions here accept non-contiguous arrays (slices, transposed
 //! views, stepped views). Input data is copied element-wise via
-//! `iter().copied()` before being passed to the tape; the previous
-//! `.as_slice().unwrap()` path panicked on any non-C-contiguous layout,
-//! which was inconsistent with the faer/nalgebra adapters.
+//! `iter().copied()` before being passed to the tape — `.as_slice()`
+//! would require C-contiguous layout, and the faer/nalgebra adapters
+//! (whose column types are always contiguous) set the accept-anything
+//! precedent these wrappers match.
 
 use ndarray::{Array1, Array2};
 
@@ -160,9 +161,8 @@ pub fn tape_sparse_hessian_ndarray<F: Float>(
 /// Compute the sparse Jacobian, returning `(outputs, pattern, values)`.
 ///
 /// `outputs` is `f(x)` as an `Array1<F>`. `values` contains the non-zero
-/// Jacobian entries in the order defined by `pattern` (a flat vector, not
-/// per-column arrays — the old "column_vectors" description was wrong
-/// and the old signature discarded `outputs` entirely).
+/// Jacobian entries as a flat vector in the order defined by `pattern`
+/// (not per-column arrays).
 pub fn sparse_jacobian_ndarray<F: Float + BtapeThreadLocal>(
     f: impl FnOnce(&[BReverse<F>]) -> Vec<BReverse<F>>,
     x: &Array1<F>,

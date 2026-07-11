@@ -58,20 +58,9 @@ pub fn stde_sparse<F: Float + TaylorArenaLocal>(
     for &idx in sampled_indices {
         let entry = dist.entry(idx);
 
-        // Build TaylorDyn inputs: coeffs[0] = x[i] for all, then set
-        // coeffs[slot] = 1/slot! for active variables per entry.input_coeffs
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); order];
-                coeffs[0] = x[i];
-                for &(var, slot, inv_fact) in entry.input_coeffs() {
-                    if var == i && slot < order {
-                        coeffs[slot] = inv_fact;
-                    }
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        // coeffs[0] = x[i] for all inputs; coeffs[slot] = 1/slot! per
+        // entry.input_coeffs for the active variables.
+        let inputs = crate::taylor_dyn::seed_taylor_dyn_jets(x, order, entry.input_coeffs());
 
         tape.forward_tangent(&inputs, &mut buf);
 
@@ -85,13 +74,5 @@ pub fn stde_sparse<F: Float + TaylorArenaLocal>(
         acc.update(sample);
     }
 
-    let (estimate, sample_variance, standard_error) = acc.finalize();
-
-    EstimatorResult {
-        value,
-        estimate,
-        sample_variance,
-        standard_error,
-        num_samples: acc.contributing(),
-    }
+    acc.into_result(value)
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::float::Float;
-use crate::opcode::{OpCode, UNUSED};
+use crate::opcode::{self, OpCode, UNUSED};
 
 impl<F: Float> super::BytecodeTape<F> {
     /// Eliminate dead (unreachable) entries from the tape.
@@ -41,7 +41,7 @@ impl<F: Float> super::BytecodeTape<F> {
                 if let Some(&second_arg) = self.custom_second_args.get(&(idx)) {
                     stack.push(second_arg);
                 }
-            } else if b != UNUSED && self.opcodes[i] != OpCode::Powi {
+            } else if opcode::arg1_is_index(self.opcodes[i], b) {
                 stack.push(b);
             }
         }
@@ -69,13 +69,10 @@ impl<F: Float> super::BytecodeTape<F> {
                 } else {
                     UNUSED
                 };
-                let rb = if b != UNUSED
-                    && self.opcodes[read] != OpCode::Powi
-                    && self.opcodes[read] != OpCode::Custom
-                {
+                let rb = if opcode::arg1_is_index(self.opcodes[read], b) {
                     remap[b as usize]
                 } else {
-                    b // Powi: b is encoded exponent; Custom: b is callback index
+                    b // metadata slot or UNUSED — see opcode::arg1_is_index
                 };
                 self.arg_indices[write] = [ra, rb];
                 write += 1;
@@ -85,7 +82,6 @@ impl<F: Float> super::BytecodeTape<F> {
         self.opcodes.truncate(new_len);
         self.arg_indices.truncate(new_len);
         self.values.truncate(new_len);
-        self.num_variables = new_len as u32;
 
         // Remap custom_second_args: both keys and values are tape indices.
         if !self.custom_second_args.is_empty() {
@@ -161,15 +157,19 @@ impl<F: Float> super::BytecodeTape<F> {
 
         for i in 0..n {
             let op = self.opcodes[i];
-            match op {
-                OpCode::Input | OpCode::Const => continue,
-                _ => {}
+            if matches!(op, OpCode::Input | OpCode::Const) {
+                continue;
             }
 
             let [mut a, mut b] = self.arg_indices[i];
             // Apply remap to args (except Powi exponent and Custom callback in b).
+            // One pass fully canonicalizes: args reference strictly-earlier
+            // slots, so remap[a]/remap[b] were finalized before entry i is
+            // visited, and canonical entries are fixed points of remap
+            // (CSERemapIdempotent below) — re-applying remap cannot change
+            // an already-rewritten entry.
             a = remap[a as usize];
-            if b != UNUSED && op != OpCode::Powi && op != OpCode::Custom {
+            if opcode::arg1_is_index(op, b) {
                 b = remap[b as usize];
             }
             // Update arg_indices with remapped values.
@@ -203,22 +203,6 @@ impl<F: Float> super::BytecodeTape<F> {
             }
         }
 
-        // Apply remap to all arg_indices (for entries that reference CSE'd nodes).
-        for i in 0..n {
-            let op = self.opcodes[i];
-            if matches!(op, OpCode::Input | OpCode::Const) {
-                continue;
-            }
-            let [a, b] = self.arg_indices[i];
-            let ra = remap[a as usize];
-            let rb = if b != UNUSED && op != OpCode::Powi && op != OpCode::Custom {
-                remap[b as usize]
-            } else {
-                b // Powi: b is encoded exponent; Custom: b is callback index
-            };
-            self.arg_indices[i] = [ra, rb];
-        }
-
         // Remap custom_second_args values (keys are not changed by CSE remap,
         // but the second operand indices may have been CSE'd).
         if !self.custom_second_args.is_empty() {
@@ -246,80 +230,13 @@ impl<F: Float> super::BytecodeTape<F> {
         self.cse(); // CSE already calls dead_code_elimination() internally.
 
         // Validate internal consistency in debug builds.
-        // SPEC: PostOptValid — comprehensive post-optimize structural check.
+        // SPEC: PostOptValid — `validate()` is the comprehensive structural
+        // check (buffer lengths, Input prefix, output bounds, DAG operand
+        // order, custom-op side-table consistency); running it here turns any
+        // optimizer bug into a deterministic debug panic instead of silently
+        // wrong derivatives downstream.
         #[cfg(debug_assertions)]
-        {
-            let n = self.opcodes.len();
-            // All arg_indices must point to valid entries.
-            // SPEC: ValidRefsInvariant — every arg index is < tape length.
-            // SPEC: DAGOrderInvariant — non-Input/Const/Powi args point strictly earlier.
-            for i in 0..n {
-                let [a, b] = self.arg_indices[i];
-                match self.opcodes[i] {
-                    OpCode::Input | OpCode::Const => {
-                        assert_eq!(a, UNUSED, "Input/Const should have UNUSED args");
-                        assert_eq!(b, UNUSED, "Input/Const should have UNUSED args");
-                    }
-                    OpCode::Powi => {
-                        // arg0 (the base) is a real tape index and must precede
-                        // this op, like every other operand — `< i`, not just
-                        // in-bounds `< n`. arg1 encodes the exponent (not an
-                        // index), so it is not checked. Matches BytecodeTape::validate.
-                        assert!(
-                            (a as usize) < i,
-                            "Powi arg0 {} not before op {} (tape len {})",
-                            a,
-                            i,
-                            n
-                        );
-                    }
-                    _ => {
-                        assert!(
-                            (a as usize) < i,
-                            "arg0 {} not before op {} (tape len {})",
-                            a,
-                            i,
-                            n
-                        );
-                        if b != UNUSED {
-                            assert!(
-                                (b as usize) < i,
-                                "arg1 {} not before op {} (tape len {})",
-                                b,
-                                i,
-                                n
-                            );
-                        }
-                    }
-                }
-            }
-            // output_index must be valid.
-            // SPEC: OutputValidInvariant — output_index (and every output_indices entry) < tape length.
-            assert!(
-                (self.output_index as usize) < n,
-                "output_index {} out of bounds (tape len {})",
-                self.output_index,
-                n
-            );
-            for &oi in &self.output_indices {
-                assert!(
-                    (oi as usize) < n,
-                    "output_indices entry {} out of bounds (tape len {})",
-                    oi,
-                    n
-                );
-            }
-            // num_inputs must be preserved.
-            // SPEC: InputsPreserved — the number of Input opcodes equals num_inputs after optimize.
-            let input_count = self
-                .opcodes
-                .iter()
-                .filter(|&&op| op == OpCode::Input)
-                .count();
-            assert_eq!(
-                input_count, self.num_inputs as usize,
-                "num_inputs mismatch after optimization"
-            );
-        }
+        self.validate()
+            .unwrap_or_else(|e| panic!("optimize() broke a tape invariant — {e}"));
     }
 }

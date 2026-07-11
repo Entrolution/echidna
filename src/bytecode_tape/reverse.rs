@@ -25,7 +25,8 @@ impl<F: Float> super::BytecodeTape<F> {
 
     /// Core reverse sweep loop shared by all scalar reverse sweep variants.
     ///
-    /// Expects `adjoints` to be pre-seeded by the caller (length = `num_variables`).
+    /// Expects `adjoints` to be pre-seeded by the caller, sized to the tape
+    /// entry count ([`num_variables_count`](super::BytecodeTape::num_variables_count)).
     /// Reads primal values from `values` (either `self.values` or an external buffer).
     /// When `forced_signs` is `Some`, uses forced partials at matching tape indices.
     pub(super) fn reverse_sweep_core(
@@ -46,20 +47,22 @@ impl<F: Float> super::BytecodeTape<F> {
                 OpCode::Input | OpCode::Const => continue,
                 OpCode::Custom => {
                     adjoints[i] = F::zero();
-                    let [a_idx, cb_idx] = self.arg_indices[i];
-                    let a = values[a_idx as usize];
-                    let b_idx_opt = self.custom_second_args.get(&(i as u32)).copied();
-                    let b = b_idx_opt.map(|bi| values[bi as usize]).unwrap_or(F::zero());
+                    let ops = super::decode_custom_operands(
+                        &self.arg_indices,
+                        &self.custom_second_args,
+                        values,
+                        i,
+                    );
                     let r = values[i];
-                    let (da, db) = self.custom_ops[cb_idx as usize].partials(a, b, r);
+                    let (da, db) = self.custom_ops[ops.cb_idx as usize].partials(ops.a, ops.b, r);
                     // Zero-multiplier convention: an exactly-zero partial
                     // absorbs any adjoint (see kernels/mod.rs) — the input
                     // does not move the output locally, so an Inf/NaN
                     // adjoint from a chained singularity contributes 0.
                     if da != F::zero() {
-                        adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
+                        adjoints[ops.a_idx as usize] = adjoints[ops.a_idx as usize] + da * adj;
                     }
-                    if let Some(bi) = b_idx_opt {
+                    if let Some(bi) = ops.b_idx {
                         if db != F::zero() {
                             adjoints[bi as usize] = adjoints[bi as usize] + db * adj;
                         }
@@ -71,15 +74,7 @@ impl<F: Float> super::BytecodeTape<F> {
                     let a = values[a_idx as usize];
                     if op == OpCode::Powi {
                         let exp = opcode::powi_exp_decode_raw(b_idx);
-                        let da = if exp == 0 {
-                            F::zero()
-                        } else if exp == i32::MIN {
-                            let n = F::from(exp).unwrap();
-                            n * values[i] / a
-                        } else {
-                            let n = F::from(exp).unwrap();
-                            n * a.powi(exp - 1)
-                        };
+                        let da = opcode::powi_reverse_partial(exp, a, values[i]);
                         if da != F::zero() {
                             adjoints[a_idx as usize] = adjoints[a_idx as usize] + da * adj;
                         }
@@ -111,10 +106,11 @@ impl<F: Float> super::BytecodeTape<F> {
 
     /// Reverse sweep: compute adjoints seeded at the output.
     ///
-    /// Returns the full adjoint vector (length = `num_variables`).
+    /// Returns the full adjoint vector, one slot per tape entry
+    /// ([`num_variables_count`](Self::num_variables_count)).
     #[must_use]
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         let mut adjoints = vec![F::zero(); n];
         adjoints[seed_index as usize] = F::one();
         self.reverse_sweep_core(&mut adjoints, &self.values, None);
@@ -127,7 +123,7 @@ impl<F: Float> super::BytecodeTape<F> {
         seed_index: u32,
         forced_signs: &HashMap<u32, i8>,
     ) -> Vec<F> {
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         let mut adjoints = vec![F::zero(); n];
         adjoints[seed_index as usize] = F::one();
         self.reverse_sweep_core(&mut adjoints, &self.values, Some(forced_signs));
@@ -140,7 +136,7 @@ impl<F: Float> super::BytecodeTape<F> {
     /// instead of `self.values`. Pair with [`forward_into`](Self::forward_into)
     /// for parallel evaluation.
     pub fn reverse_from(&self, values: &[F], seed_index: u32) -> Vec<F> {
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         assert_eq!(values.len(), n, "values buffer has wrong length");
         let mut adjoints = vec![F::zero(); n];
         adjoints[seed_index as usize] = F::one();
@@ -162,7 +158,7 @@ impl<F: Float> super::BytecodeTape<F> {
     pub fn gradient_with_buf(&mut self, inputs: &[F], adjoint_buf: &mut Vec<F>) -> Vec<F> {
         self.forward(inputs);
 
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         adjoint_buf.clear();
         adjoint_buf.resize(n, F::zero());
         adjoint_buf[self.output_index as usize] = F::one();
@@ -173,7 +169,7 @@ impl<F: Float> super::BytecodeTape<F> {
 
     /// Reverse sweep with weighted seeds, returning full adjoint vector.
     pub(super) fn reverse_seeded_full(&self, seeds: &[F], out_indices: &[u32]) -> Vec<F> {
-        let n = self.num_variables as usize;
+        let n = self.num_variables_count();
         let mut adjoints = vec![F::zero(); n];
 
         for (&out_idx, &weight) in out_indices.iter().zip(seeds.iter()) {
@@ -193,6 +189,12 @@ impl<F: Float> super::BytecodeTape<F> {
     ///
     /// Returns one gradient vector per input point.
     pub fn gradient_batch(&mut self, inputs: &[&[F]]) -> Vec<Vec<F>> {
-        inputs.iter().map(|x| self.gradient(x)).collect()
+        // One adjoint buffer reused across the batch instead of a fresh
+        // num_variables-sized allocation per point.
+        let mut adjoint_buf = Vec::new();
+        inputs
+            .iter()
+            .map(|x| self.gradient_with_buf(x, &mut adjoint_buf))
+            .collect()
     }
 }

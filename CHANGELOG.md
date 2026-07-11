@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `BytecodeTape::validate` (and therefore deserialization of serialized
+  tapes) is stricter: `Input` and `Const` entries must carry the unused
+  arg sentinel in both operand slots, and a payload whose `num_variables`
+  field disagrees with `opcodes.len()` is rejected. Tapes produced by
+  `record`/`record_multi` or the `push_*` builders are unaffected.
+- The AD value-type constructors (`Dual::new`/`constant`/`variable`,
+  `DualVec::new`/`constant`/`with_tangent`, `Reverse::constant`/`from_tape`,
+  `BReverse::constant`/`from_tape`) are now `#[must_use]`, matching the
+  `Tape` constructors; discarding their results warns.
+
+### Removed
+
+- The deprecated (since 0.5.0) CUDA-specific STDE wrappers
+  `stde_gpu::laplacian_gpu_cuda` and `stde_gpu::hessian_diagonal_gpu_cuda`
+  — the generic `stde_gpu::laplacian_gpu` / `stde_gpu::hessian_diagonal_gpu`
+  work with both backends.
+- The deprecated (since 0.5.0) inherent `CudaContext::taylor_forward_2nd_batch`
+  — import the `GpuBackend` trait and call the trait method of the same name.
+- `TaylorDynGuard::arena` and `JetPlan::multi_indices`, unused accessors.
+- The unused optional `bumpalo` dependency (the bytecode tape is Vec-backed;
+  builds with the `bytecode` feature no longer pull it in).
+
+### Removed (echidna-optim)
+
+- The never-constructed `SolverDiagnostics::Other` variant (the enum is
+  `#[non_exhaustive]`, so matches already need a wildcard arm).
+- The unused accessors `TapeObjective::tape`,
+  `SparseImplicitContext::nnz`, and `SparseImplicitContext::fx_nnz`
+  (`fz_nnz` remains).
+- The `linalg` and `convergence` modules are no longer public; they were
+  internal solver plumbing. `ConvergenceParams` remains re-exported at the
+  crate root.
+
 ## [0.14.1] - 2026-07-08
 
 **Coordinated release:** `echidna` 0.14.1 and `echidna-optim` 0.14.1.

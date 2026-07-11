@@ -92,8 +92,23 @@ struct TapeMeta {
 // 7: hvp_out [B * num_inputs]
 @group(1) @binding(7) var<storage, read_write> hvp_out: array<f32>;
 
-fn sinh_f(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
-fn cosh_f(x: f32) -> f32 { return (exp(x) + exp(-x)) * 0.5; }
+
+// IEEE f32 bit patterns (same names across all four shaders).
+const F32_SIGN_MASK: u32 = 0x80000000u;
+const F32_ABS_MASK:  u32 = 0x7fffffffu;
+const F32_INF_BITS:  u32 = 0x7f800000u;
+
+fn is_nan_f32(x: f32) -> bool {
+    // NaN iff exponent is all-ones and mantissa is non-zero. Inspect the bits
+    // directly — `x != x` can be folded away by Metal's fast-math. Matches
+    // forward.wgsl's helper.
+    return (bitcast<u32>(x) & F32_ABS_MASK) > F32_INF_BITS;
+}
+
+const F32_QNAN_BITS: u32 = 0x7fc00000u;
+
+fn sinh_f32(x: f32) -> f32 { return (exp(x) - exp(-x)) * 0.5; }
+fn cosh_f32(x: f32) -> f32 { return (exp(x) + exp(-x)) * 0.5; }
 
 fn powf_real(base: f32, b: f32) -> f32 {
     // WGSL `pow(x, y)` is undefined for x < 0 (naga lowers it to
@@ -105,7 +120,7 @@ fn powf_real(base: f32, b: f32) -> f32 {
     if base == 0.0 && b == 0.0 { return 1.0; }
     if base >= 0.0 { return pow(base, b); }
     let rb = round(b);
-    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    if rb != b { return bitcast<f32>(F32_QNAN_BITS); }
     let mag = pow(abs(base), b);
     if (i32(rb) & 1) != 0 { return -mag; }
     return mag;
@@ -128,9 +143,9 @@ fn abs_deriv_f32(x: f32) -> f32 {
     // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
     // test inspects the bits — `x != x` is unreliable under Metal fast-math.
     let b = bitcast<u32>(x);
-    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if ((b & F32_ABS_MASK) > F32_INF_BITS) { return x; }
     if (x == 0.0) { return 0.0; }
-    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+    return select(1.0, -1.0, (b & F32_SIGN_MASK) != 0u);
 }
 
 fn signum_f32(x: f32) -> f32 {
@@ -138,8 +153,8 @@ fn signum_f32(x: f32) -> f32 {
     // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit. Bitcast NaN test
     // since `x != x` is unreliable under Metal fast-math.
     let b = bitcast<u32>(x);
-    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
-    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+    if ((b & F32_ABS_MASK) > F32_INF_BITS) { return x; }
+    return select(1.0, -1.0, (b & F32_SIGN_MASK) != 0u);
 }
 
 // Overflow-safe hypot with IEEE Inf handling — same helper as
@@ -149,7 +164,7 @@ fn signum_f32(x: f32) -> f32 {
 fn hypot_f32(a: f32, b: f32) -> f32 {
     let ax = abs(a);
     let ay = abs(b);
-    let inf = bitcast<f32>(0x7f800000u);
+    let inf = bitcast<f32>(F32_INF_BITS);
     if ax == inf || ay == inf { return inf; }
     let mx = max(ax, ay);
     let mn = min(ax, ay);
@@ -196,10 +211,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 3u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a-b; rt=at-bt; }
             case 4u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a*b; rt=b*at+a*bt; }
             // DIV tangent factored as r*inv (r = a/b) to match
-            // tangent_forward.wgsl and the CUDA kernel. The prior a*inv*inv
-            // form was equivalent and equally overflow-safe — WGSL
-            // left-associativity makes it (a*inv)*inv, never forming
-            // inv*inv. Expression-consistency change only (<= 1 ULP).
+            // tangent_forward.wgsl and the CUDA kernel. WGSL left-
+            // associativity evaluates r*inv*bt as (r*inv)*bt, never
+            // forming inv*inv, so the form is overflow-safe.
             case 5u: { let b = primals[base+bi]; let bt = tans[base+bi]; r=a/b; let inv=1.0/b; rt=inv*at-r*inv*bt; }
             // REM is exact only for |a/b| < 2^24 (f32 mantissa) — see rem_f32 in
             // forward.wgsl; CPU/CUDA use exact fmod.
@@ -210,8 +224,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // a*at + b*bt is left un-rescaled (it overflows only when the true
             // tangent magnitude does).
             case 9u: { let b=primals[base+bi]; let bt=tans[base+bi]; r=hypot_f32(a,b); if r==0.0 {rt=0.0;} else {rt=(a*at+b*bt)/r;} }
-            case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a>=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
-            case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; let bb=bitcast<u32>(b); let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u; if a<=b || bn {r=a;rt=at;} else {r=b;rt=bt;} }
+            case 10u: { let b=primals[base+bi]; let bt=tans[base+bi]; if a>=b || is_nan_f32(b) {r=a;rt=at;} else {r=b;rt=bt;} }
+            case 11u: { let b=primals[base+bi]; let bt=tans[base+bi]; if a<=b || is_nan_f32(b) {r=a;rt=at;} else {r=b;rt=bt;} }
             case 12u: { r=-a; rt=-at; }
             case 13u: { r=1.0/a; rt=-at/(a*a); }
             case 14u: { r=sqrt(a); rt=at/(2.0*r); }
@@ -220,10 +234,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u: { r=exp(a); rt=r*at; }
             case 18u: { r=exp2(a); rt=r*log(2.0)*at; }
             case 19u: { r=expm1_f32(a); rt=(r+1.0)*at; }
-            case 20u: { r=log(a); rt=select(bitcast<f32>(0x7fc00000u), at/a, a >= 0.0); }
-            case 21u: { r=log2(a); rt=select(bitcast<f32>(0x7fc00000u), at/(a*log(2.0)), a >= 0.0); }
-            case 22u: { r=log(a)/log(10.0); rt=select(bitcast<f32>(0x7fc00000u), at/(a*log(10.0)), a >= 0.0); }
-            case 23u: { r=ln1p_f32(a); rt=select(bitcast<f32>(0x7fc00000u), at/(1.0+a), a >= -1.0); }
+            case 20u: { r=log(a); rt=select(bitcast<f32>(F32_QNAN_BITS), at/a, a >= 0.0); }
+            case 21u: { r=log2(a); rt=select(bitcast<f32>(F32_QNAN_BITS), at/(a*log(2.0)), a >= 0.0); }
+            case 22u: { r=log(a)/log(10.0); rt=select(bitcast<f32>(F32_QNAN_BITS), at/(a*log(10.0)), a >= 0.0); }
+            case 23u: { r=ln1p_f32(a); rt=select(bitcast<f32>(F32_QNAN_BITS), at/(1.0+a), a >= -1.0); }
             case 24u: { r=sin(a); rt=cos(a)*at; }
             case 25u: { r=cos(a); rt=-sin(a)*at; }
             case 26u: { r=tan(a); let c=cos(a); rt=at/(c*c); }
@@ -234,12 +248,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if aa > 1e8 { let inv = 1.0 / a; rt = at * inv * inv / (1.0 + inv * inv); }
                 else        { rt = at / (1.0 + a * a); }
             }
-            case 30u: { r=sinh_f(a); rt=cosh_f(a)*at; }
-            case 31u: { r=cosh_f(a); rt=sinh_f(a)*at; }
-            case 32u: { r=tanh(a); let c=cosh_f(a); rt=at/(c*c); }
+            case 30u: { r=sinh_f32(a); rt=cosh_f32(a)*at; }
+            case 31u: { r=cosh_f32(a); rt=sinh_f32(a)*at; }
+            case 32u: { r=tanh(a); let c=cosh_f32(a); rt=at/(c*c); }
             case 33u: { let ax=abs(a); if ax>1e8 {let inv=1.0/a; let rr=log(ax)+log(1.0+sqrt(1.0+inv*inv)); r=select(-rr,rr,a>=0.0); rt=at*abs(inv)/sqrt(1.0+inv*inv);} else {r=select(-log(ax+sqrt(ax*ax+1.0)), log(ax+sqrt(ax*ax+1.0)), a>=0.0); rt=at/sqrt(a*a+1.0);} }
-            case 34u: { if a < 1.0 { let n=bitcast<f32>(0x7fc00000u); r=n; rt=n; } else if abs(a)>1e8 {let inv=1.0/a; r=log(a)+log(1.0+sqrt(1.0-inv*inv)); rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {r=log(a+sqrt((a-1.0)*(a+1.0))); rt=at/sqrt((a-1.0)*(a+1.0));} }
-            case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(0x7fc00000u), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
+            case 34u: { if a < 1.0 { let n=bitcast<f32>(F32_QNAN_BITS); r=n; rt=n; } else if abs(a)>1e8 {let inv=1.0/a; r=log(a)+log(1.0+sqrt(1.0-inv*inv)); rt=at*abs(inv)/sqrt(1.0-inv*inv);} else {r=log(a+sqrt((a-1.0)*(a+1.0))); rt=at/sqrt((a-1.0)*(a+1.0));} }
+            case 35u: { r=0.5*log((1.0+a)/(1.0-a)); rt=select(bitcast<f32>(F32_QNAN_BITS), at/((1.0-a)*(1.0+a)), a >= -1.0 && a <= 1.0); }
             case 36u: { r=abs(a); rt=abs_deriv_f32(a)*at; }
             case 37u: { r = signum_f32(a); rt=0.0; }
             case 38u: { r=floor(a); rt=0.0; }
@@ -403,15 +417,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // fast-math, which would route the adjoint to the wrong operand.
             case 10u /* MAX */: {
                 let b=primals[base+bi];
-                let bb=bitcast<u32>(b);
-                let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u;
-                if a>=b || bn { da_re=1.0; } else { db_re=1.0; }
+                if a>=b || is_nan_f32(b) { da_re=1.0; } else { db_re=1.0; }
             }
             case 11u /* MIN */: {
                 let b=primals[base+bi];
-                let bb=bitcast<u32>(b);
-                let bn=((bb>>23u)&0xffu)==0xffu && (bb&0x7fffffu)!=0u;
-                if a<=b || bn { da_re=1.0; } else { db_re=1.0; }
+                if a<=b || is_nan_f32(b) { da_re=1.0; } else { db_re=1.0; }
             }
 
             // Unary ops: da_re = f'(a), da_eps = f''(a)*at
@@ -436,10 +446,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u /* EXP */: { da_re=r; da_eps=r*at; }
             case 18u /* EXP2 */: { let l2=log(2.0); da_re=r*l2; da_eps=r*l2*l2*at; }
             case 19u /* EXPM1 */: { da_re=r+1.0; da_eps=(r+1.0)*at; }
-            case 20u /* LN */: { if (a >= 0.0) { da_re=1.0/a; da_eps=-at/(a*a); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
-            case 21u /* LOG2 */: { if (a >= 0.0) { let l2=log(2.0); da_re=1.0/(a*l2); da_eps=-at/(a*a*l2); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
-            case 22u /* LOG10 */: { if (a >= 0.0) { let l10=log(10.0); da_re=1.0/(a*l10); da_eps=-at/(a*a*l10); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
-            case 23u /* LN1P */: { if (a >= -1.0) { let t=1.0+a; da_re=1.0/t; da_eps=-at/(t*t); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
+            case 20u /* LN */: { if (a >= 0.0) { da_re=1.0/a; da_eps=-at/(a*a); } else { let n=bitcast<f32>(F32_QNAN_BITS); da_re=n; da_eps=n; } }
+            case 21u /* LOG2 */: { if (a >= 0.0) { let l2=log(2.0); da_re=1.0/(a*l2); da_eps=-at/(a*a*l2); } else { let n=bitcast<f32>(F32_QNAN_BITS); da_re=n; da_eps=n; } }
+            case 22u /* LOG10 */: { if (a >= 0.0) { let l10=log(10.0); da_re=1.0/(a*l10); da_eps=-at/(a*a*l10); } else { let n=bitcast<f32>(F32_QNAN_BITS); da_re=n; da_eps=n; } }
+            case 23u /* LN1P */: { if (a >= -1.0) { let t=1.0+a; da_re=1.0/t; da_eps=-at/(t*t); } else { let n=bitcast<f32>(F32_QNAN_BITS); da_re=n; da_eps=n; } }
             case 24u /* SIN */: { da_re=cos(a); da_eps=-sin(a)*at; }
             case 25u /* COS */: { da_re=-sin(a); da_eps=-cos(a)*at; }
             case 26u /* TAN */: { let c=cos(a); let s=1.0/(c*c); da_re=s; da_eps=2.0*tan(a)*s*at; }
@@ -458,9 +468,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     da_eps = -2.0 * a * at / (t * t);
                 }
             }
-            case 30u /* SINH */: { da_re=cosh_f(a); da_eps=sinh_f(a)*at; }
-            case 31u /* COSH */: { da_re=sinh_f(a); da_eps=cosh_f(a)*at; }
-            case 32u /* TANH */: { let c=cosh_f(a); let s=1.0/(c*c); da_re=s; da_eps=-2.0*tanh(a)*s*at; }
+            case 30u /* SINH */: { da_re=cosh_f32(a); da_eps=sinh_f32(a)*at; }
+            case 31u /* COSH */: { da_re=sinh_f32(a); da_eps=cosh_f32(a)*at; }
+            case 32u /* TANH */: { let c=cosh_f32(a); let s=1.0/(c*c); da_re=s; da_eps=-2.0*tanh(a)*s*at; }
             case 33u /* ASINH */: {
                 // For |a| > 1e8 use inv-based formula to avoid a*a+1 overflow.
                 if abs(a) > 1e8 {
@@ -482,7 +492,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if a < 1.0 {
                     // Out of domain (acosh domain a >= 1): both HVP terms NaN.
                     // Matches kernels::acosh_deriv; strict `< 1` keeps a==1 singular.
-                    let n = bitcast<f32>(0x7fc00000u);
+                    let n = bitcast<f32>(F32_QNAN_BITS);
                     da_re = n;
                     da_eps = n;
                 } else if abs(a) > 1e8 {
@@ -501,7 +511,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     da_eps = -a * at / (t * t * t);
                 }
             }
-            case 35u /* ATANH */: { if (a >= -1.0 && a <= 1.0) { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); } else { let n=bitcast<f32>(0x7fc00000u); da_re=n; da_eps=n; } }
+            case 35u /* ATANH */: { if (a >= -1.0 && a <= 1.0) { let t=(1.0-a)*(1.0+a); da_re=1.0/t; da_eps=2.0*a*at/(t*t); } else { let n=bitcast<f32>(F32_QNAN_BITS); da_re=n; da_eps=n; } }
             case 36u /* ABS */: { da_re = abs_deriv_f32(a); }
             case 37u, 38u, 39u, 40u, 41u: { /* zero derivative */ }
             case 42u /* FRACT */: { da_re=1.0; }

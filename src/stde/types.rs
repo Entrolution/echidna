@@ -41,31 +41,27 @@ pub struct DivergenceResult<F> {
 }
 
 /// Welford's online algorithm for incremental mean and variance.
-pub(super) struct WelfordAccumulator<F> {
+pub(crate) struct WelfordAccumulator<F> {
     mean: F,
     m2: F,
     count: usize,
-    skipped: usize,
 }
 
 impl<F: Float> WelfordAccumulator<F> {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             mean: F::zero(),
             m2: F::zero(),
             count: 0,
-            skipped: 0,
         }
     }
 
-    /// Accumulate one sample. Non-finite samples are skipped and counted
-    /// (see [`skipped`](Self::skipped)) rather than poisoning the running
-    /// mean and variance: a NaN or Inf sample carries no usable magnitude
-    /// information, and estimators report how many samples actually
-    /// contributed via `num_samples`.
-    pub(super) fn update(&mut self, sample: F) {
+    /// Accumulate one sample. Non-finite samples are skipped rather than
+    /// poisoning the running mean and variance: a NaN or Inf sample carries
+    /// no usable magnitude information, and estimators report how many
+    /// samples actually contributed via `num_samples`.
+    pub(crate) fn update(&mut self, sample: F) {
         if !sample.is_finite() {
-            self.skipped += 1;
             return;
         }
         self.count += 1;
@@ -78,16 +74,31 @@ impl<F: Float> WelfordAccumulator<F> {
 
     /// Number of samples that contributed to the running statistics
     /// (excludes skipped non-finite samples).
-    pub(super) fn contributing(&self) -> usize {
+    pub(crate) fn contributing(&self) -> usize {
         self.count
     }
 
+    /// Package the finalized statistics into an [`EstimatorResult`].
+    ///
+    /// For the plain estimators only — variants that transform the raw mean
+    /// (variance rescaling, exact-trace offsets) call [`finalize`](Self::finalize)
+    /// directly so the transform stays visible at the estimator.
+    pub(crate) fn into_result(self, value: F) -> EstimatorResult<F> {
+        let (estimate, sample_variance, standard_error) = self.finalize();
+        EstimatorResult {
+            value,
+            estimate,
+            sample_variance,
+            standard_error,
+            num_samples: self.contributing(),
+        }
+    }
     /// Finalize into `(mean, sample_variance, standard_error)`.
     ///
     /// With zero contributing samples the estimator has no information and
     /// the mean is NaN (not the accumulator's neutral 0.0, which would
     /// read as a confident estimate of zero).
-    pub(super) fn finalize(&self) -> (F, F, F) {
+    pub(crate) fn finalize(&self) -> (F, F, F) {
         if self.count == 0 {
             return (F::nan(), F::zero(), F::zero());
         }

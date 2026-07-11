@@ -65,50 +65,22 @@ impl BtapeThreadLocal for Dual<f64> {
     }
 }
 
-struct BtapeBorrowGuard {
-    cell: &'static std::thread::LocalKey<Cell<bool>>,
-}
-
-impl BtapeBorrowGuard {
-    fn new<F: BtapeThreadLocal>() -> Self {
-        let cell = F::btape_borrow_cell();
-        cell.with(|b| {
-            assert!(
-                !b.get(),
-                "reentrant with_active_btape call detected — this would create aliased &mut references"
-            );
-            b.set(true);
-        });
-        BtapeBorrowGuard { cell }
-    }
-}
-
-impl Drop for BtapeBorrowGuard {
-    fn drop(&mut self) {
-        self.cell.with(|b| b.set(false));
-    }
-}
-
 /// Access the active bytecode tape for the current thread.
 /// Panics if no tape is active.
+///
+/// The pointer in the thread-local cell is installed only by
+/// [`BtapeGuard`], whose `'a` lifetime ties it to a live
+/// `&'a mut BytecodeTape<F>` — the guard contract
+/// `active_cell::with_active_ptr` relies on.
 #[inline]
 pub fn with_active_btape<F: BtapeThreadLocal, R>(f: impl FnOnce(&mut BytecodeTape<F>) -> R) -> R {
-    let _guard = BtapeBorrowGuard::new::<F>();
-    F::btape_cell().with(|cell| {
-        let ptr = cell.get();
-        assert!(
-            !ptr.is_null(),
-            "No active bytecode tape. Use echidna::record() to record a function."
-        );
-        // SAFETY: BtapeGuard's `'a` lifetime statically ties the raw pointer's
-        // validity to the live `&'a mut BytecodeTape<F>` borrow on the stack
-        // frame that constructed the guard — the borrow checker rejects any
-        // program in which the guard outlives its tape. Access is
-        // single-threaded via thread-local, and the BtapeBorrowGuard above
-        // ensures no reentrant call creates aliased &mut references.
-        let tape = unsafe { &mut *ptr };
-        f(tape)
-    })
+    crate::active_cell::with_active_ptr(
+        F::btape_cell(),
+        F::btape_borrow_cell(),
+        "with_active_btape",
+        "No active bytecode tape. Use echidna::record() to record a function.",
+        f,
+    )
 }
 
 /// Debug-only: the identity of the thread-local active tape, or

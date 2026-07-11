@@ -111,7 +111,7 @@ pub fn laplacian_with_control<F: Float>(
     let mut value = F::zero();
     let mut acc = WelfordAccumulator::new();
 
-    for v in directions.iter() {
+    for v in directions {
         let (c0, _, c2) = taylor_jet_2nd_with_buf(tape, x, v, &mut buf);
         value = c0;
 
@@ -125,15 +125,7 @@ pub fn laplacian_with_control<F: Float>(
         acc.update(raw - cv + trace_control);
     }
 
-    let (estimate, sample_variance, standard_error) = acc.finalize();
-
-    EstimatorResult {
-        value,
-        estimate,
-        sample_variance,
-        standard_error,
-        num_samples: acc.contributing(),
-    }
+    acc.into_result(value)
 }
 
 /// Exact Hessian diagonal via n coordinate-direction evaluations.
@@ -160,17 +152,9 @@ pub fn hessian_diagonal_with_buf<F: Float>(
     let mut diag = Vec::with_capacity(n);
     let mut value = F::zero();
 
-    // Constant-output tape (n == 0): the basis-vector loop never runs so
-    // `value` would stay at zero. Recover the true constant via a primal
-    // pass, mirroring the fix applied in `hessian`, `hessian_vec`, and
-    // the sparse counterparts.
+    // Constant-output tape (n == 0): no basis vectors to sweep.
     if n == 0 {
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        if let Some(&v) = values_buf.get(tape.output_index()) {
-            value = v;
-        }
-        return (value, diag);
+        return (tape.constant_output_value(), diag);
     }
 
     // Build basis vector once, mutate the hot coordinate
@@ -209,7 +193,6 @@ fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usi
             }
         }
 
-        // Compute norm
         let norm_sq: F = columns[i].iter().fold(F::zero(), |acc, &v| acc + v * v);
         let norm = norm_sq.sqrt();
 
@@ -218,9 +201,8 @@ fn modified_gram_schmidt<F: Float>(columns: &mut Vec<Vec<F>>, epsilon: F) -> usi
             columns.swap_remove(i);
             // Don't increment i — swapped element needs processing
         } else {
-            // Normalise
             let inv_norm = F::one() / norm;
-            for v in columns[i].iter_mut() {
+            for v in &mut columns[i] {
                 *v = *v * inv_norm;
             }
             // Move accepted column to rank position. Note: i == rank is a loop invariant
@@ -321,7 +303,7 @@ pub fn laplacian_hutchpp<F: Float>(
     let mut acc = WelfordAccumulator::new();
     let mut projected = vec![F::zero(); n];
 
-    for g in stochastic_directions.iter() {
+    for g in stochastic_directions {
         assert_eq!(
             g.len(),
             n,
@@ -348,6 +330,8 @@ pub fn laplacian_hutchpp<F: Float>(
         acc.update(two * c2);
     }
 
+    // Deliberately NOT WelfordAccumulator::into_result: the exact-trace
+    // offset below transforms the raw mean, and that stays visible here.
     let (residual_mean, sample_variance, standard_error) = acc.finalize();
 
     EstimatorResult {

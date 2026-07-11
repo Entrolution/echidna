@@ -1,8 +1,26 @@
 use super::types::{EstimatorResult, WelfordAccumulator};
 use crate::bytecode_tape::BytecodeTape;
 use crate::taylor::Taylor;
-use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
+use crate::taylor_dyn::{
+    with_active_arena, TaylorArena, TaylorArenaLocal, TaylorDyn, TaylorDynGuard,
+};
 use crate::Float;
+
+/// Panics unless a `k`-th order extraction is factorial-exact for `F`.
+///
+/// `k!` must be exactly representable: `18!` is the last factorial below
+/// 2^53 (f64), and the f32 guard keeps one order of margin below the first
+/// degradation at `14!`.
+fn assert_kth_order_exact<F: Float>(k: usize) {
+    assert!(
+        k <= 18,
+        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
+    );
+    assert!(
+        k < 13 || std::mem::size_of::<F>() > 4,
+        "k must be <= 12 for f32 (one order of margin: f32 k! exactness first degrades at 14!; use f64)"
+    );
+}
 
 /// Exact k-th order diagonal: `[∂^k u/∂x_j^k for j in 0..n]`.
 ///
@@ -36,51 +54,28 @@ pub fn diagonal_kth_order_with_buf<F: Float + TaylorArenaLocal>(
     buf: &mut Vec<TaylorDyn<F>>,
 ) -> (F, Vec<F>) {
     assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
-    assert!(
-        k <= 18,
-        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
-    );
-    assert!(
-        k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
-    );
+    assert_kth_order_exact::<F>(k);
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
     if n == 0 {
-        // Constant tape: recover the primal with an empty forward pass;
-        // there is nothing to differentiate.
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let mut value = F::zero();
-        if let Some(&v) = values_buf.get(tape.output_index()) {
-            value = v;
-        }
-        return (value, Vec::new());
+        // Constant tape: nothing to differentiate; return the primal.
+        return (tape.constant_output_value(), Vec::new());
     }
 
     let order = k + 1; // number of Taylor coefficients
     let _guard = TaylorDynGuard::<F>::new(order);
 
-    let mut k_factorial = F::one();
-    for i in 2..=k {
-        k_factorial = k_factorial * F::from(i).unwrap();
-    }
+    let k_factorial = crate::taylor_ops::factorial::<F>(k);
 
     let mut diag = Vec::with_capacity(n);
     let mut value = F::zero();
 
     for j in 0..n {
-        // Build TaylorDyn inputs: coeffs_j = [x_j, 1, 0, ..., 0], others = [x_i, 0, ..., 0]
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); order];
-                coeffs[0] = x[i];
-                if i == j {
-                    coeffs[1] = F::one();
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        // Entries from the previous pushforward are dead — reset the arena
+        // (capacity retained) so it stops growing O(samples × tape_ops).
+        with_active_arena(|arena: &mut TaylorArena<F>| arena.clear());
+        // Coordinate-basis jets: coeffs_j = [x_j, 1, 0, ...], others [x_i, 0, ...]
+        let inputs = crate::taylor_dyn::seed_taylor_dyn_jets(x, order, &[(j, 1, F::one())]);
 
         tape.forward_tangent(&inputs, buf);
 
@@ -128,34 +123,15 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
     const { assert!(ORDER >= 3, "ORDER must be >= 3 (k=ORDER-1 >= 2)") }
 
     let k = ORDER - 1;
-    assert!(
-        k <= 18,
-        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
-    );
-    // Conservative f32 bound: k! exactness degrades from 14! (the guard
-    // leaves one order of margin below that).
-    assert!(
-        k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be <= 12 for f32 (k! exactness degrades; use f64)"
-    );
+    assert_kth_order_exact::<F>(k);
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
     if n == 0 {
-        // Constant tape: recover the primal with an empty forward pass;
-        // there is nothing to differentiate.
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let mut value = F::zero();
-        if let Some(&v) = values_buf.get(tape.output_index()) {
-            value = v;
-        }
-        return (value, Vec::new());
+        // Constant tape: nothing to differentiate; return the primal.
+        return (tape.constant_output_value(), Vec::new());
     }
 
-    let mut k_factorial = F::one();
-    for i in 2..=k {
-        k_factorial = k_factorial * F::from(i).unwrap();
-    }
+    let k_factorial = crate::taylor_ops::factorial::<F>(k);
 
     let mut diag = Vec::with_capacity(n);
     let mut value = F::zero();
@@ -185,7 +161,10 @@ pub fn diagonal_kth_order_const_with_buf<F: Float, const ORDER: usize>(
 /// Stochastic k-th order diagonal estimate: `Σ_j ∂^k u/∂x_j^k`.
 ///
 /// Evaluates only the coordinate indices in `sampled_indices`, then scales
-/// by `n / |J|` to produce an unbiased estimate of the full sum.
+/// by `n / |J|`. The rescaled estimate is unbiased only when
+/// `sampled_indices` is a uniform random draw over `0..n`; a deterministic
+/// subset biases it toward the sampled coordinates (see the sampling
+/// precondition note on [`stde_sparse`](crate::stde::stde_sparse)).
 ///
 /// # Panics
 ///
@@ -202,24 +181,14 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
         "sampled_indices must not be empty"
     );
     assert!(k >= 2, "k must be >= 2 (use gradient for k=1)");
-    assert!(
-        k <= 18,
-        "k must be <= 18 (k! is exact in f64 only up to 18!; 19! exceeds 2^53)"
-    );
-    assert!(
-        k < 13 || std::mem::size_of::<F>() > 4,
-        "k must be < 13 for f32 (k! loses precision for k >= 13; use f64)"
-    );
+    assert_kth_order_exact::<F>(k);
     let n = tape.num_inputs();
     assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
 
     let order = k + 1;
     let _guard = TaylorDynGuard::<F>::new(order);
 
-    let mut k_factorial = F::one();
-    for i in 2..=k {
-        k_factorial = k_factorial * F::from(i).unwrap();
-    }
+    let k_factorial = crate::taylor_ops::factorial::<F>(k);
 
     let nf = F::from(n).unwrap();
 
@@ -228,18 +197,12 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
     let mut buf: Vec<TaylorDyn<F>> = Vec::new();
 
     for &j in sampled_indices {
-        assert!(j < n, "sampled index {} out of bounds (n={})", j, n);
+        assert!(j < n, "sampled index {j} out of bounds (n={n})");
 
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); order];
-                coeffs[0] = x[i];
-                if i == j {
-                    coeffs[1] = F::one();
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        // Entries from the previous pushforward are dead — reset the arena
+        // (capacity retained) so it stops growing O(samples × tape_ops).
+        with_active_arena(|arena: &mut TaylorArena<F>| arena.clear());
+        let inputs = crate::taylor_dyn::seed_taylor_dyn_jets(x, order, &[(j, 1, F::one())]);
 
         tape.forward_tangent(&inputs, &mut buf);
 
@@ -251,7 +214,8 @@ pub fn diagonal_kth_order_stochastic<F: Float + TaylorArenaLocal>(
 
     let (mean, sample_variance, standard_error) = acc.finalize();
 
-    // Unbiased estimator for Σ_j d_j: n * mean(sampled d_j's).
+    // n * mean(sampled d_j's) estimates Σ_j d_j — unbiased iff the sampled
+    // indices are a uniform random draw (see rustdoc precondition).
     // Scale variance/SE to match the rescaled estimate.
     EstimatorResult {
         value,
@@ -318,35 +282,8 @@ pub fn laplacian_dyn<F: Float + TaylorArenaLocal>(
     x: &[F],
     directions: &[&[F]],
 ) -> (F, F) {
-    assert!(!directions.is_empty(), "directions must not be empty");
-    let n = tape.num_inputs();
-    assert_eq!(x.len(), n, "x.len() must match tape.num_inputs()");
-
-    let _guard = TaylorDynGuard::<F>::new(3);
-
-    let two = F::from(2.0).unwrap();
-    let s = F::from(directions.len()).unwrap();
-    let mut sum = F::zero();
-    let mut value = F::zero();
-    let mut buf: Vec<TaylorDyn<F>> = Vec::new();
-
-    for v in directions {
-        assert_eq!(v.len(), n, "direction length must match tape.num_inputs()");
-
-        let inputs: Vec<TaylorDyn<F>> = x
-            .iter()
-            .zip(v.iter())
-            .map(|(&xi, &vi)| TaylorDyn::from_coeffs(&[xi, vi, F::zero()]))
-            .collect();
-
-        tape.forward_tangent(&inputs, &mut buf);
-
-        let out = buf[tape.output_index()];
-        let coeffs = out.coeffs();
-        value = coeffs[0];
-        let c2 = coeffs[2];
-        sum = sum + two * c2;
-    }
-
-    (value, sum / s)
+    // The estimate is fixed at second order, so the dynamic arena adds
+    // nothing over the const-generic jets `laplacian` uses; kept as a thin
+    // wrapper for API compatibility.
+    crate::stde::laplacian(tape, x, directions)
 }

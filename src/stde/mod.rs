@@ -69,8 +69,9 @@
 //! [`diagonal_kth_order`] for compile-time-known derivative order. It uses
 //! `Taylor<F, ORDER>` directly (no `TaylorDyn` arena), which is faster when
 //! the order is statically known. `ORDER = k + 1` where k is the derivative
-//! order. For f32, practical limit is `ORDER ≤ 14` (k ≤ 13) since `k! > 2^23`
-//! causes precision loss.
+//! order. For f32 the guard requires `ORDER ≤ 13` (k ≤ 12), one order of
+//! conservative margin: f32 `k!` exactness (2^24 mantissa boundary) first
+//! degrades at `14!`.
 //!
 //! # Higher-Order Estimation
 //!
@@ -134,6 +135,8 @@ pub use laplacian::{
 pub use pde::dense_stde_2nd_indefinite;
 pub use pde::{dense_stde_2nd, divergence, parabolic_diffusion, parabolic_diffusion_stochastic};
 pub use pipeline::{estimate, estimate_weighted};
+#[cfg(any(feature = "gpu-wgpu", feature = "gpu-cuda"))]
+pub(crate) use types::WelfordAccumulator;
 pub use types::{DivergenceResult, EstimatorResult};
 
 #[cfg(feature = "diffop")]

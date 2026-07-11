@@ -65,7 +65,7 @@
 //! Inhomogeneous operators can be decomposed with [`DiffOp::split_by_order`].
 
 use crate::bytecode_tape::BytecodeTape;
-use crate::taylor_dyn::{TaylorArenaLocal, TaylorDyn, TaylorDynGuard};
+use crate::taylor_dyn::{TaylorArenaLocal, TaylorDynGuard};
 use crate::Float;
 
 // ══════════════════════════════════════════════
@@ -109,7 +109,7 @@ impl MultiIndex {
     /// Panics if `var >= num_vars` or `order == 0`.
     #[must_use]
     pub fn diagonal(num_vars: usize, var: usize, order: u8) -> Self {
-        assert!(var < num_vars, "var ({}) >= num_vars ({})", var, num_vars);
+        assert!(var < num_vars, "var ({var}) >= num_vars ({num_vars})");
         assert!(order > 0, "order must be > 0");
         let mut orders = vec![0u8; num_vars];
         orders[var] = order;
@@ -222,14 +222,8 @@ fn partitions_recurse(
 fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
     let mut prefactor = F::one();
     for &(slot, order) in slot_assignments {
-        let mut q_fact = F::one();
-        for i in 2..=(order as usize) {
-            q_fact = q_fact * F::from(i).unwrap();
-        }
-        let mut j_fact = F::one();
-        for i in 2..=slot {
-            j_fact = j_fact * F::from(i).unwrap();
-        }
+        let q_fact = crate::taylor_ops::factorial::<F>(order as usize);
+        let j_fact = crate::taylor_ops::factorial::<F>(slot);
         let mut j_fact_pow = F::one();
         for _ in 0..order {
             j_fact_pow = j_fact_pow * j_fact;
@@ -244,6 +238,9 @@ fn extraction_prefactor<F: Float>(slot_assignments: &[(usize, u8)]) -> F {
     // from any earlier `inf * 1` multiply.
     let mut log_pref = F::zero();
     for &(slot, order) in slot_assignments {
+        // Summed as Σ ln(i), NOT ln(factorial(...)): the product form is what
+        // just overflowed, and routing through one ln would trade the sum's
+        // sub-ULP error for the product's saturation.
         for i in 2..=(order as usize) {
             log_pref = log_pref + F::from(i).unwrap().ln();
         }
@@ -299,7 +296,12 @@ pub struct JetPlan<F> {
     multi_indices: Vec<MultiIndex>,
 }
 
-/// First primes for slot assignment.
+/// Slot values for pushforward packing. The packed output index is the
+/// linear combination `k = Σ slot_t · order_t`; prime slots make accidental
+/// equality of two different packings unlikely. `try_slots` verifies
+/// collision freedom exactly (returning `Err` on a clash), and its caller's
+/// retry loop bumps the prime-window offset until a collision-free window
+/// is found.
 const PRIMES: [usize; 20] = [
     2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
 ];
@@ -409,11 +411,11 @@ fn plan_group<F: Float>(
             let input_coeffs: Vec<(usize, usize, F)> = var_slot
                 .iter()
                 .map(|&(var, slot)| {
-                    let mut factorial = F::one();
-                    for i in 2..=slot {
-                        factorial = factorial * F::from(i).unwrap();
-                    }
-                    (var, slot, F::one() / factorial)
+                    (
+                        var,
+                        slot,
+                        F::one() / crate::taylor_ops::factorial::<F>(slot),
+                    )
                 })
                 .collect();
 
@@ -425,11 +427,12 @@ fn plan_group<F: Float>(
         }
     }
 
-    panic!(
-        "failed to find collision-free slot assignment for active vars {:?}",
-        active_var_set
-    );
+    panic!("failed to find collision-free slot assignment for active vars {active_var_set:?}");
 }
+
+/// One planned group: its active variable set and the (index, multi-index)
+/// pairs that share it.
+type GroupEntry<'a> = (Vec<usize>, Vec<(usize, &'a MultiIndex)>);
 
 impl<F: Float> JetPlan<F> {
     /// Plan jet evaluation for a set of multi-indices.
@@ -458,7 +461,6 @@ impl<F: Float> JetPlan<F> {
         }
 
         // Group multi-indices by their active variable set
-        type GroupEntry<'a> = (Vec<usize>, Vec<(usize, &'a MultiIndex)>);
         let mut group_map: Vec<GroupEntry<'_>> = Vec::new();
 
         for (i, mi) in multi_indices.iter().enumerate() {
@@ -491,12 +493,6 @@ impl<F: Float> JetPlan<F> {
     #[must_use]
     pub fn jet_order(&self) -> usize {
         self.max_jet_order
-    }
-
-    /// The multi-indices this plan computes, in order.
-    #[must_use]
-    pub fn multi_indices(&self) -> Vec<MultiIndex> {
-        self.multi_indices.clone()
     }
 }
 
@@ -545,28 +541,18 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
     let num_results = plan.multi_indices.len();
     let mut derivatives = vec![F::zero(); num_results];
     // `value` is overwritten by the first non-empty group's pushforward.
-    // For the degenerate empty-plan case (no groups), zero is a defensible
-    // default — the previous `Σx[i]` placeholder looked plausible but
-    // silently returned the sum of inputs if the plan had no groups,
-    // which is a latent wrong-answer hazard.
+    // For the degenerate empty-plan case (no groups), zero is the deliberate
+    // default. Do not substitute `Σx[i]` or similar: anything derived from
+    // the inputs looks plausible but silently returns a wrong answer when a
+    // plan has no groups.
     let mut value = F::zero();
 
     for group in &plan.groups {
         let _guard = TaylorDynGuard::<F>::new(group.jet_order);
 
         // Build inputs: only set slot coefficients for this group's active variables
-        let inputs: Vec<TaylorDyn<F>> = (0..n)
-            .map(|i| {
-                let mut coeffs = vec![F::zero(); group.jet_order];
-                coeffs[0] = x[i];
-                for &(var, slot, inv_fact) in &group.input_coeffs {
-                    if var == i && slot < group.jet_order {
-                        coeffs[slot] = inv_fact;
-                    }
-                }
-                TaylorDyn::from_coeffs(&coeffs)
-            })
-            .collect();
+        let inputs =
+            crate::taylor_dyn::seed_taylor_dyn_jets(x, group.jet_order, &group.input_coeffs);
 
         let mut buf = Vec::new();
         tape.forward_tangent(&inputs, &mut buf);
@@ -599,8 +585,7 @@ pub fn eval_dyn<F: Float + TaylorArenaLocal>(
 /// When every order in `orders` is zero, the function returns
 /// `(u(x), u(x))` — an all-zero multi-index is the identity operator, so
 /// the "derivative" is just `u(x)` itself. This is the mathematically
-/// correct answer and not an error. An earlier version of this docstring
-/// claimed a panic; no such panic exists.
+/// correct answer and not an error.
 ///
 /// # Panics
 ///
@@ -625,14 +610,8 @@ pub fn mixed_partial<F: Float + TaylorArenaLocal>(
     );
     if orders.is_empty() {
         // Zero-input (constant) tape: the empty multi-index is the
-        // zeroth-derivative operator, and ∂⁰f = f. Recover the primal with
-        // an empty forward pass and return it in both slots.
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let value = values_buf
-            .get(tape.output_index())
-            .copied()
-            .unwrap_or_else(F::zero);
+        // zeroth-derivative operator, and ∂⁰f = f — the primal in both slots.
+        let value = tape.constant_output_value();
         return (value, value);
     }
     let mi = MultiIndex::new(orders);
@@ -647,9 +626,11 @@ pub fn mixed_partial<F: Float + TaylorArenaLocal>(
 /// - `gradient[i]` = `∂u/∂x_i`
 /// - `hessian[i][j]` = `∂²u/(∂x_i ∂x_j)`
 ///
-/// Each derivative requires its own pushforward group, so this performs
-/// `n + n*(n+1)/2` forward passes. For large n, consider using
-/// `tape.hessian()` instead.
+/// `JetPlan` groups multi-indices by active-variable set, so the `n`
+/// first-order partials share the `n` singleton groups with the diagonal
+/// second-order partials: `n(n+1)/2` forward passes total (`n` singletons
+/// plus `C(n,2)` pairs). For large n, consider using `tape.hessian()`
+/// instead.
 ///
 /// # Panics
 ///
@@ -670,13 +651,7 @@ pub fn hessian<F: Float + TaylorArenaLocal>(
     // Hessian — matching `BytecodeTape::hessian` — instead of panicking in
     // `JetPlan::plan`, which rejects the empty multi-index list this would build.
     if n == 0 {
-        let mut values_buf = Vec::new();
-        tape.forward_into(&[], &mut values_buf);
-        let value = values_buf
-            .get(tape.output_index())
-            .copied()
-            .unwrap_or_else(F::zero);
-        return (value, Vec::new(), Vec::new());
+        return (tape.constant_output_value(), Vec::new(), Vec::new());
     }
 
     let mut indices = Vec::with_capacity(n + n * (n + 1) / 2);
@@ -798,7 +773,7 @@ impl<F: Float> DiffOp<F> {
     /// Expands to `Σ_j ∂⁴/∂x_j⁴ + 2 Σ_{j<k} ∂⁴/(∂x_j² ∂x_k²)`.
     ///
     /// For n=1, equivalent to `diagonal(1, 4)`. For n≥2, includes cross terms.
-    /// Evaluation via [`eval`] uses exact jet arithmetic. Stochastic estimation
+    /// Evaluation via [`DiffOp::eval`] uses exact jet arithmetic. Stochastic estimation
     /// via `stde_sparse` requires importance sampling (full deterministic sampling
     /// is biased when coefficients are non-uniform).
     /// # Panics
@@ -939,7 +914,7 @@ impl<F: Float + TaylorArenaLocal> DiffOp<F> {
             cumulative = cumulative + abs_c;
 
             // Use plan_group to get collision-free slot assignments
-            let active_set = mi.active_vars().iter().map(|&(v, _)| v).collect::<Vec<_>>();
+            let active_set = mi.active_var_set();
             let group = plan_group::<F>(&active_set, &[(0, mi)]);
 
             // There should be exactly one extraction
@@ -996,7 +971,7 @@ struct SparseJetEntry<F> {
     sign: F,
 }
 
-/// Read-only view of a [`SparseJetEntry`] for use by [`stde_sparse`](crate::stde::stde_sparse).
+/// Read-only view of a `SparseJetEntry` for use by [`stde_sparse`](crate::stde::stde_sparse).
 pub struct SparseJetEntryRef<'a, F> {
     entry: &'a SparseJetEntry<F>,
 }
@@ -1033,18 +1008,13 @@ impl<F: Float> SparseSamplingDistribution<F> {
     /// Caller generates the uniform variate (no `rand` dependency).
     pub fn sample_index(&self, uniform_01: F) -> usize {
         let target = uniform_01 * self.total_weight;
-        // Binary search on cumulative weights
-        let mut lo = 0;
-        let mut hi = self.entries.len();
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.entries[mid].cumulative_weight <= target {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo.min(self.entries.len() - 1)
+        // Inverse-CDF lookup: cumulative weights are nondecreasing, so the
+        // first entry whose cumulative weight exceeds `target` is the sample;
+        // the clamp absorbs u == 1 (and any float spill past the last bin).
+        let idx = self
+            .entries
+            .partition_point(|e| e.cumulative_weight <= target);
+        idx.min(self.entries.len() - 1)
     }
 
     /// The normalization constant `Z = Σ|C_α|`.

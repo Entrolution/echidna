@@ -33,21 +33,297 @@ impl<F: Float> From<F> for Dual<F> {
     }
 }
 
+/// Emits the elementary-function methods whose bodies are identical for
+/// [`Dual`] and [`DualVec`](crate::dual_vec::DualVec): every rule that
+/// funnels through the type's `chain` (only `chain` itself differs — a
+/// scalar tangent versus per-lane tangents), plus the constant-result step
+/// functions and the pass-through `fract`/`max`/`min`. Keeping one body
+/// per rule removes the two-copies-in-sync hazard this file previously
+/// managed by hand. The ops that touch the tangent container directly
+/// (`powf`, `atan2`, `mul_add`, `hypot`) genuinely differ per lane and
+/// stay hand-written in each type.
+macro_rules! forward_elementary_methods {
+    () => {
+        /// Reciprocal (1/x).
+        #[inline]
+        pub fn recip(self) -> Self {
+            // d/dx (1/x) = -1/x². At x = 0 the derivative is unbounded; `chain`'s
+            // structural-zero short-circuit keeps a constant input's tangent at
+            // exactly 0, while a live tangent keeps the Inf.
+            let inv = F::one() / self.re;
+            self.chain(inv, -inv * inv)
+        }
+
+        /// Square root.
+        #[inline]
+        pub fn sqrt(self) -> Self {
+            let s = self.re.sqrt();
+            let two = F::one() + F::one();
+            self.chain(s, F::one() / (two * s))
+        }
+
+        /// Cube root.
+        #[inline]
+        pub fn cbrt(self) -> Self {
+            let c = self.re.cbrt();
+            let three = F::from(3.0).unwrap();
+            self.chain(c, F::one() / (three * c * c))
+        }
+
+        /// Integer power.
+        #[inline]
+        pub fn powi(self, n: i32) -> Self {
+            if n == 0 {
+                return Self::constant(F::one());
+            }
+            let val = self.re.powi(n);
+            let deriv = if n == i32::MIN {
+                // n - 1 would overflow i32; use x^n / x to avoid precision loss
+                // from converting n-1 to float (which rounds for f32)
+                F::from(n).unwrap() * val / self.re
+            } else {
+                F::from(n).unwrap() * self.re.powi(n - 1)
+            };
+            self.chain(val, deriv)
+        }
+
+        /// Natural exponential (e^x).
+        #[inline]
+        pub fn exp(self) -> Self {
+            let e = self.re.exp();
+            self.chain(e, e)
+        }
+
+        /// Base-2 exponential (2^x).
+        #[inline]
+        pub fn exp2(self) -> Self {
+            let e = self.re.exp2();
+            self.chain(e, e * F::LN_2())
+        }
+
+        /// e^x - 1, accurate near zero.
+        #[inline]
+        pub fn exp_m1(self) -> Self {
+            self.chain(self.re.exp_m1(), self.re.exp())
+        }
+
+        /// Natural logarithm.
+        #[inline]
+        pub fn ln(self) -> Self {
+            self.chain(self.re.ln(), crate::kernels::ln_deriv(self.re))
+        }
+
+        /// Base-2 logarithm.
+        #[inline]
+        pub fn log2(self) -> Self {
+            self.chain(self.re.log2(), crate::kernels::log2_deriv(self.re))
+        }
+
+        /// Base-10 logarithm.
+        #[inline]
+        pub fn log10(self) -> Self {
+            self.chain(self.re.log10(), crate::kernels::log10_deriv(self.re))
+        }
+
+        /// ln(1+x), accurate near zero.
+        #[inline]
+        pub fn ln_1p(self) -> Self {
+            self.chain(self.re.ln_1p(), crate::kernels::ln_1p_deriv(self.re))
+        }
+
+        /// Logarithm with given base.
+        #[inline]
+        pub fn log(self, base: Self) -> Self {
+            self.ln() / base.ln()
+        }
+
+        /// Sine.
+        #[inline]
+        pub fn sin(self) -> Self {
+            self.chain(self.re.sin(), self.re.cos())
+        }
+
+        /// Cosine.
+        #[inline]
+        pub fn cos(self) -> Self {
+            self.chain(self.re.cos(), -self.re.sin())
+        }
+
+        /// Tangent.
+        #[inline]
+        pub fn tan(self) -> Self {
+            let c = self.re.cos();
+            self.chain(self.re.tan(), F::one() / (c * c))
+        }
+
+        /// Simultaneous sine and cosine.
+        #[inline]
+        pub fn sin_cos(self) -> (Self, Self) {
+            // Delegate to `chain` so the structural-zero tangent convention
+            // cannot drift from `sin`/`cos`.
+            let (s, c) = self.re.sin_cos();
+            (self.chain(s, c), self.chain(c, -s))
+        }
+
+        /// Arcsine.
+        #[inline]
+        pub fn asin(self) -> Self {
+            self.chain(
+                self.re.asin(),
+                F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
+            )
+        }
+
+        /// Arccosine.
+        #[inline]
+        pub fn acos(self) -> Self {
+            self.chain(
+                self.re.acos(),
+                -F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
+            )
+        }
+
+        /// Arctangent.
+        #[inline]
+        pub fn atan(self) -> Self {
+            self.chain(self.re.atan(), crate::kernels::atan_deriv(self.re))
+        }
+
+        /// Hyperbolic sine.
+        #[inline]
+        pub fn sinh(self) -> Self {
+            self.chain(self.re.sinh(), self.re.cosh())
+        }
+
+        /// Hyperbolic cosine.
+        #[inline]
+        pub fn cosh(self) -> Self {
+            self.chain(self.re.cosh(), self.re.sinh())
+        }
+
+        /// Hyperbolic tangent.
+        #[inline]
+        pub fn tanh(self) -> Self {
+            let c = self.re.cosh();
+            self.chain(self.re.tanh(), F::one() / (c * c))
+        }
+
+        /// Inverse hyperbolic sine.
+        #[inline]
+        pub fn asinh(self) -> Self {
+            self.chain(self.re.asinh(), crate::kernels::asinh_deriv(self.re))
+        }
+
+        /// Inverse hyperbolic cosine.
+        #[inline]
+        pub fn acosh(self) -> Self {
+            self.chain(self.re.acosh(), crate::kernels::acosh_deriv(self.re))
+        }
+
+        /// Inverse hyperbolic tangent.
+        #[inline]
+        pub fn atanh(self) -> Self {
+            self.chain(self.re.atanh(), crate::kernels::atanh_deriv(self.re))
+        }
+
+        /// Absolute value.
+        ///
+        /// The derivative delegates to [`crate::kernels::abs_deriv`]: `0` at the kink `x = 0`
+        /// (the minimal-norm subgradient, value-based so `+0` and `-0` agree), `sign(x)`
+        /// elsewhere, `NaN` at `NaN`. This convention is unified across every AD mode
+        /// and both GPU backends; sharp/limiting subgradients still force `±1` via the
+        /// nonsmooth machinery.
+        #[inline]
+        pub fn abs(self) -> Self {
+            self.chain(self.re.abs(), crate::kernels::abs_deriv(self.re))
+        }
+
+        /// Sign function (zero derivative).
+        #[inline]
+        pub fn signum(self) -> Self {
+            Self::constant(self.re.signum())
+        }
+
+        /// Floor (zero derivative).
+        #[inline]
+        pub fn floor(self) -> Self {
+            Self::constant(self.re.floor())
+        }
+
+        /// Ceiling (zero derivative).
+        #[inline]
+        pub fn ceil(self) -> Self {
+            Self::constant(self.re.ceil())
+        }
+
+        /// Round to nearest integer (zero derivative).
+        #[inline]
+        pub fn round(self) -> Self {
+            Self::constant(self.re.round())
+        }
+
+        /// Truncate toward zero (zero derivative).
+        #[inline]
+        pub fn trunc(self) -> Self {
+            Self::constant(self.re.trunc())
+        }
+
+        /// Fractional part.
+        #[inline]
+        pub fn fract(self) -> Self {
+            Self {
+                re: self.re.fract(),
+                eps: self.eps,
+            }
+        }
+
+        /// Maximum of two values.
+        ///
+        /// Matches `num_traits::Float::max` semantics: returns the non-NaN argument.
+        /// At tie points, returns `self` (standard AD convention for non-differentiable points).
+        #[inline]
+        pub fn max(self, other: Self) -> Self {
+            if self.re >= other.re || other.re.is_nan() {
+                self
+            } else {
+                other
+            }
+        }
+
+        /// Minimum of two values.
+        ///
+        /// Matches `num_traits::Float::min` semantics: returns the non-NaN argument.
+        /// At tie points, returns `self` (standard AD convention for non-differentiable points).
+        #[inline]
+        pub fn min(self, other: Self) -> Self {
+            if self.re <= other.re || other.re.is_nan() {
+                self
+            } else {
+                other
+            }
+        }
+    };
+}
+pub(crate) use forward_elementary_methods;
+
 impl<F: Float> Dual<F> {
     /// Create a new dual number.
     #[inline]
+    #[must_use]
     pub fn new(re: F, eps: F) -> Self {
         Dual { re, eps }
     }
 
     /// Create a constant (zero derivative).
     #[inline]
+    #[must_use]
     pub fn constant(re: F) -> Self {
         Dual { re, eps: F::zero() }
     }
 
     /// Create a variable (unit derivative) for differentiation.
     #[inline]
+    #[must_use]
     pub fn variable(re: F) -> Self {
         Dual { re, eps: F::one() }
     }
@@ -73,53 +349,9 @@ impl<F: Float> Dual<F> {
         Dual { re: f_val, eps }
     }
 
+    forward_elementary_methods!();
+
     // ── Powers ──
-
-    /// Reciprocal (1/x).
-    #[inline]
-    pub fn recip(self) -> Self {
-        // d/dx (1/x) = -1/x². At x = 0 the derivative is unbounded; `chain`'s
-        // structural-zero short-circuit keeps a constant input's tangent at
-        // exactly 0, while a live tangent keeps the Inf.
-        let inv = F::one() / self.re;
-        self.chain(inv, -inv * inv)
-    }
-
-    /// Square root.
-    #[inline]
-    pub fn sqrt(self) -> Self {
-        let s = self.re.sqrt();
-        let two = F::one() + F::one();
-        self.chain(s, F::one() / (two * s))
-    }
-
-    /// Cube root.
-    #[inline]
-    pub fn cbrt(self) -> Self {
-        let c = self.re.cbrt();
-        let three = F::from(3.0).unwrap();
-        self.chain(c, F::one() / (three * c * c))
-    }
-
-    /// Integer power.
-    #[inline]
-    pub fn powi(self, n: i32) -> Self {
-        if n == 0 {
-            return Dual {
-                re: F::one(),
-                eps: F::zero(),
-            };
-        }
-        let val = self.re.powi(n);
-        let deriv = if n == i32::MIN {
-            // n - 1 would overflow i32; use x^n / x to avoid precision loss
-            // from converting n-1 to float (which rounds for f32)
-            F::from(n).unwrap() * val / self.re
-        } else {
-            F::from(n).unwrap() * self.re.powi(n - 1)
-        };
-        self.chain(val, deriv)
-    }
 
     /// Floating-point power.
     #[inline]
@@ -188,111 +420,7 @@ impl<F: Float> Dual<F> {
         }
     }
 
-    // ── Exp/Log ──
-
-    /// Natural exponential (e^x).
-    #[inline]
-    pub fn exp(self) -> Self {
-        let e = self.re.exp();
-        self.chain(e, e)
-    }
-
-    /// Base-2 exponential (2^x).
-    #[inline]
-    pub fn exp2(self) -> Self {
-        let e = self.re.exp2();
-        self.chain(e, e * F::LN_2())
-    }
-
-    /// e^x - 1, accurate near zero.
-    #[inline]
-    pub fn exp_m1(self) -> Self {
-        self.chain(self.re.exp_m1(), self.re.exp())
-    }
-
-    /// Natural logarithm.
-    #[inline]
-    pub fn ln(self) -> Self {
-        self.chain(self.re.ln(), kernels::ln_deriv(self.re))
-    }
-
-    /// Base-2 logarithm.
-    #[inline]
-    pub fn log2(self) -> Self {
-        self.chain(self.re.log2(), kernels::log2_deriv(self.re))
-    }
-
-    /// Base-10 logarithm.
-    #[inline]
-    pub fn log10(self) -> Self {
-        self.chain(self.re.log10(), kernels::log10_deriv(self.re))
-    }
-
-    /// ln(1+x), accurate near zero.
-    #[inline]
-    pub fn ln_1p(self) -> Self {
-        self.chain(self.re.ln_1p(), kernels::ln_1p_deriv(self.re))
-    }
-
-    /// Logarithm with given base.
-    #[inline]
-    pub fn log(self, base: Self) -> Self {
-        self.ln() / base.ln()
-    }
-
     // ── Trig ──
-
-    /// Sine.
-    #[inline]
-    pub fn sin(self) -> Self {
-        self.chain(self.re.sin(), self.re.cos())
-    }
-
-    /// Cosine.
-    #[inline]
-    pub fn cos(self) -> Self {
-        self.chain(self.re.cos(), -self.re.sin())
-    }
-
-    /// Tangent.
-    #[inline]
-    pub fn tan(self) -> Self {
-        let c = self.re.cos();
-        self.chain(self.re.tan(), F::one() / (c * c))
-    }
-
-    /// Simultaneous sine and cosine.
-    #[inline]
-    pub fn sin_cos(self) -> (Self, Self) {
-        // Delegate to `chain` so the structural-zero tangent convention
-        // cannot drift from `sin`/`cos`.
-        let (s, c) = self.re.sin_cos();
-        (self.chain(s, c), self.chain(c, -s))
-    }
-
-    /// Arcsine.
-    #[inline]
-    pub fn asin(self) -> Self {
-        self.chain(
-            self.re.asin(),
-            F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
-        )
-    }
-
-    /// Arccosine.
-    #[inline]
-    pub fn acos(self) -> Self {
-        self.chain(
-            self.re.acos(),
-            -F::one() / ((F::one() - self.re) * (F::one() + self.re)).sqrt(),
-        )
-    }
-
-    /// Arctangent.
-    #[inline]
-    pub fn atan(self) -> Self {
-        self.chain(self.re.atan(), kernels::atan_deriv(self.re))
-    }
 
     /// Two-argument arctangent.
     #[inline]
@@ -304,112 +432,7 @@ impl<F: Float> Dual<F> {
         }
     }
 
-    // ── Hyperbolic ──
-
-    /// Hyperbolic sine.
-    #[inline]
-    pub fn sinh(self) -> Self {
-        self.chain(self.re.sinh(), self.re.cosh())
-    }
-
-    /// Hyperbolic cosine.
-    #[inline]
-    pub fn cosh(self) -> Self {
-        self.chain(self.re.cosh(), self.re.sinh())
-    }
-
-    /// Hyperbolic tangent.
-    #[inline]
-    pub fn tanh(self) -> Self {
-        let c = self.re.cosh();
-        self.chain(self.re.tanh(), F::one() / (c * c))
-    }
-
-    /// Inverse hyperbolic sine.
-    #[inline]
-    pub fn asinh(self) -> Self {
-        self.chain(self.re.asinh(), kernels::asinh_deriv(self.re))
-    }
-
-    /// Inverse hyperbolic cosine.
-    #[inline]
-    pub fn acosh(self) -> Self {
-        self.chain(self.re.acosh(), kernels::acosh_deriv(self.re))
-    }
-
-    /// Inverse hyperbolic tangent.
-    #[inline]
-    pub fn atanh(self) -> Self {
-        self.chain(self.re.atanh(), kernels::atanh_deriv(self.re))
-    }
-
     // ── Misc ──
-
-    /// Absolute value.
-    ///
-    /// The derivative delegates to [`kernels::abs_deriv`]: `0` at the kink `x = 0`
-    /// (the minimal-norm subgradient, value-based so `+0` and `-0` agree), `sign(x)`
-    /// elsewhere, `NaN` at `NaN`. This convention is unified across every AD mode
-    /// and both GPU backends; sharp/limiting subgradients still force `±1` via the
-    /// nonsmooth machinery.
-    #[inline]
-    pub fn abs(self) -> Self {
-        self.chain(self.re.abs(), kernels::abs_deriv(self.re))
-    }
-
-    /// Sign function (zero derivative).
-    #[inline]
-    pub fn signum(self) -> Self {
-        Dual {
-            re: self.re.signum(),
-            eps: F::zero(),
-        }
-    }
-
-    /// Floor (zero derivative).
-    #[inline]
-    pub fn floor(self) -> Self {
-        Dual {
-            re: self.re.floor(),
-            eps: F::zero(),
-        }
-    }
-
-    /// Ceiling (zero derivative).
-    #[inline]
-    pub fn ceil(self) -> Self {
-        Dual {
-            re: self.re.ceil(),
-            eps: F::zero(),
-        }
-    }
-
-    /// Round to nearest integer (zero derivative).
-    #[inline]
-    pub fn round(self) -> Self {
-        Dual {
-            re: self.re.round(),
-            eps: F::zero(),
-        }
-    }
-
-    /// Truncate toward zero (zero derivative).
-    #[inline]
-    pub fn trunc(self) -> Self {
-        Dual {
-            re: self.re.trunc(),
-            eps: F::zero(),
-        }
-    }
-
-    /// Fractional part.
-    #[inline]
-    pub fn fract(self) -> Self {
-        Dual {
-            re: self.re.fract(),
-            eps: self.eps,
-        }
-    }
 
     /// Fused multiply-add: self * a + b.
     #[inline]
@@ -430,41 +453,12 @@ impl<F: Float> Dual<F> {
             // NaN if `self.eps` or `other.eps` is non-finite. Mirror
             // `Dual::recip`'s explicit short-circuit to preserve the
             // bit-for-bit zero-eps convention.
-            return Dual {
-                re: h,
-                eps: F::zero(),
-            };
+            return Self::constant(h);
         }
         let (da, db) = kernels::hypot_partials(self.re, other.re, h);
         Dual {
             re: h,
             eps: da * self.eps + db * other.eps,
-        }
-    }
-
-    /// Maximum of two values.
-    ///
-    /// Matches `num_traits::Float::max` semantics: returns the non-NaN argument.
-    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
-    #[inline]
-    pub fn max(self, other: Self) -> Self {
-        if self.re >= other.re || other.re.is_nan() {
-            self
-        } else {
-            other
-        }
-    }
-
-    /// Minimum of two values.
-    ///
-    /// Matches `num_traits::Float::min` semantics: returns the non-NaN argument.
-    /// At tie points, returns `self` (standard AD convention for non-differentiable points).
-    #[inline]
-    pub fn min(self, other: Self) -> Self {
-        if self.re <= other.re || other.re.is_nan() {
-            self
-        } else {
-            other
         }
     }
 }

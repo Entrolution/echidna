@@ -1,5 +1,21 @@
 //! GPU acceleration for batched tape evaluation.
 //!
+//! ```no_run
+//! # #[cfg(feature = "gpu-wgpu")] {
+//! use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
+//!
+//! let ctx = WgpuContext::new().expect("no wgpu adapter available");
+//! let (tape, _) = echidna::record(|x| x[0] * x[0] + x[1], &[3.0_f64, 4.0]);
+//! let data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+//! let bufs = ctx.upload_tape(&data);
+//!
+//! // 3 evaluation points in one dispatch.
+//! let inputs: Vec<f32> = vec![3.0, 4.0, 1.0, 2.0, 0.5, 0.5];
+//! let outputs = ctx.forward_batch(&bufs, &inputs, 3).unwrap();
+//! assert_eq!(outputs.len(), 3);
+//! # }
+//! ```
+//!
 //! Provides two backends:
 //! - **wgpu** (`gpu-wgpu` feature): cross-platform (Metal, Vulkan, DX12), f32 only
 //! - **CUDA** (`gpu-cuda` feature): NVIDIA only, f32 + f64
@@ -33,7 +49,8 @@
 //! - [`stde_gpu::laplacian_with_control_gpu`] — variance-reduced Laplacian with diagonal control variate
 //!
 //! The Taylor kernel propagates `(c0, c1, c2)` triples through the tape for
-//! each batch element, where c2 = v^T H v / 2. All 44 opcodes are supported.
+//! each batch element, where c2 = v^T H v / 2. 43 of the 44 opcodes are
+//! supported; `Custom` is rejected at tape upload (`CustomOpsNotSupported`).
 
 use crate::bytecode_tape::BytecodeTape;
 use crate::opcode::OpCode;
@@ -223,6 +240,24 @@ pub struct TaylorBatchResult<F> {
     pub c2s: Vec<F>,
 }
 
+/// Split a flat `[c0..c_{K-1}]`-per-output jet buffer into one `Vec` per
+/// coefficient order. Shared by both backends' Taylor readbacks — the index
+/// arithmetic must stay identical or coefficients silently mis-map.
+#[cfg(feature = "stde")]
+pub(crate) fn deinterleave_coefficients<T: Copy>(
+    raw: &[T],
+    total_out: usize,
+    order: usize,
+) -> Vec<Vec<T>> {
+    let mut coefficients: Vec<Vec<T>> = (0..order).map(|_| Vec::with_capacity(total_out)).collect();
+    for i in 0..total_out {
+        for (c, coeff) in coefficients.iter_mut().enumerate() {
+            coeff.push(raw[i * order + c]);
+        }
+    }
+    coefficients
+}
+
 /// Result of a batched K-th order Taylor forward propagation.
 ///
 /// `coefficients[k]` has `batch_size * num_outputs` elements for coefficient index k.
@@ -370,20 +405,70 @@ impl GpuTapeData {
         const OP_POWI: u32 = 16;
         const OP_FRACT: u32 = 42;
         const UNUSED: u32 = u32::MAX;
-        // These mirror `OpCode`'s discriminants (as do the OP_* tables in
-        // the WGSL/CUDA kernels). Inserting an opcode mid-enum shifts every
-        // later discriminant; fail the build rather than misclassify.
-        // Neg (12) pins that 2..=11 is exactly the binary range, and
-        // Custom (43) that `> OP_FRACT` rejects exactly Custom and beyond.
-        const _: () = assert!(
-            OpCode::Input as u32 == OP_INPUT
-                && OpCode::Const as u32 == OP_CONST
-                && OpCode::Add as u32 == OP_ADD
-                && OpCode::Min as u32 == OP_MIN
-                && OpCode::Neg as u32 == OP_MIN + 1
-                && OpCode::Powi as u32 == OP_POWI
-                && OpCode::Fract as u32 == OP_FRACT
-                && OpCode::Custom as u32 == OP_FRACT + 1
+        // Pin every `OpCode` discriminant. The classification ranges below
+        // and the OP_* tables mirrored in the static WGSL/CUDA kernels and
+        // the generated tables in `taylor_codegen.rs` all hardcode these
+        // values with no compile-time tie to the enum; the per-variant
+        // asserts fail the build on any reorder (including count-preserving
+        // swaps), and the exhaustive match forces a new variant to be
+        // pinned here before it can ship.
+        macro_rules! pin_opcodes {
+            ($($variant:ident = $disc:literal),* $(,)?) => {
+                const _: () = {
+                    const fn pin(op: OpCode) -> u32 {
+                        match op {
+                            $(OpCode::$variant => $disc,)*
+                        }
+                    }
+                    $(assert!(pin(OpCode::$variant) == OpCode::$variant as u32);)*
+                };
+            };
+        }
+        pin_opcodes!(
+            Input = 0,
+            Const = 1,
+            Add = 2,
+            Sub = 3,
+            Mul = 4,
+            Div = 5,
+            Rem = 6,
+            Powf = 7,
+            Atan2 = 8,
+            Hypot = 9,
+            Max = 10,
+            Min = 11,
+            Neg = 12,
+            Recip = 13,
+            Sqrt = 14,
+            Cbrt = 15,
+            Powi = 16,
+            Exp = 17,
+            Exp2 = 18,
+            ExpM1 = 19,
+            Ln = 20,
+            Log2 = 21,
+            Log10 = 22,
+            Ln1p = 23,
+            Sin = 24,
+            Cos = 25,
+            Tan = 26,
+            Asin = 27,
+            Acos = 28,
+            Atan = 29,
+            Sinh = 30,
+            Cosh = 31,
+            Tanh = 32,
+            Asinh = 33,
+            Acosh = 34,
+            Atanh = 35,
+            Abs = 36,
+            Signum = 37,
+            Floor = 38,
+            Ceil = 39,
+            Round = 40,
+            Trunc = 41,
+            Fract = 42,
+            Custom = 43,
         );
 
         let n = self.num_ops as usize;

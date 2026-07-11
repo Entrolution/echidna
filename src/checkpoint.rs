@@ -1,5 +1,17 @@
 //! Compositional gradient checkpointing for iterative computations.
 //!
+//! ```
+//! use echidna::BReverse;
+//! use echidna::checkpoint::grad_checkpointed;
+//!
+//! // State evolves by squaring the entry; the loss reads it out. The
+//! // gradient of loss(step^3(x0)) at x0 = 2 is d(x^8)/dx = 8·x^7 = 1024.
+//! let step = |state: &[BReverse<f64>]| vec![state[0] * state[0]];
+//! let loss = |state: &[BReverse<f64>]| state[0];
+//! let g = grad_checkpointed(step, loss, &[2.0_f64], 3, 2);
+//! assert!((g[0] - 1024.0).abs() < 1e-9);
+//! ```
+//!
 //! Splits the forward sweep into segments bounded by stored checkpoints,
 //! spread evenly so peak backward memory stays at roughly
 //! `num_steps / num_checkpoints` states while each segment is recomputed
@@ -63,11 +75,10 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
 
     // Handle edge case: 0 steps means gradient of loss(x0) directly.
     if num_steps == 0 {
-        let (mut tape, _) = crate::api::record(loss, x0);
-        return tape.gradient(x0);
+        return loss_gradient(loss, x0);
     }
 
-    let num_checkpoints = num_checkpoints.max(1).min(num_steps);
+    let num_checkpoints = num_checkpoints.clamp(1, num_steps);
 
     // Stored positions are spread evenly so the largest reverse segment —
     // and with it peak backward memory, since `backward_from_checkpoints`
@@ -78,35 +89,14 @@ pub fn grad_checkpointed<F: Float + BtapeThreadLocal>(
     let checkpoint_positions: HashSet<usize> = all_positions.into_iter().collect();
 
     // -- Forward pass: run all steps, saving at most num_checkpoints states --
-    let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::with_capacity(num_checkpoints + 1);
-    // SPEC: InitialStateStored — (step 0, x0) is always the first stored checkpoint.
-    checkpoints.push((0, x0.to_vec()));
-
-    let mut current_state = x0.to_vec();
-    for s in 0..num_steps {
-        current_state = step_forward_primal(&step, &current_state);
-        assert_eq!(
-            current_state.len(),
-            dim,
-            "step must preserve dimension: expected {}, got {}",
-            dim,
-            current_state.len()
-        );
-
-        let next_step = s + 1;
-        // SPEC: PositionRangeInvariant — only step indices in `[1, num_steps)` are stored.
-        if next_step < num_steps && checkpoint_positions.contains(&next_step) {
-            checkpoints.push((next_step, current_state.clone()));
-        }
-    }
-
-    let final_state = current_state;
+    let (final_state, checkpoints) =
+        forward_collect(&step, x0, num_steps, dim, &checkpoint_positions);
 
     backward_from_checkpoints(&step, loss, &final_state, &checkpoints, num_steps)
 }
 
 // ══════════════════════════════════════════════
-//  Online checkpointing (R9a)
+//  Online checkpointing
 // ══════════════════════════════════════════════
 
 /// Compute gradients through an iterative computation with unknown step count.
@@ -144,16 +134,14 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 ) -> Vec<F> {
     assert!(
         num_checkpoints >= 2,
-        "online checkpointing requires at least 2 checkpoint slots, got {}",
-        num_checkpoints,
+        "online checkpointing requires at least 2 checkpoint slots, got {num_checkpoints}"
     );
 
     let dim = x0.len();
 
     // Edge case: stop at step 0 means gradient of loss(x0) directly.
     if stop(x0, 0) {
-        let (mut tape, _) = crate::api::record(loss, x0);
-        return tape.gradient(x0);
+        return loss_gradient(loss, x0);
     }
 
     // Checkpoint buffer: buffer[0] is always (0, x0), pinned during thinning.
@@ -210,7 +198,7 @@ pub fn grad_checkpointed_online<F: Float + BtapeThreadLocal>(
 }
 
 // ══════════════════════════════════════════════
-//  Checkpoint placement hints (R9c)
+//  Checkpoint placement hints
 // ══════════════════════════════════════════════
 
 /// Compute gradients with user-specified required checkpoint positions.
@@ -245,11 +233,10 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
     let dim = x0.len();
 
     if num_steps == 0 {
-        let (mut tape, _) = crate::api::record(loss, x0);
-        return tape.gradient(x0);
+        return loss_gradient(loss, x0);
     }
 
-    let num_checkpoints = num_checkpoints.max(1).min(num_steps);
+    let num_checkpoints = num_checkpoints.clamp(1, num_steps);
 
     // Filter, sort, dedup required positions to valid range [1, num_steps-1].
     let mut required: Vec<usize> = required_positions
@@ -300,27 +287,7 @@ pub fn grad_checkpointed_with_hints<F: Float + BtapeThreadLocal>(
     }
 
     // Forward pass using the merged position set.
-    let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::with_capacity(all_positions.len() + 1);
-    checkpoints.push((0, x0.to_vec()));
-
-    let mut current_state = x0.to_vec();
-    for s in 0..num_steps {
-        current_state = step_forward_primal(&step, &current_state);
-        assert_eq!(
-            current_state.len(),
-            dim,
-            "step must preserve dimension: expected {}, got {}",
-            dim,
-            current_state.len()
-        );
-
-        let next_step = s + 1;
-        if next_step < num_steps && all_positions.contains(&next_step) {
-            checkpoints.push((next_step, current_state.clone()));
-        }
-    }
-
-    let final_state = current_state;
+    let (final_state, checkpoints) = forward_collect(&step, x0, num_steps, dim, &all_positions);
     backward_from_checkpoints(&step, loss, &final_state, &checkpoints, num_steps)
 }
 
@@ -346,7 +313,8 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
                 (i, exact - alloc[i] as f64)
             })
             .collect();
-        remainders.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        // Descending remainder; finite by construction (weight_sum > 0).
+        remainders.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         for (idx, _) in remainders {
             if remaining == 0 {
@@ -361,7 +329,7 @@ fn largest_remainder_alloc(total: usize, weights: &[usize], weight_sum: usize) -
 }
 
 // ══════════════════════════════════════════════
-//  Disk-backed checkpointing (R9b)
+//  Disk-backed checkpointing
 // ══════════════════════════════════════════════
 
 /// Compute gradients using disk-backed checkpointing for large state vectors.
@@ -409,11 +377,10 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
     let dim = x0.len();
 
     if num_steps == 0 {
-        let (mut tape, _) = crate::api::record(loss, x0);
-        return tape.gradient(x0);
+        return loss_gradient(loss, x0);
     }
 
-    let num_checkpoints = num_checkpoints.max(1).min(num_steps);
+    let num_checkpoints = num_checkpoints.clamp(1, num_steps);
 
     // Evenly spread positions bound the largest reverse segment — see
     // `grad_checkpointed`.
@@ -452,7 +419,7 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 
         let next_step = s + 1;
         if next_step < num_steps && checkpoint_positions.contains(&next_step) {
-            let path = run_dir.join(format!("ckpt_{}.bin", next_step));
+            let path = run_dir.join(format!("ckpt_{next_step}.bin"));
             guard.files.push(path.clone());
             write_checkpoint(&current_state, &path);
         }
@@ -460,49 +427,23 @@ pub fn grad_checkpointed_disk<F: Float + BtapeThreadLocal>(
 
     let final_state = current_state;
 
-    // Build checkpoint index: sorted list of (step, path) for reading back.
+    // Build checkpoint index: sorted list of stored steps for reading back.
     // Step 0 is always first.
     let mut ckpt_steps: Vec<usize> = vec![0];
     ckpt_steps.extend(checkpoint_positions.iter().filter(|&p| *p < num_steps));
     ckpt_steps.sort_unstable();
     ckpt_steps.dedup();
 
-    // Loss gradient (seeds the backward pass).
-    let mut adjoint = {
-        let (mut tape, _) = crate::api::record(loss, &final_state);
-        tape.gradient(&final_state)
-    };
-
-    // Backward pass: iterate segments in reverse, reading checkpoints from disk.
-    let num_segments = ckpt_steps.len();
-    for seg in (0..num_segments).rev() {
-        let ckpt_step = ckpt_steps[seg];
-        let seg_end = if seg + 1 < num_segments {
-            ckpt_steps[seg + 1]
-        } else {
-            num_steps
-        };
-
-        let seg_len = seg_end - ckpt_step;
-
-        // Read checkpoint state from disk.
-        let path = run_dir.join(format!("ckpt_{}.bin", ckpt_step));
-        let ckpt_state = read_checkpoint::<F>(&path, dim);
-
-        // Recompute states in this segment from the checkpoint.
-        let mut states: Vec<Vec<F>> = Vec::with_capacity(seg_len + 1);
-        states.push(ckpt_state);
-        let mut s = states[0].clone();
-        for _ in 0..seg_len {
-            s = step_forward_primal(&step, &s);
-            states.push(s.clone());
-        }
-
-        // VJP backward through this segment.
-        for i in (0..seg_len).rev() {
-            adjoint = vjp_step(&step, &states[i], &adjoint);
-        }
-    }
+    // Backward pass, fetching each segment's checkpoint from disk as the
+    // walk reaches it — only one checkpoint is in memory at a time.
+    let adjoint = backward_from_checkpoint_source(
+        &step,
+        loss,
+        &final_state,
+        &ckpt_steps,
+        |seg| read_checkpoint::<F>(&run_dir.join(format!("ckpt_{}.bin", ckpt_steps[seg])), dim),
+        num_steps,
+    );
 
     // Explicit cleanup (guard.drop will also attempt it).
     guard.cleanup();
@@ -589,10 +530,59 @@ impl Drop for DiskCheckpointGuard {
 //  Shared backward pass
 // ══════════════════════════════════════════════
 
+/// Record `loss` at `point` and return its gradient.
+///
+/// The seed of every backward pass, and the whole gradient when there are
+/// no steps to reverse.
+fn loss_gradient<F: Float + BtapeThreadLocal>(
+    loss: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    point: &[F],
+) -> Vec<F> {
+    let (mut tape, _) = crate::api::record(loss, point);
+    tape.gradient(point)
+}
+
+/// Run all forward steps from `x0`, snapshotting the states whose step
+/// index is in `positions`. Returns the final state and the stored
+/// checkpoints, sorted by step index.
+fn forward_collect<F: Float + BtapeThreadLocal>(
+    step: &impl Fn(&[BReverse<F>]) -> Vec<BReverse<F>>,
+    x0: &[F],
+    num_steps: usize,
+    dim: usize,
+    positions: &HashSet<usize>,
+) -> (Vec<F>, Vec<(usize, Vec<F>)>) {
+    let mut checkpoints: Vec<(usize, Vec<F>)> = Vec::with_capacity(positions.len() + 1);
+    // SPEC: InitialStateStored — (step 0, x0) is always the first stored checkpoint.
+    checkpoints.push((0, x0.to_vec()));
+
+    let mut current_state = x0.to_vec();
+    for s in 0..num_steps {
+        current_state = step_forward_primal(step, &current_state);
+        assert_eq!(
+            current_state.len(),
+            dim,
+            "step must preserve dimension: expected {}, got {}",
+            dim,
+            current_state.len()
+        );
+
+        let next_step = s + 1;
+        // SPEC: PositionRangeInvariant — only step indices in `[1, num_steps)` are stored.
+        if next_step < num_steps && positions.contains(&next_step) {
+            checkpoints.push((next_step, current_state.clone()));
+        }
+    }
+
+    (current_state, checkpoints)
+}
+
 /// Compute gradients by seeding the loss and VJP-ing backward through checkpoint segments.
 ///
-/// Shared by all checkpointing variants. Each variant implements its own forward pass
-/// to produce `(final_state, checkpoints)`, then calls this function for the backward pass.
+/// Shared by the in-memory checkpointing variants. Each variant implements
+/// its own forward pass to produce `(final_state, checkpoints)`, then calls
+/// this function for the backward pass; the disk variant goes through
+/// [`backward_from_checkpoint_source`] directly with an on-demand fetch.
 ///
 /// `checkpoints` must be sorted by step index and include step 0 (the initial state).
 fn backward_from_checkpoints<F: Float + BtapeThreadLocal>(
@@ -602,21 +592,44 @@ fn backward_from_checkpoints<F: Float + BtapeThreadLocal>(
     checkpoints: &[(usize, Vec<F>)],
     num_steps: usize,
 ) -> Vec<F> {
+    let steps: Vec<usize> = checkpoints.iter().map(|&(s, _)| s).collect();
+    backward_from_checkpoint_source(
+        step,
+        loss,
+        final_state,
+        &steps,
+        |seg| checkpoints[seg].1.clone(),
+        num_steps,
+    )
+}
+
+/// Backward pass over checkpoint segments with a caller-supplied state source.
+///
+/// `ckpt_steps` holds the stored step indices, sorted and starting with 0;
+/// `fetch(seg)` materializes the state stored for `ckpt_steps[seg]`. The
+/// fetch runs inside the segment loop, so a disk-backed source holds only
+/// one checkpoint in memory at a time.
+fn backward_from_checkpoint_source<F: Float + BtapeThreadLocal>(
+    step: &impl Fn(&[BReverse<F>]) -> Vec<BReverse<F>>,
+    loss: impl FnOnce(&[BReverse<F>]) -> BReverse<F>,
+    final_state: &[F],
+    ckpt_steps: &[usize],
+    mut fetch: impl FnMut(usize) -> Vec<F>,
+    num_steps: usize,
+) -> Vec<F> {
     // Loss gradient (seeds the backward pass).
-    let mut adjoint = {
-        let (mut tape, _) = crate::api::record(loss, final_state);
-        tape.gradient(final_state)
-    };
+    let mut adjoint = loss_gradient(loss, final_state);
 
     // Backward pass: VJP through each segment from checkpoints.
-    // Checkpoints are sorted by step index (inserted in order).
-    // SPEC: CompletenessProperty — every forward step is covered exactly once by the
-    // reverse segment walk `(0..num_segments).rev()`.
-    let num_segments = checkpoints.len();
+    // SPEC: CompletenessProperty — every forward step is covered by the
+    // reverse segment walk `(0..num_segments).rev()` (the invariant asserts
+    // set coverage; the at-most-once half follows structurally from the
+    // segments being contiguous and non-overlapping).
+    let num_segments = ckpt_steps.len();
     for seg in (0..num_segments).rev() {
-        let (ckpt_step, ref ckpt_state) = checkpoints[seg];
+        let ckpt_step = ckpt_steps[seg];
         let seg_end = if seg + 1 < num_segments {
-            checkpoints[seg + 1].0
+            ckpt_steps[seg + 1]
         } else {
             num_steps
         };
@@ -625,8 +638,8 @@ fn backward_from_checkpoints<F: Float + BtapeThreadLocal>(
 
         // Recompute states in this segment from the checkpoint.
         let mut states: Vec<Vec<F>> = Vec::with_capacity(seg_len + 1);
-        states.push(ckpt_state.clone());
-        let mut s = ckpt_state.clone();
+        states.push(fetch(seg));
+        let mut s = states[0].clone();
         for _ in 0..seg_len {
             s = step_forward_primal(step, &s);
             states.push(s.clone());
@@ -780,6 +793,18 @@ fn beta(s: usize, c: usize) -> usize {
     result
 }
 
+/// Build a fresh tape sized for `state` and register the state as inputs.
+///
+/// Shared by `step_forward_primal` and `vjp_step`, so their tape-capacity
+/// heuristic for one `step` invocation cannot drift apart.
+fn tape_with_inputs<F: Float + BtapeThreadLocal>(
+    state: &[F],
+) -> (BytecodeTape<F>, Vec<BReverse<F>>) {
+    let mut tape = BytecodeTape::with_capacity(state.len() * 10);
+    let inputs = tape.new_inputs(state);
+    (tape, inputs)
+}
+
 /// Run one step forward (primal only, no gradient needed for the output).
 ///
 /// Creates a temporary tape because `step` takes `&[BReverse<F>]`.
@@ -787,15 +812,7 @@ fn step_forward_primal<F: Float + BtapeThreadLocal>(
     step: &impl Fn(&[BReverse<F>]) -> Vec<BReverse<F>>,
     state: &[F],
 ) -> Vec<F> {
-    let mut tape = BytecodeTape::with_capacity(state.len() * 10);
-
-    let inputs: Vec<BReverse<F>> = state
-        .iter()
-        .map(|&val| {
-            let idx = tape.new_input(val);
-            BReverse::from_tape_of(&tape, val, idx)
-        })
-        .collect();
+    let (mut tape, inputs) = tape_with_inputs(state);
 
     {
         let _guard = BtapeGuard::new(&mut tape);
@@ -815,15 +832,7 @@ fn vjp_step<F: Float + BtapeThreadLocal>(
     w: &[F],
 ) -> Vec<F> {
     let dim = state.len();
-    let mut tape = BytecodeTape::with_capacity(dim * 10);
-
-    let inputs: Vec<BReverse<F>> = state
-        .iter()
-        .map(|&val| {
-            let idx = tape.new_input(val);
-            BReverse::from_tape_of(&tape, val, idx)
-        })
-        .collect();
+    let (mut tape, inputs) = tape_with_inputs(state);
 
     let scalar_index = {
         let _guard = BtapeGuard::new(&mut tape);

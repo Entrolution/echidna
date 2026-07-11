@@ -188,7 +188,24 @@ impl<F: Float> Tape<F> {
     pub fn reverse(&self, seed_index: u32) -> Vec<F> {
         let mut adjoints = vec![F::zero(); self.num_variables as usize];
         adjoints[seed_index as usize] = F::one();
+        self.reverse_sweep(&mut adjoints);
+        adjoints
+    }
 
+    /// Run the reverse sweep with custom adjoint seeds.
+    pub fn reverse_seeded(&self, seeds: &[(u32, F)]) -> Vec<F> {
+        let mut adjoints = vec![F::zero(); self.num_variables as usize];
+        for &(idx, seed) in seeds {
+            adjoints[idx as usize] = adjoints[idx as usize] + seed;
+        }
+        self.reverse_sweep(&mut adjoints);
+        adjoints
+    }
+
+    /// The multiply-accumulate reverse sweep shared by [`reverse`](Self::reverse)
+    /// and [`reverse_seeded`](Self::reverse_seeded); `adjoints` arrives
+    /// pre-seeded by the caller.
+    fn reverse_sweep(&self, adjoints: &mut [F]) {
         for i in (1..self.statements.len()).rev() {
             let stmt = self.statements[i];
             let a = adjoints[stmt.lhs_index as usize];
@@ -211,36 +228,6 @@ impl<F: Float> Tape<F> {
                 }
             }
         }
-        adjoints
-    }
-
-    /// Run the reverse sweep with custom adjoint seeds.
-    pub fn reverse_seeded(&self, seeds: &[(u32, F)]) -> Vec<F> {
-        let mut adjoints = vec![F::zero(); self.num_variables as usize];
-        for &(idx, seed) in seeds {
-            adjoints[idx as usize] = adjoints[idx as usize] + seed;
-        }
-
-        for i in (1..self.statements.len()).rev() {
-            let stmt = self.statements[i];
-            let a = adjoints[stmt.lhs_index as usize];
-            if a != F::zero() {
-                adjoints[stmt.lhs_index as usize] = F::zero();
-                let start = self.statements[i - 1].end_plus_one as usize;
-                let end = stmt.end_plus_one as usize;
-                for j in start..end {
-                    // Zero-multiplier convention: a recorded 0 partial
-                    // absorbs any adjoint (see kernels/mod.rs), symmetric
-                    // with the zero-adjoint skip above.
-                    let m = self.multipliers[j];
-                    if m != F::zero() {
-                        adjoints[self.indices[j] as usize] =
-                            adjoints[self.indices[j] as usize] + m * a;
-                    }
-                }
-            }
-        }
-        adjoints
     }
 }
 
@@ -315,49 +302,20 @@ thread_local! {
     static TAPE_BORROWED_F64: Cell<bool> = const { Cell::new(false) };
 }
 
-struct TapeBorrowGuard {
-    cell: &'static std::thread::LocalKey<Cell<bool>>,
-}
-
-impl TapeBorrowGuard {
-    fn new<F: TapeThreadLocal>() -> Self {
-        let cell = F::borrow_cell();
-        cell.with(|b| {
-            assert!(
-                !b.get(),
-                "reentrant with_active_tape call detected — this would create aliased &mut references"
-            );
-            b.set(true);
-        });
-        TapeBorrowGuard { cell }
-    }
-}
-
-impl Drop for TapeBorrowGuard {
-    fn drop(&mut self) {
-        self.cell.with(|b| b.set(false));
-    }
-}
-
 /// Access the active tape for the current thread. Panics if no tape is active.
+///
+/// The pointer in the thread-local cell is installed only by
+/// [`TapeGuard`], whose `'a` lifetime ties it to a live `&'a mut Tape<F>`
+/// — the guard contract `active_cell::with_active_ptr` relies on.
 #[inline]
 pub fn with_active_tape<F: TapeThreadLocal, R>(f: impl FnOnce(&mut Tape<F>) -> R) -> R {
-    let _guard = TapeBorrowGuard::new::<F>();
-    F::cell().with(|cell| {
-        let ptr = cell.get();
-        assert!(
-            !ptr.is_null(),
-            "No active tape. Use echidna::grad() or similar API."
-        );
-        // SAFETY: TapeGuard's `'a` lifetime statically ties the raw pointer's
-        // validity to the live `&'a mut Tape<F>` borrow on the stack frame
-        // that constructed the guard — the borrow checker rejects any program
-        // in which the guard outlives its tape. Access is single-threaded via
-        // thread-local, and the TapeBorrowGuard above ensures no reentrant
-        // call creates aliased &mut references.
-        let tape = unsafe { &mut *ptr };
-        f(tape)
-    })
+    crate::active_cell::with_active_ptr(
+        F::cell(),
+        F::borrow_cell(),
+        "with_active_tape",
+        "No active tape. Use echidna::grad() or similar API.",
+        f,
+    )
 }
 
 /// RAII guard that sets a tape as the thread-local active tape and restores
@@ -398,7 +356,7 @@ impl<'a, F: TapeThreadLocal> TapeGuard<'a, F> {
     }
 }
 
-impl<'a, F: TapeThreadLocal> Drop for TapeGuard<'a, F> {
+impl<F: TapeThreadLocal> Drop for TapeGuard<'_, F> {
     fn drop(&mut self) {
         F::cell().with(|cell| {
             cell.set(self.prev);

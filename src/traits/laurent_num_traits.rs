@@ -1,5 +1,4 @@
 //! `num_traits` implementations for `Laurent<F, K>`.
-//! Filled in Step 5.
 
 use std::num::FpCategory;
 

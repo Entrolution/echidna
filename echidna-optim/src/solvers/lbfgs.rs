@@ -1,6 +1,6 @@
 use num_traits::Float;
 
-use crate::convergence::{dot, norm, ConvergenceParams};
+use crate::convergence::{check_convergence, dot, norm, ConvergenceParams};
 use crate::line_search::{backtracking_armijo_with_evals, ArmijoParams};
 use crate::objective::Objective;
 use crate::result::{LbfgsDiagnostics, OptimResult, SolverDiagnostics, TerminationReason};
@@ -16,17 +16,13 @@ pub struct LbfgsConfig<F> {
     pub line_search: ArmijoParams<F>,
 }
 
-impl Default for LbfgsConfig<f64> {
-    fn default() -> Self {
-        LbfgsConfig {
-            memory: 10,
-            convergence: ConvergenceParams::default(),
-            line_search: ArmijoParams::default(),
-        }
-    }
-}
-
-impl Default for LbfgsConfig<f32> {
+// One generic impl: the per-precision tolerances live in the sub-configs'
+// own Defaults (ConvergenceParams, ArmijoParams), which this delegates to.
+impl<F: Float> Default for LbfgsConfig<F>
+where
+    ConvergenceParams<F>: Default,
+    ArmijoParams<F>: Default,
+{
     fn default() -> Self {
         LbfgsConfig {
             memory: 10,
@@ -50,16 +46,16 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
 
     // Config validation
     if config.memory == 0 || config.convergence.max_iter == 0 {
-        return OptimResult {
-            x: x0.to_vec(),
-            value: F::nan(),
-            gradient: vec![F::nan(); n],
-            gradient_norm: F::nan(),
-            iterations: 0,
-            func_evals: 0,
-            termination: TerminationReason::NumericalError,
-            diagnostics: SolverDiagnostics::Lbfgs(diag),
-        };
+        return OptimResult::assemble(
+            x0.to_vec(),
+            F::nan(),
+            vec![F::nan(); n],
+            F::nan(),
+            0,
+            0,
+            TerminationReason::NumericalError,
+            SolverDiagnostics::Lbfgs(diag),
+        );
     }
 
     let mut x = x0.to_vec();
@@ -69,30 +65,30 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
 
     // NaN/Inf detection
     if !grad_norm.is_finite() || !f_val.is_finite() {
-        return OptimResult {
+        return OptimResult::assemble(
             x,
-            value: f_val,
-            gradient: grad,
-            gradient_norm: grad_norm,
-            iterations: 0,
+            f_val,
+            grad,
+            grad_norm,
+            0,
             func_evals,
-            termination: TerminationReason::NumericalError,
-            diagnostics: SolverDiagnostics::Lbfgs(diag),
-        };
+            TerminationReason::NumericalError,
+            SolverDiagnostics::Lbfgs(diag),
+        );
     }
 
     // Check initial convergence
     if grad_norm < config.convergence.grad_tol {
-        return OptimResult {
+        return OptimResult::assemble(
             x,
-            value: f_val,
-            gradient: grad,
-            gradient_norm: grad_norm,
-            iterations: 0,
+            f_val,
+            grad,
+            grad_norm,
+            0,
             func_evals,
-            termination: TerminationReason::GradientNorm,
-            diagnostics: SolverDiagnostics::Lbfgs(diag),
-        };
+            TerminationReason::GradientNorm,
+            SolverDiagnostics::Lbfgs(diag),
+        );
     }
 
     // L-BFGS history buffers: store most recent `m` pairs
@@ -121,16 +117,16 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
         ) {
             Some(ls) => ls,
             None => {
-                return OptimResult {
+                return OptimResult::assemble(
                     x,
-                    value: f_val,
-                    gradient: grad,
-                    gradient_norm: grad_norm,
-                    iterations: iter,
+                    f_val,
+                    grad,
+                    grad_norm,
+                    iter,
                     func_evals,
-                    termination: TerminationReason::LineSearchFailed,
-                    diagnostics: SolverDiagnostics::Lbfgs(diag),
-                };
+                    TerminationReason::LineSearchFailed,
+                    SolverDiagnostics::Lbfgs(diag),
+                );
             }
         };
         // `func_evals` already includes this search's evaluations via the
@@ -182,76 +178,46 @@ pub fn lbfgs<F: Float, O: Objective<F>>(
 
         // NaN/Inf detection
         if !grad_norm.is_finite() || !f_val.is_finite() {
-            return OptimResult {
+            return OptimResult::assemble(
                 x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
+                f_val,
+                grad,
+                grad_norm,
+                iter + 1,
                 func_evals,
-                termination: TerminationReason::NumericalError,
-                diagnostics: SolverDiagnostics::Lbfgs(diag),
-            };
+                TerminationReason::NumericalError,
+                SolverDiagnostics::Lbfgs(diag),
+            );
         }
 
-        // Convergence checks
-        if grad_norm < config.convergence.grad_tol {
-            return OptimResult {
-                x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
-                func_evals,
-                termination: TerminationReason::GradientNorm,
-                diagnostics: SolverDiagnostics::Lbfgs(diag),
-            };
-        }
-
+        // Convergence checks (gradient, step, relative function change).
         let step_norm = norm_step(ls.alpha, &d);
-        if step_norm < config.convergence.step_tol {
-            return OptimResult {
-                x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
-                func_evals,
-                termination: TerminationReason::StepSize,
-                diagnostics: SolverDiagnostics::Lbfgs(diag),
-            };
-        }
-
-        // Relative func_tol: absolute `|f_prev - f_val| < tol` is scale-
-        // blind — a tolerance of 1e-8 means ULP-precision on large-
-        // magnitude objectives (|f| ≈ 1e8) and impossibly tight on tiny
-        // ones. Scale by `(1 + |f|)` so the criterion tracks the problem.
-        if config.convergence.func_tol > F::zero()
-            && (f_prev - f_val).abs() < config.convergence.func_tol * (F::one() + f_val.abs())
+        if let Some(reason) =
+            check_convergence(grad_norm, step_norm, f_prev, f_val, &config.convergence)
         {
-            return OptimResult {
+            return OptimResult::assemble(
                 x,
-                value: f_val,
-                gradient: grad,
-                gradient_norm: grad_norm,
-                iterations: iter + 1,
+                f_val,
+                grad,
+                grad_norm,
+                iter + 1,
                 func_evals,
-                termination: TerminationReason::FunctionChange,
-                diagnostics: SolverDiagnostics::Lbfgs(diag),
-            };
+                reason,
+                SolverDiagnostics::Lbfgs(diag),
+            );
         }
     }
 
-    OptimResult {
+    OptimResult::assemble(
         x,
-        value: f_val,
-        gradient: grad,
-        gradient_norm: grad_norm,
-        iterations: config.convergence.max_iter,
+        f_val,
+        grad,
+        grad_norm,
+        config.convergence.max_iter,
         func_evals,
-        termination: TerminationReason::MaxIterations,
-        diagnostics: SolverDiagnostics::Lbfgs(diag),
-    }
+        TerminationReason::MaxIterations,
+        SolverDiagnostics::Lbfgs(diag),
+    )
 }
 
 /// L-BFGS two-loop recursion: compute `d = -H_k * g_k`.

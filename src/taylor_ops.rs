@@ -132,9 +132,7 @@ pub fn taylor_ln<F: Float>(a: &[F], c: &mut [F]) {
         // (`c[0] = -Inf`), matching `taylor_sqrt` and the scalar convention.
         // This also covers `taylor_log2`/`taylor_log10`/`taylor_ln_1p` (which
         // delegate here) and `taylor_powf`'s non-integer negative-base path.
-        for ci in c.iter_mut() {
-            *ci = F::nan();
-        }
+        nan_jet(c);
         return;
     }
     let inv_a0 = F::one() / a[0];
@@ -145,6 +143,26 @@ pub fn taylor_ln<F: Float>(a: &[F], c: &mut [F]) {
             sum = sum + F::from(j).unwrap() * c[j] * a[k - j];
         }
         c[k] = (a[k] - sum / F::from(k).unwrap()) * inv_a0;
+    }
+}
+
+/// Fill `c` with the all-NaN jet: the out-of-domain convention, so callers
+/// never see a NaN primal beside finite higher coefficients that a recurrence
+/// happened to compute.
+#[inline]
+fn nan_jet<F: Float>(c: &mut [F]) {
+    for ci in c.iter_mut() {
+        *ci = F::nan();
+    }
+}
+
+/// Fill `c` with the vertical-tangent jet at a zero base: zero primal, `+Inf`
+/// every higher coefficient (the sqrt/cbrt convention at `x = 0`).
+#[inline]
+fn vertical_tangent_jet<F: Float>(c: &mut [F]) {
+    c[0] = F::zero();
+    for ci in c.iter_mut().skip(1) {
+        *ci = F::infinity();
     }
 }
 
@@ -161,10 +179,7 @@ pub fn taylor_sqrt<F: Float>(a: &[F], c: &mut [F]) {
     let n = c.len();
     if a[0] == F::zero() {
         // sqrt(0) = 0, but sqrt'(0) = 1/(2*sqrt(0)) = Inf (vertical tangent).
-        c[0] = F::zero();
-        for ci in c.iter_mut().skip(1) {
-            *ci = F::infinity();
-        }
+        vertical_tangent_jet(c);
         return;
     }
     if a[0] < F::zero() {
@@ -174,9 +189,7 @@ pub fn taylor_sqrt<F: Float>(a: &[F], c: &mut [F]) {
         // looks like a normal recurrence. Make the degeneracy explicit so
         // downstream callers don't accidentally consume a mix of finite
         // and non-finite coefficients.
-        for ci in c.iter_mut() {
-            *ci = F::nan();
-        }
+        nan_jet(c);
         return;
     }
     c[0] = a[0].sqrt();
@@ -239,6 +252,25 @@ pub fn taylor_sinh_cosh<F: Float>(a: &[F], sh: &mut [F], ch: &mut [F]) {
     }
 }
 
+/// Integrate `c' = a' · g` term by term:
+/// `c[k] = (1/k) · Σ_{j=1}^{k} j · a[j] · g[k-j]`.
+///
+/// The shared antiderivative step of the inverse-function kernels (atan,
+/// asin, asinh, acosh, atanh), which differ only in the derivative factor
+/// `g` they construct first; `c[0]` is written by the caller. tan/tanh
+/// interleave their `g` update with this recurrence (self-referential) and
+/// deliberately keep their own loops.
+#[inline]
+fn integrate_from_deriv<F: Float>(a: &[F], g: &[F], c: &mut [F]) {
+    for k in 1..c.len() {
+        let mut sum = F::zero();
+        for j in 1..=k {
+            sum = sum + F::from(j).unwrap() * a[j] * g[k - j];
+        }
+        c[k] = sum / F::from(k).unwrap();
+    }
+}
+
 /// `c = atan(a)` — via `c' = a' / (1 + a²)`, then integrate.
 ///
 /// Uses `scratch` for the `1 + a²` denominator.
@@ -252,23 +284,12 @@ pub fn taylor_atan<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     scratch2[0] = F::one() + scratch1[0];
     // c[0] = atan(a[0])
     c[0] = a[0].atan();
-    // c' = a' / (1 + a²), so c[k] via the division-integration recurrence:
-    // Let d = 1/(1+a²). Then c'[k-1] = Σ d[j] * a'[k-j-1]... but simpler approach:
-    // Since (1+a²) * c' = a', we have:
-    // k * (1+a²)[0] * c[k] + Σ_{j=1}^{k-1} (1+a²)[j] * (k-j) * c[k-j]...
-    // Actually the integration approach: if g = 1/(1+a²), then c' = a' * g
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * g[k-j]
-    // First compute g = 1/(1+a²):
-    // Reuse scratch1 for g = recip(1+a²)
+    // c' = a' / (1 + a²). With g = 1/(1 + a²) this is c' = a' * g, and
+    // integrating the Cauchy product gives
+    //   c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * g[k-j]
+    // Reuse scratch1 for g = recip(1 + a²):
     taylor_recip(scratch2, scratch1);
-    // Now c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * scratch1[k-j]
-    for k in 1..n {
-        let mut sum = F::zero();
-        for j in 1..=k {
-            sum = sum + F::from(j).unwrap() * a[j] * scratch1[k - j];
-        }
-        c[k] = sum / F::from(k).unwrap();
-    }
+    integrate_from_deriv(a, scratch1, c);
 }
 
 /// `c = asin(a)` — via `c' = a' / sqrt(1 - a²)`, then integrate.
@@ -289,14 +310,7 @@ pub fn taylor_asin<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     taylor_sqrt(scratch2, scratch1);
     // scratch2 = 1/sqrt(1 - a²)
     taylor_recip(scratch1, scratch2);
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * scratch2[k-j]
-    for k in 1..n {
-        let mut sum = F::zero();
-        for j in 1..=k {
-            sum = sum + F::from(j).unwrap() * a[j] * scratch2[k - j];
-        }
-        c[k] = sum / F::from(k).unwrap();
-    }
+    integrate_from_deriv(a, scratch2, c);
 }
 
 /// `c = acos(a) = π/2 - asin(a)`
@@ -304,33 +318,24 @@ pub fn taylor_asin<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
 pub fn taylor_acos<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2: &mut [F]) {
     taylor_asin(a, c, scratch1, scratch2);
     c[0] = a[0].acos();
-    for ck in c[1..].iter_mut() {
+    for ck in &mut c[1..] {
         *ck = -*ck;
     }
 }
 
 /// `c = tan(a)` — via `c' = a' * (1 + tan²(a))` = `a' * (1 + c²)`.
 ///
-/// Uses `scratch` for `c²`.
+/// Uses `scratch` for `1 + c²`.
 #[inline]
 pub fn taylor_tan<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
     let n = c.len();
     c[0] = a[0].tan();
-    // Recurrence: c' = a' * (1 + c²)
-    // c[k] = a[k] + (1/k) * Σ_{j=1}^{k} j * a[j] * scratch[k-j]
-    // where scratch holds running c² (partial)
-    // Actually let's do it step by step: after computing c[0..k], update scratch = c[0..k]²
-    // But this is circular. Better approach:
-    // Let s = 1 + c². Then c' = a' * s.
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * s[k-j]
-    // s[0] = 1 + c[0]², and for k>=1: s[k] = Σ_{j=0}^{k} c[j]*c[k-j]
-    // But s[k] depends on c[k], which depends on s...
-    // Expand: s[k] = 2*c[0]*c[k] + Σ_{j=1}^{k-1} c[j]*c[k-j]
-    // And c[k] = (1/k) * [k*a[k]*s[0] + Σ_{j=1}^{k-1} j*a[j]*s[k-j]]
-    // So substitute and solve for c[k]:
-    // c[k] = a[k]*s[0] + (1/k) * Σ_{j=1}^{k-1} j*a[j]*s[k-j]  ... (*)
-    // Then s[k] = 2*c[0]*c[k] + Σ_{j=1}^{k-1} c[j]*c[k-j]
-    // Wait, (*) only uses s[0..k-1] which are known. So this works!
+    // Let s = 1 + c², so c' = a' * s. Integrating the Cauchy product:
+    //   c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * s[k-j]
+    // reads only s[0..k-1] (j >= 1), all already known; then
+    //   s[k] = Σ_{j=0}^{k} c[j] * c[k-j]
+    // uses the fresh c[k], so the two recurrences interleave without
+    // circularity.
 
     // scratch = s (1 + c²)
     scratch[0] = F::one() + c[0] * c[0];
@@ -389,14 +394,7 @@ pub fn taylor_asinh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     taylor_sqrt(scratch2, scratch1);
     // scratch2 = 1/sqrt(1 + a²)
     taylor_recip(scratch1, scratch2);
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * scratch2[k-j]
-    for k in 1..n {
-        let mut sum = F::zero();
-        for j in 1..=k {
-            sum = sum + F::from(j).unwrap() * a[j] * scratch2[k - j];
-        }
-        c[k] = sum / F::from(k).unwrap();
-    }
+    integrate_from_deriv(a, scratch2, c);
 }
 
 /// `c = acosh(a)` — via `c' = a' / sqrt(a² - 1)`.
@@ -408,9 +406,7 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
         // already yields an all-NaN jet, but `a[0] <= -1` leaves `a²-1 >= 0`, so
         // the recurrence produces finite higher coefficients beside a NaN
         // primal. Emit an all-NaN jet across the whole out-of-domain range.
-        for ci in c.iter_mut() {
-            *ci = F::nan();
-        }
+        nan_jet(c);
         return;
     }
     c[0] = a[0].acosh();
@@ -423,14 +419,7 @@ pub fn taylor_acosh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     taylor_sqrt(scratch2, scratch1);
     // scratch2 = 1/sqrt(a² - 1)
     taylor_recip(scratch1, scratch2);
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * scratch2[k-j]
-    for k in 1..n {
-        let mut sum = F::zero();
-        for j in 1..=k {
-            sum = sum + F::from(j).unwrap() * a[j] * scratch2[k - j];
-        }
-        c[k] = sum / F::from(k).unwrap();
-    }
+    integrate_from_deriv(a, scratch2, c);
 }
 
 /// `c = atanh(a)` — via `c' = a' / (1 - a²)`.
@@ -442,9 +431,7 @@ pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
         // recurrence would produce finite higher coefficients beside a NaN
         // primal; emit an all-NaN jet instead. (`|a[0]| == 1` is left to the
         // IEEE `±Inf` singularity, matching the scalar boundary convention.)
-        for ci in c.iter_mut() {
-            *ci = F::nan();
-        }
+        nan_jet(c);
         return;
     }
     c[0] = a[0].atanh();
@@ -457,14 +444,7 @@ pub fn taylor_atanh<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2
     }
     // scratch1 = 1/(1 - a²)
     taylor_recip(scratch2, scratch1);
-    // c[k] = (1/k) * Σ_{j=1}^{k} j * a[j] * scratch1[k-j]
-    for k in 1..n {
-        let mut sum = F::zero();
-        for j in 1..=k {
-            sum = sum + F::from(j).unwrap() * a[j] * scratch1[k - j];
-        }
-        c[k] = sum / F::from(k).unwrap();
-    }
+    integrate_from_deriv(a, scratch1, c);
 }
 
 // ══════════════════════════════════════════════
@@ -490,11 +470,9 @@ pub fn taylor_powf<F: Float>(
     // Taylor coefficients.
     if b[1..].iter().all(|&bk| bk == F::zero()) {
         let b0 = b[0];
-        if let Some(ni) = b0.to_i32() {
-            if F::from(ni).unwrap() == b0 {
-                taylor_powi(a, ni, c, scratch1, scratch2);
-                return;
-            }
+        if let Some(ni) = b0.to_i32().filter(|&ni| F::from(ni).unwrap() == b0) {
+            taylor_powi(a, ni, c, scratch1, scratch2);
+            return;
         }
     }
     if a[0] == F::zero() {
@@ -509,9 +487,7 @@ pub fn taylor_powf<F: Float>(
             // (k > b0). Emit a consistent all-NaN jet, matching the
             // negative-base arm below, rather than a finite primal beside
             // garbage derivatives.
-            for ck in c.iter_mut() {
-                *ck = F::nan();
-            }
+            nan_jet(c);
             return;
         }
         // Non-integer exponent: the k-th derivative of x^b0 at 0 vanishes
@@ -534,9 +510,8 @@ pub fn taylor_powf<F: Float>(
     taylor_ln(a, scratch1);
     // scratch2 = b * ln(a)
     taylor_mul(b, scratch1, scratch2);
-    // c = exp(b * ln(a))
-    // But we can't use scratch1 anymore since taylor_exp needs its own output...
-    // Actually taylor_exp writes to c, so we just need scratch2 as input.
+    // c = exp(b * ln(a)); taylor_exp reads scratch2 and writes c, so
+    // scratch1 is free from here on.
     taylor_exp(scratch2, c);
     if a[0] < F::zero() {
         // Negative base with a LIVE exponent (the constant-integer fast path
@@ -560,7 +535,8 @@ pub fn taylor_powf<F: Float>(
 ///
 /// Dispatches between two strategies:
 /// - **Repeated squaring** (binary exponentiation via `taylor_mul`): used when
-///   `a[0] < 0` (where `ln` would produce NaN) or `|n| <= 8` (at most 3
+///   `a[0] <= 0` (`ln` is singular there: NaN for a negative base, `-Inf`
+///   at zero) or `|n| <= 8` (at most 3
 ///   multiplications, competitive with exp-ln).
 /// - **exp(n * ln(a))**: used for positive base with large exponents.
 #[inline]
@@ -568,7 +544,7 @@ pub fn taylor_powi<F: Float>(a: &[F], n: i32, c: &mut [F], scratch1: &mut [F], s
     let deg = c.len();
     if n == 0 {
         c[0] = F::one();
-        for ck in c[1..deg].iter_mut() {
+        for ck in &mut c[1..deg] {
             *ck = F::zero();
         }
         return;
@@ -612,7 +588,7 @@ fn taylor_powi_squaring<F: Float>(
 
     // result (c) = 1
     c[0] = F::one();
-    for ck in c[1..deg].iter_mut() {
+    for ck in &mut c[1..deg] {
         *ck = F::zero();
     }
 
@@ -658,10 +634,7 @@ pub fn taylor_cbrt<F: Float>(a: &[F], c: &mut [F], scratch1: &mut [F], scratch2:
     debug_assert_eq!(a.len(), c.len());
     if a[0] == F::zero() {
         // cbrt(0) = 0, but cbrt'(0) = 1/(3*cbrt(0)^2) = Inf (vertical tangent).
-        c[0] = F::zero();
-        for ci in c.iter_mut().skip(1) {
-            *ci = F::infinity();
-        }
+        vertical_tangent_jet(c);
         return;
     }
     if a[0] < F::zero() {
@@ -704,13 +677,10 @@ pub fn taylor_exp2<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 
 /// `c = exp(a) - 1` (exp_m1).
 ///
-/// NOTE (verified correct): The recurrence uses `exp(a\[0\])` for `c\[1..\]` (via `taylor_exp`),
-/// then patches `c\[0\]` to `exp_m1(a\[0\])`. This is correct because derivatives of `exp(x)-1`
-/// and `exp(x)` are identical for k>=1 (the -1 is a constant offset).
-///
-/// The recurrence correctly uses `c[0] = exp(a[0])` (not `exp_m1(a[0])`) to compute
-/// `c[1..K]`, because `d/dx[exp(x)-1] = exp(x)` — the higher-order Taylor coefficients
-/// of `exp(x)-1` are identical to those of `exp(x)`. Only `c[0]` is patched afterward.
+/// Runs `taylor_exp` with `c[0] = exp(a[0])` during the recurrence —
+/// `d/dx[exp(x) - 1] = exp(x)`, so the higher-order coefficients of
+/// `exp(x) - 1` equal those of `exp(x)` — then patches `c[0]` to
+/// `exp_m1(a[0])` for the cancellation-free primal.
 #[inline]
 pub fn taylor_exp_m1<F: Float>(a: &[F], c: &mut [F]) {
     taylor_exp(a, c);
@@ -724,7 +694,7 @@ pub fn taylor_log2<F: Float>(a: &[F], c: &mut [F]) {
     let inv_ln2 = F::one() / F::from(2.0).unwrap().ln();
     // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].log2();
-    for ck in c[1..].iter_mut() {
+    for ck in &mut c[1..] {
         *ck = *ck * inv_ln2;
     }
 }
@@ -736,7 +706,7 @@ pub fn taylor_log10<F: Float>(a: &[F], c: &mut [F]) {
     let inv_ln10 = F::one() / F::from(10.0).unwrap().ln();
     // Primal patch: same O(ULP) tradeoff as taylor_powf (see comment there).
     c[0] = a[0].log10();
-    for ck in c[1..].iter_mut() {
+    for ck in &mut c[1..] {
         *ck = *ck * inv_ln10;
     }
 }
@@ -768,14 +738,15 @@ pub fn taylor_ln_1p<F: Float>(a: &[F], c: &mut [F], scratch: &mut [F]) {
 /// operands to a common pole order so the coefficient arrays
 /// become directly comparable, then calls through here.
 ///
-/// Uses `scratch1` for a², `scratch2` for b², and the result scratch
-/// for a²+b². Rescales inputs by `max(|a[0]|, |b[0]|)` (leading
-/// coefficients only) to avoid overflow/underflow in the intermediate
-/// a²+b². At `scale == 0` with non-zero higher-order seeds, performs
-/// a recursive shift-and-square: hypot(a, b) near t = 0 with both
-/// leading-zero operands equals `|t|·hypot(a(t)/t, b(t)/t)`, so the
-/// body unwinds to the correct Taylor expansion of that composed
-/// function. Mirrors `Taylor::abs` at the function-domain boundary.
+/// The scratch buffers stage the rescaled operands and squared terms
+/// (exact roles rotate; the step comments in the body annotate each).
+/// Rescales inputs by `max(|a[m]|, |b[m]|)`, with `m` the first order
+/// carrying signal (0 in the ordinary case), to avoid overflow/underflow
+/// in the intermediate a²+b². Shared leading zeros peel away in one shot:
+/// hypot(a, b) near t = 0 with both operands zero through order m-1
+/// equals `|t|^m · hypot(a(t)/t^m, b(t)/t^m)`, so the body computes the
+/// shifted series and returns it behind a zero prefix. Mirrors
+/// `Taylor::abs` at the function-domain boundary.
 #[inline]
 pub fn taylor_hypot<F: Float>(
     a: &[F],
@@ -785,69 +756,78 @@ pub fn taylor_hypot<F: Float>(
     scratch2: &mut [F],
 ) {
     let n = c.len();
-    let scale = a[0].abs().max(b[0].abs());
-    if scale == F::zero() {
+    let m = if a[0].abs().max(b[0].abs()) == F::zero() {
         // IEEE maxNum drops NaN (`max(NaN, 0) == 0`), so a NaN leading
         // coefficient lands in this zero-scale branch rather than on the
         // general rescale path. Propagate it to every coefficient
         // (hypot(NaN, ·) = NaN), exactly as the general path does when the
-        // co-operand is non-zero — without this, both the peel-and-recurse
-        // and all-zero arms below would silently swallow the NaN.
+        // co-operand is non-zero — without this, the peel and all-zero arms
+        // below would silently swallow the NaN.
         if a[0].is_nan() || b[0].is_nan() {
+            nan_jet(c);
+            return;
+        }
+        // Both leading primals are zero. If some later order carries signal,
+        // the composite t ↦ hypot(a(t), b(t)) is smoothly
+        // `|t|^m · hypot(a(t)/t^m, b(t)/t^m)` near t = 0, with m the first
+        // signal order: peel all m zero orders at once by running the
+        // general path on the m-shifted series and shifting the result
+        // back. This mirrors CPU `Taylor::abs` and gives the true Taylor
+        // expansion rather than the `log(0)·exp` path's NaN/Inf.
+        let Some(m) = (1..n).find(|&k| a[k] != F::zero() || b[k] != F::zero()) else {
+            // Both series are identically zero: t ↦ hypot(a(t), b(t)) is the
+            // constant 0, so every Taylor coefficient is zero. Unlike sqrt at
+            // a genuine simple zero there is no branch point here — emitting
+            // the singular [0, Inf, …] jet would poison downstream sweeps
+            // with a spurious pole. Matches `Laurent::hypot`'s all-zero
+            // guard, so the three hypot surfaces (Taylor, TaylorDyn, Laurent)
+            // agree on this input.
             for ck in c.iter_mut() {
+                *ck = F::zero();
+            }
+            return;
+        };
+        // A NaN at the first signal order is what the shifted general path
+        // would meet as its leading coefficient; emit the peeled result
+        // directly rather than relying on `Inf · 0` propagation to build it.
+        // The primal slot still goes through `hypot`, which is NaN except
+        // for the IEEE override `hypot(±Inf, NaN) = +Inf`.
+        if a[m].is_nan() || b[m].is_nan() {
+            for ck in c[..m].iter_mut() {
+                *ck = F::zero();
+            }
+            c[m] = a[m].hypot(b[m]);
+            for ck in c[m + 1..].iter_mut() {
                 *ck = F::nan();
             }
             return;
         }
-        // Both leading primals are zero. If the *next* order has any signal,
-        // the composite function t ↦ hypot(a(t), b(t)) is smoothly
-        // `|t|·hypot(a(t)/t, b(t)/t)` near t=0. Recursively compute on the
-        // shifted series, then shift the result back by one to represent the
-        // `|t|·…` factor. This mirrors CPU `Taylor::abs` and gives the true
-        // Taylor expansion rather than the `log(0)·exp` path's NaN/Inf.
-        if n > 1
-            && (a[1..n].iter().any(|&v| v != F::zero()) || b[1..n].iter().any(|&v| v != F::zero()))
-        {
-            let mut a_shifted = vec![F::zero(); n];
-            let mut b_shifted = vec![F::zero(); n];
-            a_shifted[..(n - 1)].copy_from_slice(&a[1..n]);
-            b_shifted[..(n - 1)].copy_from_slice(&b[1..n]);
-            let mut inner_c = vec![F::zero(); n];
-            let mut inner_s1 = vec![F::zero(); n];
-            let mut inner_s2 = vec![F::zero(); n];
-            taylor_hypot(
-                &a_shifted,
-                &b_shifted,
-                &mut inner_c,
-                &mut inner_s1,
-                &mut inner_s2,
-            );
-            c[0] = F::zero();
-            c[1..n].copy_from_slice(&inner_c[..(n - 1)]);
-            return;
-        }
-        // Both series are identically zero: t ↦ hypot(a(t), b(t)) is the
-        // constant 0, so every Taylor coefficient is zero. Unlike sqrt at a
-        // genuine simple zero there is no branch point here — emitting the
-        // singular [0, Inf, …] jet would poison downstream sweeps with a
-        // spurious pole. Matches `Laurent::hypot`'s all-zero guard, so the
-        // three hypot surfaces (Taylor, TaylorDyn, Laurent) agree on this
-        // input. A leading zero WITH a higher-order signal is handled by the
-        // peel-and-recurse branch above, which shifts one order at a time
-        // until a non-zero leading coefficient drives a non-zero scale.
-        for ck in c.iter_mut() {
-            *ck = F::zero();
-        }
-        return;
-    }
+        m
+    } else {
+        0
+    };
+
+    // General path on the m-shifted, zero-padded series (m == 0 is the
+    // ordinary case); the operand reads — the two rescale loops and the
+    // final primal patch — shift by pure index arithmetic, no staging
+    // buffers.
+    let scale = a[m].abs().max(b[m].abs());
     let inv_scale = F::one() / scale;
-    // scratch1 = (a/scale)  -- temporarily store rescaled a
+    // scratch1 = shifted (a/scale)
     for k in 0..n {
-        scratch1[k] = a[k] * inv_scale;
+        scratch1[k] = if k + m < n {
+            a[k + m] * inv_scale
+        } else {
+            F::zero()
+        };
     }
-    // scratch2 = (b/scale)  -- temporarily store rescaled b
+    // scratch2 = shifted (b/scale)
     for k in 0..n {
-        scratch2[k] = b[k] * inv_scale;
+        scratch2[k] = if k + m < n {
+            b[k + m] * inv_scale
+        } else {
+            F::zero()
+        };
     }
     // c = (a/scale)²  -- reuse c as temp
     taylor_mul(scratch1, scratch1, c);
@@ -863,7 +843,14 @@ pub fn taylor_hypot<F: Float>(
     for k in 0..n {
         c[k] = scratch1[k] * scale;
     }
-    c[0] = a[0].hypot(b[0]);
+    c[0] = a[m].hypot(b[m]);
+    if m > 0 {
+        // The peeled |t|^m factor returns as a zero prefix.
+        c.copy_within(0..n - m, m);
+        for ck in c[..m].iter_mut() {
+            *ck = F::zero();
+        }
+    }
 }
 
 /// `c = atan2(a, b)` = atan(a/b) with quadrant handling.
@@ -900,11 +887,30 @@ pub fn taylor_atan2<F: Float>(
     }
 }
 
+/// `n!` computed by direct product.
+///
+/// Exact through `18!` in f64 (the largest factorial below 2^53; f32
+/// degrades from `14!`); IEEE-saturating to `+inf` far beyond that.
+/// Callers guard `k <= 18` (the STDE diagonal estimators), document
+/// saturation as the contract (diffop's extraction prefactor), or divide
+/// small slot factorials where the same bound holds structurally (diffop's
+/// `1/slot!` jet seeds). NOT a substitute for the interleaved `k! * c[k]`
+/// form in `Taylor::derivative`/`TaylorDyn::derivative`, which avoids the
+/// standalone overflow entirely.
+#[cfg(any(feature = "stde", feature = "diffop"))]
+pub(crate) fn factorial<F: Float>(n: usize) -> F {
+    let mut f = F::one();
+    for i in 2..=n {
+        f = f * F::from(i).unwrap();
+    }
+    f
+}
+
 /// Discontinuous function: `c[0] = f(a[0])`, `c[k>=1] = 0`.
 #[inline]
 pub fn taylor_discontinuous<F: Float>(val: F, c: &mut [F]) {
     c[0] = val;
-    for ck in c[1..].iter_mut() {
+    for ck in &mut c[1..] {
         *ck = F::zero();
     }
 }

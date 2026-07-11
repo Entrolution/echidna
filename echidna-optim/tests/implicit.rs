@@ -1,8 +1,44 @@
 use echidna::record_multi;
-use echidna_optim::linalg::lu_solve;
 use echidna_optim::{
     implicit_adjoint, implicit_hessian, implicit_hvp, implicit_jacobian, implicit_tangent,
 };
+
+/// Test-local dense solve (Gaussian elimination, partial pivoting) so the
+/// scaffolding does not depend on the crate's internal linalg module.
+/// Index-based elimination reads more like the textbook algorithm here.
+#[allow(clippy::needless_range_loop)]
+fn solve_dense(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
+    let n = b.len();
+    let mut m: Vec<Vec<f64>> = a.to_vec();
+    let mut rhs = b.to_vec();
+    for col in 0..n {
+        let (pivot_row, pivot_val) = (col..n)
+            .map(|r| (r, m[r][col].abs()))
+            .max_by(|x, y| x.1.total_cmp(&y.1))?;
+        if pivot_val == 0.0 {
+            return None;
+        }
+        m.swap(col, pivot_row);
+        rhs.swap(col, pivot_row);
+        for r in (col + 1)..n {
+            let factor = m[r][col] / m[col][col];
+            for c in col..n {
+                let pivot_val = m[col][c];
+                m[r][c] -= factor * pivot_val;
+            }
+            rhs[r] -= factor * rhs[col];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for row in (0..n).rev() {
+        let mut sum = rhs[row];
+        for c in (row + 1)..n {
+            sum -= m[row][c] * x[c];
+        }
+        x[row] = sum / m[row][row];
+    }
+    Some(x)
+}
 
 /// Simple Newton root-finder for testing: solve F(z, x) = 0 for z given fixed x.
 ///
@@ -40,7 +76,7 @@ fn newton_root_find(
 
         // Solve J_z · delta = -F
         let neg_res: Vec<f64> = residual.iter().map(|r| -r).collect();
-        let delta = lu_solve(&f_z, &neg_res).expect("Singular Jacobian in Newton root-find");
+        let delta = solve_dense(&f_z, &neg_res).expect("Singular Jacobian in Newton root-find");
 
         for i in 0..num_states {
             z[i] += delta[i];

@@ -1,11 +1,10 @@
-//! Sparse derivative computation via structural sparsity detection and graph coloring.
+//! Sparsity patterns and graph coloring for compressed derivative evaluation.
 //!
-//! Provides sparsity detection for both Jacobians ([`JacobianSparsityPattern`]) and
-//! Hessians ([`SparsityPattern`]), plus graph coloring algorithms for compressed evaluation.
-
-use std::collections::HashMap;
-
-use crate::opcode::{OpCode, UNUSED};
+//! Holds the pattern types ([`SparsityPattern`], [`CsrPattern`],
+//! [`JacobianSparsityPattern`]) and the coloring algorithms that drive
+//! compressed Hessian and Jacobian recovery. Pattern detection walks
+//! recorded tapes and lives in the bytecode tape layer; this module has no
+//! tape or opcode knowledge.
 
 /// Symmetric sparsity pattern in COO format (lower triangle + diagonal).
 ///
@@ -43,274 +42,6 @@ impl SparsityPattern {
             .zip(self.cols.iter())
             .any(|(&row, &col)| row as usize == r && col as usize == c)
     }
-}
-
-/// Internal sparsity detection implementation.
-///
-/// Walks the tape forward propagating input-dependency bitsets.
-/// At nonlinear operations, marks cross-pairs as potential Hessian interactions.
-pub(crate) fn detect_sparsity_impl(
-    opcodes: &[OpCode],
-    arg_indices: &[[u32; 2]],
-    custom_second_args: &HashMap<u32, u32>,
-    num_inputs: usize,
-    num_vars: usize,
-) -> SparsityPattern {
-    let num_words = num_inputs.div_ceil(64);
-
-    // Dependency bitsets: deps[node] = set of input variables this node depends on
-    let mut deps: Vec<Vec<u64>> = vec![vec![0u64; num_words]; num_vars];
-
-    // Interaction pairs as Vec (more cache-friendly than HashSet for typical problems).
-    // Deduplicated via sort + dedup at the end.
-    let mut interactions: Vec<(u32, u32)> = Vec::new();
-
-    let mut input_idx = 0u32;
-    for i in 0..opcodes.len() {
-        match opcodes[i] {
-            OpCode::Input => {
-                // Set bit for this input
-                let word = input_idx as usize / 64;
-                let bit = input_idx as usize % 64;
-                deps[i][word] |= 1u64 << bit;
-                input_idx += 1;
-            }
-            OpCode::Const => {
-                // No dependencies
-            }
-            op => {
-                let [a_idx, b_idx] = arg_indices[i];
-                let a = a_idx as usize;
-
-                match classify_op(op) {
-                    OpClass::Linear => {
-                        // Union dependencies, no new interactions
-                        union_into(&mut deps, i, a);
-                        if is_binary_op(op) && b_idx != UNUSED {
-                            union_into(&mut deps, i, b_idx as usize);
-                        }
-                    }
-                    OpClass::UnaryNonlinear => {
-                        // Union dependencies + mark all cross-pairs within dep set
-                        union_into(&mut deps, i, a);
-                        // Safe: we read deps[i] (already updated) — no clone needed
-                        // since mark_all_pairs only reads.
-                        let bits = extract_bits(&deps[i], num_inputs);
-                        for ii in 0..bits.len() {
-                            for jj in 0..=ii {
-                                let (r, c) = if bits[ii] >= bits[jj] {
-                                    (bits[ii], bits[jj])
-                                } else {
-                                    (bits[jj], bits[ii])
-                                };
-                                interactions.push((r, c));
-                            }
-                        }
-                    }
-                    OpClass::BinaryNonlinear => {
-                        // For Custom ops, arg_indices[i][1] is the callback index,
-                        // NOT a tape index. The real second operand (if any) is in
-                        // custom_second_args. Unary custom ops have no second operand.
-                        let real_b = if op == OpCode::Custom {
-                            custom_second_args.get(&(i as u32)).map(|&v| v as usize)
-                        } else {
-                            Some(b_idx as usize)
-                        };
-
-                        if let Some(b) = real_b {
-                            // Binary: full cross-pair + within-operand analysis
-                            let bits_a = extract_bits(&deps[a], num_inputs);
-                            let bits_b = extract_bits(&deps[b], num_inputs);
-                            union_into(&mut deps, i, a);
-                            union_into(&mut deps, i, b);
-                            // Cross-pairs between operand dependency sets
-                            for &va in &bits_a {
-                                for &vb in &bits_b {
-                                    let (r, c) = if va >= vb { (va, vb) } else { (vb, va) };
-                                    interactions.push((r, c));
-                                }
-                            }
-                            // Within-operand second derivatives (non-Mul ops)
-                            if op != OpCode::Mul {
-                                for ii in 0..bits_a.len() {
-                                    for jj in 0..=ii {
-                                        let (r, c) = if bits_a[ii] >= bits_a[jj] {
-                                            (bits_a[ii], bits_a[jj])
-                                        } else {
-                                            (bits_a[jj], bits_a[ii])
-                                        };
-                                        interactions.push((r, c));
-                                    }
-                                }
-                                for ii in 0..bits_b.len() {
-                                    for jj in 0..=ii {
-                                        let (r, c) = if bits_b[ii] >= bits_b[jj] {
-                                            (bits_b[ii], bits_b[jj])
-                                        } else {
-                                            (bits_b[jj], bits_b[ii])
-                                        };
-                                        interactions.push((r, c));
-                                    }
-                                }
-                            }
-                        } else {
-                            // Unary custom op: treat as UnaryNonlinear
-                            union_into(&mut deps, i, a);
-                            let bits = extract_bits(&deps[i], num_inputs);
-                            for ii in 0..bits.len() {
-                                for jj in 0..=ii {
-                                    let (r, c) = if bits[ii] >= bits[jj] {
-                                        (bits[ii], bits[jj])
-                                    } else {
-                                        (bits[jj], bits[ii])
-                                    };
-                                    interactions.push((r, c));
-                                }
-                            }
-                        }
-                    }
-                    OpClass::ZeroDerivative => {
-                        // Propagate dependencies for downstream ops
-                        union_into(&mut deps, i, a);
-                        if is_binary_op(op) && b_idx != UNUSED {
-                            union_into(&mut deps, i, b_idx as usize);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Convert interactions to sorted, deduplicated COO format
-    interactions.sort_unstable();
-    interactions.dedup();
-    let entries = interactions;
-
-    let rows: Vec<u32> = entries.iter().map(|&(r, _)| r).collect();
-    let cols: Vec<u32> = entries.iter().map(|&(_, c)| c).collect();
-
-    SparsityPattern {
-        dim: num_inputs,
-        rows,
-        cols,
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum OpClass {
-    Linear,
-    UnaryNonlinear,
-    BinaryNonlinear,
-    ZeroDerivative,
-}
-
-fn classify_op(op: OpCode) -> OpClass {
-    match op {
-        // Linear: derivative is constant w.r.t. inputs
-        OpCode::Add | OpCode::Sub | OpCode::Neg | OpCode::Fract => OpClass::Linear,
-
-        // Unary nonlinear: second derivatives exist
-        OpCode::Recip
-        | OpCode::Sqrt
-        | OpCode::Cbrt
-        | OpCode::Powi
-        | OpCode::Exp
-        | OpCode::Exp2
-        | OpCode::ExpM1
-        | OpCode::Ln
-        | OpCode::Log2
-        | OpCode::Log10
-        | OpCode::Ln1p
-        | OpCode::Sin
-        | OpCode::Cos
-        | OpCode::Tan
-        | OpCode::Asin
-        | OpCode::Acos
-        | OpCode::Atan
-        | OpCode::Sinh
-        | OpCode::Cosh
-        | OpCode::Tanh
-        | OpCode::Asinh
-        | OpCode::Acosh
-        | OpCode::Atanh => OpClass::UnaryNonlinear,
-
-        // Binary nonlinear: cross-derivatives between operands
-        OpCode::Mul | OpCode::Div | OpCode::Powf | OpCode::Atan2 | OpCode::Hypot => {
-            OpClass::BinaryNonlinear
-        }
-
-        // Zero derivative (piecewise constant or discontinuous).
-        // Abs is included here: d²|x|/dx² = 0 a.e. (the kink at zero has measure
-        // zero and does not contribute structural Hessian entries).
-        OpCode::Abs
-        | OpCode::Signum
-        | OpCode::Floor
-        | OpCode::Ceil
-        | OpCode::Round
-        | OpCode::Trunc
-        | OpCode::Max
-        | OpCode::Min
-        | OpCode::Rem => OpClass::ZeroDerivative,
-
-        // Custom ops are conservatively treated as binary nonlinear
-        OpCode::Custom => OpClass::BinaryNonlinear,
-
-        OpCode::Input | OpCode::Const => unreachable!(),
-    }
-}
-
-pub(crate) fn is_binary_op(op: OpCode) -> bool {
-    matches!(
-        op,
-        OpCode::Add
-            | OpCode::Sub
-            | OpCode::Mul
-            | OpCode::Div
-            | OpCode::Rem
-            | OpCode::Powf
-            | OpCode::Atan2
-            | OpCode::Hypot
-            | OpCode::Max
-            | OpCode::Min
-            | OpCode::Custom
-    )
-}
-
-/// Union deps[src] into deps[dst] without cloning, using `split_at_mut`.
-pub(crate) fn union_into(deps: &mut [Vec<u64>], dst: usize, src: usize) {
-    if dst == src {
-        return;
-    }
-    let (a, b) = if dst < src {
-        let (left, right) = deps.split_at_mut(src);
-        (&mut left[dst], &right[0] as &[u64])
-    } else {
-        let (left, right) = deps.split_at_mut(dst);
-        (&mut right[0], &left[src] as &[u64])
-    };
-    for w in 0..a.len() {
-        a[w] |= b[w];
-    }
-}
-
-/// Extract set bit positions from a bitset.
-pub(crate) fn extract_bits(bitset: &[u64], max_bits: usize) -> Vec<u32> {
-    let mut result = Vec::new();
-    for (word_idx, &word) in bitset.iter().enumerate() {
-        if word == 0 {
-            continue;
-        }
-        let mut w = word;
-        while w != 0 {
-            let bit = w.trailing_zeros();
-            let pos = word_idx * 64 + bit as usize;
-            if pos < max_bits {
-                result.push(pos as u32);
-            }
-            w &= w - 1; // Clear lowest set bit
-        }
-    }
-    result
 }
 
 /// Greedy graph coloring for symmetric sparse Hessian recovery.
@@ -392,7 +123,8 @@ impl CsrPattern {
         assert_eq!(coo_vals.len(), coo.nnz());
         assert_eq!(self.nnz(), coo.nnz());
 
-        // Build a map from (row, col) -> value from COO
+        // For each CSR entry, linear-search the COO triples for its value
+        // (O(nnz) per entry; fine at conversion-time scale).
         let mut result = Vec::with_capacity(self.nnz());
 
         for row in 0..self.dim {
@@ -503,7 +235,7 @@ impl SparsityPattern {
 }
 
 // ══════════════════════════════════════════════
-//  Jacobian sparsity detection
+//  Jacobian sparsity pattern
 // ══════════════════════════════════════════════
 
 /// Sparsity pattern for a Jacobian matrix (non-symmetric, general m x n).
@@ -542,72 +274,6 @@ impl JacobianSparsityPattern {
             .iter()
             .zip(self.cols.iter())
             .any(|(&r, &c)| r as usize == output_idx && c as usize == input_idx)
-    }
-}
-
-/// Detect Jacobian sparsity by forward-propagating input-dependency bitsets.
-///
-/// For each output, determines which inputs it depends on (first-order only).
-/// All ops propagate dependencies — unlike Hessian sparsity, linear ops matter here.
-pub(crate) fn detect_jacobian_sparsity_impl(
-    opcodes: &[OpCode],
-    arg_indices: &[[u32; 2]],
-    custom_second_args: &HashMap<u32, u32>,
-    num_inputs: usize,
-    num_vars: usize,
-    output_indices: &[u32],
-) -> JacobianSparsityPattern {
-    let num_words = num_inputs.div_ceil(64);
-
-    // Dependency bitsets: deps[node] = set of input variables this node depends on
-    let mut deps: Vec<Vec<u64>> = vec![vec![0u64; num_words]; num_vars];
-
-    let mut input_idx = 0u32;
-    for i in 0..opcodes.len() {
-        match opcodes[i] {
-            OpCode::Input => {
-                let word = input_idx as usize / 64;
-                let bit = input_idx as usize % 64;
-                deps[i][word] |= 1u64 << bit;
-                input_idx += 1;
-            }
-            OpCode::Const => {
-                // No dependencies
-            }
-            op => {
-                let [a_idx, b_idx] = arg_indices[i];
-                let a = a_idx as usize;
-                // Union dependencies from all operands (first-order: all ops propagate)
-                union_into(&mut deps, i, a);
-                // For Custom ops, the real second operand is in custom_second_args,
-                // not in arg_indices[i][1] (which is the callback index).
-                if op == OpCode::Custom {
-                    if let Some(&real_b) = custom_second_args.get(&(i as u32)) {
-                        union_into(&mut deps, i, real_b as usize);
-                    }
-                } else if is_binary_op(op) && b_idx != UNUSED {
-                    union_into(&mut deps, i, b_idx as usize);
-                }
-            }
-        }
-    }
-
-    // Extract COO entries from output dependency sets
-    let mut rows = Vec::new();
-    let mut cols = Vec::new();
-    for (out_row, &out_idx) in output_indices.iter().enumerate() {
-        let bits = extract_bits(&deps[out_idx as usize], num_inputs);
-        for input_col in bits {
-            rows.push(out_row as u32);
-            cols.push(input_col);
-        }
-    }
-
-    JacobianSparsityPattern {
-        num_outputs: output_indices.len(),
-        num_inputs,
-        rows,
-        cols,
     }
 }
 

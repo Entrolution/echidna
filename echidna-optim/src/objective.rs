@@ -42,6 +42,15 @@ pub struct TapeObjective<F: Float> {
 
 impl<F: Float> TapeObjective<F> {
     /// Create a new `TapeObjective` from a recorded tape.
+    ///
+    /// ```
+    /// use echidna_optim::{lbfgs, LbfgsConfig, TapeObjective};
+    ///
+    /// let (tape, _) = echidna::record(|x| x[0] * x[0] + x[1] * x[1], &[1.0_f64, 1.0]);
+    /// let mut objective = TapeObjective::new(tape);
+    /// let result = lbfgs(&mut objective, &[1.0, 1.0], &LbfgsConfig::default());
+    /// assert!(result.x.iter().all(|&xi| xi.abs() < 1e-6));
+    /// ```
     pub fn new(tape: BytecodeTape<F>) -> Self {
         TapeObjective {
             tape,
@@ -52,11 +61,6 @@ impl<F: Float> TapeObjective<F> {
     /// Number of function evaluations performed so far.
     pub fn func_evals(&self) -> usize {
         self.func_evals
-    }
-
-    /// Borrow the underlying tape.
-    pub fn tape(&self) -> &BytecodeTape<F> {
-        &self.tape
     }
 }
 

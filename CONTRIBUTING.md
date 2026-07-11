@@ -107,18 +107,18 @@ Two subsystems have TLA+ specifications under `specs/` that are model-checked in
 - `src/checkpoint.rs` — gradient checkpointing (Revolve, online, hints)
 - `src/bytecode_tape/optimize.rs` — bytecode tape optimizer (CSE + DCE, idempotency)
 
-The [`.github/workflows/specs.yml`](.github/workflows/specs.yml) job runs automatically on any push or PR touching `specs/**` or the guarded source files. It enforces spec-to-code alignment through three gates:
+The specs are guarded by three CI gates, split across two workflows. The [`.github/workflows/specs.yml`](.github/workflows/specs.yml) job runs on any push or PR touching `specs/**` or the guarded source files and enforces gates 1 and 3; gate 2 runs in the main CI test job ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) on every PR and push to `main`, since the property tests are part of the ordinary test suite:
 
-1. **Source anchors** — every invariant in `specs/README.md` has a `// SPEC: <Name>` comment at the Rust line that upholds it. `specs/verify_anchors.sh` fails if any anchor is missing. Run locally with:
+1. **Source anchors** (specs.yml) — every invariant in `specs/README.md` has a `// SPEC: <Name>` comment at the Rust line that upholds it. `specs/verify_anchors.sh` fails if any anchor is missing. Run locally with:
    ```bash
    ./specs/verify_anchors.sh
    ```
-2. **Semantic property tests** — `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties (gradient equality against non-checkpointed reference, `optimize ∘ optimize = optimize`, post-optimise structural assertions). Run with:
+2. **Semantic property tests** (ci.yml) — `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties (gradient equality against non-checkpointed reference, `optimize ∘ optimize = optimize`, post-optimise structural assertions). Run with:
    ```bash
    cargo test --features bytecode --test spec_invariants_checkpoint \
        --test spec_invariants_tape_optimize
    ```
-3. **TLC model checking** — the TLA+ specs themselves, run under TLC. Requires Java 11+ and `tla2tools.jar` in `specs/`:
+3. **TLC model checking** (specs.yml) — the TLA+ specs themselves, run under TLC. Requires Java 11+ and `tla2tools.jar` in `specs/`:
    ```bash
    java -cp specs/tla2tools.jar tlc2.TLC -config specs/revolve/Revolve.cfg specs/revolve/Revolve.tla
    java -cp specs/tla2tools.jar tlc2.TLC -config specs/tape_optimizer/Idempotency.cfg specs/tape_optimizer/Idempotency.tla
@@ -212,14 +212,15 @@ src/
 ├── taylor_dyn.rs          # TaylorDyn<F> arena-based type [taylor]
 ├── taylor_ops.rs          # Shared Taylor propagation rules [taylor]
 ├── laurent.rs             # Laurent<F, K> singularity analysis [laurent]
-├── stde.rs                # Stochastic derivative estimators [stde]
+├── stde/                  # Stochastic derivative estimators [stde]
 ├── diffop.rs              # Arbitrary differential operators via jets [diffop]
 ├── gpu/
 │   ├── mod.rs             # GpuBackend trait, GpuTapeData, GpuError
 │   ├── wgpu_backend.rs    # WgpuContext (Metal/Vulkan/DX12, f32) [gpu-wgpu]
 │   ├── cuda_backend.rs    # CudaContext (NVIDIA, f32+f64) [gpu-cuda]
 │   ├── stde_gpu.rs        # GPU-accelerated STDE functions [stde]
-│   ├── shaders/           # 5 WGSL compute shaders [gpu-wgpu]
+│   ├── taylor_codegen.rs  # Generates the WGSL/CUDA Taylor kernels [gpu-wgpu, gpu-cuda]
+│   ├── shaders/           # 4 hand-written WGSL compute shaders [gpu-wgpu]
 │   └── kernels/           # CUDA kernels (tape_eval.cu) [gpu-cuda]
 ├── faer_support.rs        # faer integration [faer]
 ├── nalgebra_support.rs    # nalgebra integration [nalgebra]

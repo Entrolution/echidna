@@ -80,14 +80,21 @@ struct TapeMeta {
 
 // ── Main kernel ──
 
+
+// IEEE f32 bit patterns (same names across all four shaders).
+const F32_SIGN_MASK: u32 = 0x80000000u;
+const F32_ABS_MASK:  u32 = 0x7fffffffu;
+const F32_INF_BITS:  u32 = 0x7f800000u;
+const F32_QNAN_BITS: u32 = 0x7fc00000u;
+
 fn abs_deriv_f32(x: f32) -> f32 {
     // Unified abs' convention (matches kernels::abs_deriv): 0 at the kink
     // (value-based, so +0 and -0 agree), sign(x) elsewhere, NaN at NaN. The NaN
     // test inspects the bits — `x != x` is unreliable under Metal fast-math.
     let b = bitcast<u32>(x);
-    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
+    if ((b & F32_ABS_MASK) > F32_INF_BITS) { return x; }
     if (x == 0.0) { return 0.0; }
-    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+    return select(1.0, -1.0, (b & F32_SIGN_MASK) != 0u);
 }
 
 @compute @workgroup_size(256)
@@ -238,10 +245,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             case 17u /* EXP */: { da = r; }
             case 18u /* EXP2 */: { da = r * log(2.0); }
             case 19u /* EXPM1 */: { da = r + 1.0; }
-            case 20u /* LN */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / a, a >= 0.0); }
-            case 21u /* LOG2 */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (a * log(2.0)), a >= 0.0); }
-            case 22u /* LOG10 */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (a * log(10.0)), a >= 0.0); }
-            case 23u /* LN1P */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / (1.0 + a), a >= -1.0); }
+            case 20u /* LN */: { da = select(bitcast<f32>(F32_QNAN_BITS), 1.0 / a, a >= 0.0); }
+            case 21u /* LOG2 */: { da = select(bitcast<f32>(F32_QNAN_BITS), 1.0 / (a * log(2.0)), a >= 0.0); }
+            case 22u /* LOG10 */: { da = select(bitcast<f32>(F32_QNAN_BITS), 1.0 / (a * log(10.0)), a >= 0.0); }
+            case 23u /* LN1P */: { da = select(bitcast<f32>(F32_QNAN_BITS), 1.0 / (1.0 + a), a >= -1.0); }
 
             // Trig
             case 24u /* SIN */: { da = cos(a); }
@@ -258,9 +265,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
 
             // Hyperbolic
-            case 30u /* SINH */: { da = cosh(a); }
-            case 31u /* COSH */: { da = sinh(a); }
-            case 32u /* TANH */: { let c = cosh(a); da = 1.0 / (c * c); }
+            case 30u /* SINH */: { da = cosh_f32(a); }
+            case 31u /* COSH */: { da = sinh_f32(a); }
+            case 32u /* TANH */: { let c = cosh_f32(a); da = 1.0 / (c * c); }
             // For |a| > 1e8, a*a + 1 overflows; use |1/a|/sqrt(1 + 1/a²) which
             // stays representable. Mirrors the CPU `OpCode::Asinh`/`OpCode::Acosh`
             // overflow guard and the existing `OpCode::Atan` pattern.
@@ -278,7 +285,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // form self-guards only for -1 < a < 1; a <= -1 and the
                     // large-|a| branch stay finite). Matches kernels::acosh_deriv;
                     // strict `< 1` keeps a==1 → +Inf.
-                    da = bitcast<f32>(0x7fc00000u);
+                    da = bitcast<f32>(F32_QNAN_BITS);
                 } else if abs(a) > 1e8 {
                     let inv = 1.0 / a;
                     da = abs(inv) / sqrt(1.0 - inv * inv);
@@ -288,7 +295,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     da = 1.0 / sqrt((a - 1.0) * (a + 1.0));
                 }
             }
-            case 35u /* ATANH */: { da = select(bitcast<f32>(0x7fc00000u), 1.0 / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
+            case 35u /* ATANH */: { da = select(bitcast<f32>(F32_QNAN_BITS), 1.0 / ((1.0 - a) * (1.0 + a)), a >= -1.0 && a <= 1.0); }
 
             // Misc
             case 36u /* ABS */: { da = abs_deriv_f32(a); }
@@ -327,16 +334,16 @@ fn powf_real(base: f32, b: f32) -> f32 {
     if base == 0.0 && b == 0.0 { return 1.0; }
     if base >= 0.0 { return pow(base, b); }
     let rb = round(b);
-    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    if rb != b { return bitcast<f32>(F32_QNAN_BITS); }
     let mag = pow(abs(base), b);
     if (i32(rb) & 1) != 0 { return -mag; }
     return mag;
 }
 
-fn sinh(x: f32) -> f32 {
+fn sinh_f32(x: f32) -> f32 {
     return (exp(x) - exp(-x)) * 0.5;
 }
 
-fn cosh(x: f32) -> f32 {
+fn cosh_f32(x: f32) -> f32 {
     return (exp(x) + exp(-x)) * 0.5;
 }

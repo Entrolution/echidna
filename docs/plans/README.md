@@ -2,7 +2,8 @@
 
 > **Historical document** — All planned phases have reached their intended scope.
 > This index tracked the initial build-out; no further plan files were created in
-> this directory. See the [roadmap](../roadmap.md) for current and future work.
+> this directory. Planning state (completed, deferred, and rejected work) is
+> recorded in the [deferred-work ADR](../adr-deferred-work.md).
 
 ## Plan Index
 

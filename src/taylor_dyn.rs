@@ -28,6 +28,10 @@ pub struct TaylorArena<F: Float> {
     data: Vec<F>,
     degree: usize,
     count: u32,
+    /// Reusable per-op scratch, lazily grown and zero-filled on loan.
+    /// Living on the (thread-local) arena keeps the elemental closures free
+    /// of per-op heap allocation; ops never nest, so one slab pool suffices.
+    scratch: Vec<F>,
 }
 
 impl<F: Float> TaylorArena<F> {
@@ -38,6 +42,7 @@ impl<F: Float> TaylorArena<F> {
             data: Vec::new(),
             degree,
             count: 0,
+            scratch: Vec::new(),
         }
     }
 
@@ -73,10 +78,29 @@ impl<F: Float> TaylorArena<F> {
         &mut self.data[start..start + self.degree]
     }
 
-    /// Reset the arena (keeps capacity).
+    /// Reset the arena (keeps capacity; the scratch pool is per-op
+    /// transient and needs no reset).
     pub fn clear(&mut self) {
         self.data.clear();
         self.count = 0;
+    }
+
+    /// Borrow the freshly allocated output slot, every earlier entry, and
+    /// `slabs × degree` of zeroed scratch — all from one `&mut self`, which
+    /// is what lets a kernel read input entries while writing its output in
+    /// place. `out_idx` must be the newest entry, and the split must be
+    /// derived AFTER `allocate` (allocation may move the backing storage).
+    fn split_output(&mut self, out_idx: u32, slabs: usize) -> (&[F], &mut [F], &mut [F]) {
+        debug_assert_eq!(out_idx + 1, self.count, "output must be the newest entry");
+        let deg = self.degree;
+        let need = slabs * deg;
+        if self.scratch.len() < need {
+            self.scratch.resize(need, F::zero());
+        }
+        self.scratch[..need].fill(F::zero());
+        let start = out_idx as usize * deg;
+        let (before, out) = self.data.split_at_mut(start);
+        (&*before, &mut out[..deg], &mut self.scratch[..need])
     }
 }
 
@@ -131,6 +155,10 @@ pub fn with_active_arena<F: TaylorArenaLocal, R>(f: impl FnOnce(&mut TaylorArena
 /// Creates a new arena with the specified degree. Restores the previous
 /// arena (if any) on drop.
 pub struct TaylorDynGuard<F: TaylorArenaLocal> {
+    // Never read directly, but load-bearing: the thread-local cell holds a
+    // raw pointer into this Box, and `with_active_arena`'s SAFETY contract
+    // depends on the guard keeping the allocation alive until drop.
+    #[allow(dead_code)]
     arena: Box<TaylorArena<F>>,
     prev: *mut TaylorArena<F>,
 }
@@ -148,12 +176,6 @@ impl<F: TaylorArenaLocal> TaylorDynGuard<F> {
         });
         TaylorDynGuard { arena, prev }
     }
-
-    /// Access the underlying arena.
-    #[must_use]
-    pub fn arena(&self) -> &TaylorArena<F> {
-        &self.arena
-    }
 }
 
 impl<F: TaylorArenaLocal> Drop for TaylorDynGuard<F> {
@@ -162,6 +184,33 @@ impl<F: TaylorArenaLocal> Drop for TaylorDynGuard<F> {
             cell.set(self.prev);
         });
     }
+}
+
+/// Seed one `TaylorDyn` jet per input: `coeffs[0] = x[i]`, plus
+/// `coeffs[slot] = value` for every `(var, slot, value)` in `active` with
+/// `var == i` and `slot` inside the jet order. Shared by the deterministic
+/// (diffop plan groups) and stochastic (STDE sparse/diagonal) samplers, whose
+/// only difference is where `active` comes from.
+///
+/// An active arena of degree `order` must be live (`TaylorDynGuard`).
+#[cfg(any(feature = "stde", feature = "diffop"))]
+pub(crate) fn seed_taylor_dyn_jets<F: Float + TaylorArenaLocal>(
+    x: &[F],
+    order: usize,
+    active: &[(usize, usize, F)],
+) -> Vec<TaylorDyn<F>> {
+    (0..x.len())
+        .map(|i| {
+            let mut coeffs = vec![F::zero(); order];
+            coeffs[0] = x[i];
+            for &(var, slot, value) in active {
+                if var == i && slot < order {
+                    coeffs[slot] = value;
+                }
+            }
+            TaylorDyn::from_coeffs(&coeffs)
+        })
+        .collect()
 }
 
 // ══════════════════════════════════════════════
@@ -181,6 +230,13 @@ pub struct TaylorDyn<F: Float> {
     pub(crate) index: u32,
 }
 
+impl<F: Float> From<F> for TaylorDyn<F> {
+    #[inline]
+    fn from(val: F) -> Self {
+        TaylorDyn::constant(val)
+    }
+}
+
 impl<F: Float> TaylorDyn<F> {
     /// Create a constant (not stored in arena).
     #[inline]
@@ -190,6 +246,35 @@ impl<F: Float> TaylorDyn<F> {
             index: CONSTANT,
         }
     }
+}
+
+/// Emits the uniform elemental wrappers around the `taylor_ops` kernels:
+/// each is `unary_op` plus the kernel call, differing only in the kernel
+/// name and how many scratch buffers it needs. The recurrence math stays in
+/// `taylor_ops`; ops with extra arguments or reused two-output kernels
+/// (`powi`, `powf`, `sin`/`cos`/`sin_cos`, `sinh`/`cosh`, `atan2`, `hypot`)
+/// remain hand-written below. Closure bodies must not touch the arena —
+/// they run inside `with_active_arena`, which does not tolerate reentrancy.
+macro_rules! taylor_dyn_elementals {
+    ($( $(#[$doc:meta])* $name:ident => $kernel:ident / $scratch:tt; )+) => {$(
+        $(#[$doc])*
+        #[inline]
+        pub fn $name(self) -> Self {
+            taylor_dyn_elementals!(@body $kernel, self, $scratch)
+        }
+    )+};
+    (@body $kernel:ident, $self:ident, 0) => {
+        Self::unary_op(&$self, |a, c| taylor_ops::$kernel(a, c))
+    };
+    (@body $kernel:ident, $self:ident, 1) => {
+        Self::unary_op_scratch(&$self, 1, |a, c, s| taylor_ops::$kernel(a, c, s))
+    };
+    (@body $kernel:ident, $self:ident, 2) => {
+        Self::unary_op_scratch(&$self, 2, |a, c, s| {
+            let (s1, s2) = s.split_at_mut(c.len());
+            taylor_ops::$kernel(a, c, s1, s2)
+        })
+    };
 }
 
 impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
@@ -270,32 +355,47 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
 
     // ── Operation helpers ──
 
-    /// Helper: get coefficients as a slice, using a temporary buffer for constants.
-    fn get_coeffs_vec(&self) -> Vec<F> {
-        if self.index == CONSTANT {
-            with_active_arena(|arena: &mut TaylorArena<F>| {
-                let mut v = vec![F::zero(); arena.degree()];
-                v[0] = self.value;
-                v
-            })
-        } else {
-            with_active_arena(|arena: &mut TaylorArena<F>| arena.coeffs(self.index).to_vec())
-        }
-    }
-
     /// Apply a unary operation that takes input coefficients and writes output coefficients.
     pub(crate) fn unary_op(x: &Self, f: impl FnOnce(&[F], &mut [F])) -> Self {
-        let a = x.get_coeffs_vec();
+        Self::unary_op_scratch(x, 0, |a, c, _| f(a, c))
+    }
+
+    /// Like [`unary_op`](Self::unary_op), with `slabs × degree` of zeroed
+    /// arena scratch passed to the closure — elemental kernels take their
+    /// work buffers from here instead of allocating per op.
+    ///
+    /// Everything the closure touches comes from one borrow-split taken
+    /// after the output allocation: the input entry is read in place (no
+    /// staging copy), a constant operand is synthesized into an extra
+    /// scratch slab, and the output slot is written directly. The closure
+    /// must not touch the arena itself (`with_active_arena` does not
+    /// tolerate reentrancy — see the borrow-flag notes on the tape
+    /// accessors).
+    pub(crate) fn unary_op_scratch(
+        x: &Self,
+        slabs: usize,
+        f: impl FnOnce(&[F], &mut [F], &mut [F]),
+    ) -> Self {
         with_active_arena(|arena: &mut TaylorArena<F>| {
             let deg = arena.degree();
             let idx = arena.allocate();
-            let mut result = vec![F::zero(); deg];
-            f(&a, &mut result);
-            let slot = arena.coeffs_mut(idx);
-            slot.copy_from_slice(&result);
-            TaylorDyn {
-                value: result[0],
-                index: idx,
+            if x.index == CONSTANT {
+                let (_, slot, scratch) = arena.split_output(idx, slabs + 1);
+                let (fs, synth) = scratch.split_at_mut(slabs * deg);
+                synth[0] = x.value;
+                f(&*synth, slot, fs);
+                TaylorDyn {
+                    value: slot[0],
+                    index: idx,
+                }
+            } else {
+                let (before, slot, fs) = arena.split_output(idx, slabs);
+                let start = x.index as usize * deg;
+                f(&before[start..start + deg], slot, fs);
+                TaylorDyn {
+                    value: slot[0],
+                    index: idx,
+                }
             }
         })
     }
@@ -330,17 +430,47 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
             });
         }
 
-        let a = x.get_coeffs_vec();
-        let b = y.get_coeffs_vec();
+        Self::binary_op_scratch(x, y, 0, |a, b, c, _| f(a, b, c))
+    }
+
+    /// Like [`binary_op`](Self::binary_op) with zeroed arena scratch, under
+    /// the same one-borrow-split contract as
+    /// [`unary_op_scratch`](Self::unary_op_scratch). Constant operands each
+    /// synthesize into their own extra slab.
+    pub(crate) fn binary_op_scratch(
+        x: &Self,
+        y: &Self,
+        slabs: usize,
+        f: impl FnOnce(&[F], &[F], &mut [F], &mut [F]),
+    ) -> Self {
+        // The both-CONSTANT case is fast-pathed by `binary_op` before this
+        // runs; reaching here with both constant is correct, just slower.
         with_active_arena(|arena: &mut TaylorArena<F>| {
             let deg = arena.degree();
             let idx = arena.allocate();
-            let mut result = vec![F::zero(); deg];
-            f(&a, &b, &mut result);
-            let slot = arena.coeffs_mut(idx);
-            slot.copy_from_slice(&result);
+            let const_slabs = usize::from(x.index == CONSTANT) + usize::from(y.index == CONSTANT);
+            let (before, slot, scratch) = arena.split_output(idx, slabs + const_slabs);
+            let (fs, synth) = scratch.split_at_mut(slabs * deg);
+            let mut synth_chunks = synth.chunks_mut(deg);
+            let a: &[F] = if x.index == CONSTANT {
+                let s = synth_chunks.next().expect("const slab reserved");
+                s[0] = x.value;
+                &*s
+            } else {
+                let start = x.index as usize * deg;
+                &before[start..start + deg]
+            };
+            let b: &[F] = if y.index == CONSTANT {
+                let s = synth_chunks.next().expect("const slab reserved");
+                s[0] = y.value;
+                &*s
+            } else {
+                let start = y.index as usize * deg;
+                &before[start..start + deg]
+            };
+            f(a, b, slot, fs);
             TaylorDyn {
-                value: result[0],
+                value: slot[0],
                 index: idx,
             }
         })
@@ -348,99 +478,63 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
 
     // ── Elemental methods ──
 
-    /// Reciprocal (1/x).
-    #[inline]
-    pub fn recip(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_recip(a, c))
-    }
-
-    /// Square root.
-    #[inline]
-    pub fn sqrt(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_sqrt(a, c))
-    }
-
-    /// Cube root.
-    #[inline]
-    pub fn cbrt(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_cbrt(a, c, &mut s1, &mut s2);
-        })
+    taylor_dyn_elementals! {
+        /// Reciprocal (1/x).
+        recip => taylor_recip / 0;
+        /// Square root.
+        sqrt => taylor_sqrt / 0;
+        /// Cube root.
+        cbrt => taylor_cbrt / 2;
+        /// Natural exponential (e^x).
+        exp => taylor_exp / 0;
+        /// Base-2 exponential (2^x).
+        exp2 => taylor_exp2 / 1;
+        /// e^x - 1, accurate near zero.
+        exp_m1 => taylor_exp_m1 / 0;
+        /// Natural logarithm.
+        ln => taylor_ln / 0;
+        /// Base-2 logarithm.
+        log2 => taylor_log2 / 0;
+        /// Base-10 logarithm.
+        log10 => taylor_log10 / 0;
+        /// ln(1+x), accurate near zero.
+        ln_1p => taylor_ln_1p / 1;
+        /// Tangent.
+        tan => taylor_tan / 1;
+        /// Arcsine.
+        asin => taylor_asin / 2;
+        /// Arccosine.
+        acos => taylor_acos / 2;
+        /// Arctangent.
+        atan => taylor_atan / 2;
+        /// Hyperbolic tangent.
+        tanh => taylor_tanh / 1;
+        /// Inverse hyperbolic sine.
+        asinh => taylor_asinh / 2;
+        /// Inverse hyperbolic cosine.
+        acosh => taylor_acosh / 2;
+        /// Inverse hyperbolic tangent.
+        atanh => taylor_atanh / 2;
     }
 
     /// Integer power.
     #[inline]
     pub fn powi(self, n: i32) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let deg = c.len();
-            let mut s1 = vec![F::zero(); deg];
-            let mut s2 = vec![F::zero(); deg];
-            taylor_ops::taylor_powi(a, n, c, &mut s1, &mut s2);
+        Self::unary_op_scratch(&self, 2, |a, c, s| {
+            let (s1, s2) = s.split_at_mut(c.len());
+            taylor_ops::taylor_powi(a, n, c, s1, s2);
         })
     }
 
     /// Floating-point power.
     #[inline]
     pub fn powf(self, n: Self) -> Self {
-        let b = n.get_coeffs_vec();
+        let b = n.coeffs();
         Self::unary_op(&self, |a, c| {
             let deg = c.len();
             let mut s1 = vec![F::zero(); deg];
             let mut s2 = vec![F::zero(); deg];
             taylor_ops::taylor_powf(a, &b, c, &mut s1, &mut s2);
-        })
-    }
-
-    /// Natural exponential (e^x).
-    #[inline]
-    pub fn exp(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_exp(a, c))
-    }
-
-    /// Base-2 exponential (2^x).
-    #[inline]
-    pub fn exp2(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s = vec![F::zero(); n];
-            taylor_ops::taylor_exp2(a, c, &mut s);
-        })
-    }
-
-    /// e^x - 1, accurate near zero.
-    #[inline]
-    pub fn exp_m1(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_exp_m1(a, c))
-    }
-
-    /// Natural logarithm.
-    #[inline]
-    pub fn ln(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_ln(a, c))
-    }
-
-    /// Base-2 logarithm.
-    #[inline]
-    pub fn log2(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_log2(a, c))
-    }
-
-    /// Base-10 logarithm.
-    #[inline]
-    pub fn log10(self) -> Self {
-        Self::unary_op(&self, |a, c| taylor_ops::taylor_log10(a, c))
-    }
-
-    /// ln(1+x), accurate near zero.
-    #[inline]
-    pub fn ln_1p(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s = vec![F::zero(); n];
-            taylor_ops::taylor_ln_1p(a, c, &mut s);
         })
     }
 
@@ -453,27 +547,19 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Sine.
     #[inline]
     pub fn sin(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut co = vec![F::zero(); n];
-            taylor_ops::taylor_sin_cos(a, c, &mut co);
-        })
+        Self::unary_op_scratch(&self, 1, |a, c, co| taylor_ops::taylor_sin_cos(a, c, co))
     }
 
     /// Cosine.
     #[inline]
     pub fn cos(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s = vec![F::zero(); n];
-            taylor_ops::taylor_sin_cos(a, &mut s, c);
-        })
+        Self::unary_op_scratch(&self, 1, |a, c, s| taylor_ops::taylor_sin_cos(a, s, c))
     }
 
     /// Simultaneous sine and cosine.
     #[inline]
     pub fn sin_cos(self) -> (Self, Self) {
-        let a = self.get_coeffs_vec();
+        let a = self.coeffs();
         with_active_arena(|arena: &mut TaylorArena<F>| {
             let deg = arena.degree();
             let sin_idx = arena.allocate();
@@ -496,53 +582,10 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
         })
     }
 
-    /// Tangent.
-    #[inline]
-    pub fn tan(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s = vec![F::zero(); n];
-            taylor_ops::taylor_tan(a, c, &mut s);
-        })
-    }
-
-    /// Arcsine.
-    #[inline]
-    pub fn asin(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_asin(a, c, &mut s1, &mut s2);
-        })
-    }
-
-    /// Arccosine.
-    #[inline]
-    pub fn acos(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_acos(a, c, &mut s1, &mut s2);
-        })
-    }
-
-    /// Arctangent.
-    #[inline]
-    pub fn atan(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_atan(a, c, &mut s1, &mut s2);
-        })
-    }
-
     /// Two-argument arctangent.
     #[inline]
     pub fn atan2(self, other: Self) -> Self {
-        let b = other.get_coeffs_vec();
+        let b = other.coeffs();
         Self::unary_op(&self, |a, c| {
             let n = c.len();
             let mut s1 = vec![F::zero(); n];
@@ -555,64 +598,13 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Hyperbolic sine.
     #[inline]
     pub fn sinh(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut ch = vec![F::zero(); n];
-            taylor_ops::taylor_sinh_cosh(a, c, &mut ch);
-        })
+        Self::unary_op_scratch(&self, 1, |a, c, ch| taylor_ops::taylor_sinh_cosh(a, c, ch))
     }
 
     /// Hyperbolic cosine.
     #[inline]
     pub fn cosh(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut sh = vec![F::zero(); n];
-            taylor_ops::taylor_sinh_cosh(a, &mut sh, c);
-        })
-    }
-
-    /// Hyperbolic tangent.
-    #[inline]
-    pub fn tanh(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s = vec![F::zero(); n];
-            taylor_ops::taylor_tanh(a, c, &mut s);
-        })
-    }
-
-    /// Inverse hyperbolic sine.
-    #[inline]
-    pub fn asinh(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_asinh(a, c, &mut s1, &mut s2);
-        })
-    }
-
-    /// Inverse hyperbolic cosine.
-    #[inline]
-    pub fn acosh(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_acosh(a, c, &mut s1, &mut s2);
-        })
-    }
-
-    /// Inverse hyperbolic tangent.
-    #[inline]
-    pub fn atanh(self) -> Self {
-        Self::unary_op(&self, |a, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_atanh(a, c, &mut s1, &mut s2);
-        })
+        Self::unary_op_scratch(&self, 1, |a, c, sh| taylor_ops::taylor_sinh_cosh(a, sh, c))
     }
 
     /// Absolute value.
@@ -676,11 +668,9 @@ impl<F: Float + TaylorArenaLocal> TaylorDyn<F> {
     /// Euclidean distance: sqrt(self^2 + other^2).
     #[inline]
     pub fn hypot(self, other: Self) -> Self {
-        Self::binary_op(&self, &other, |a, b, c| {
-            let n = c.len();
-            let mut s1 = vec![F::zero(); n];
-            let mut s2 = vec![F::zero(); n];
-            taylor_ops::taylor_hypot(a, b, c, &mut s1, &mut s2);
+        Self::binary_op_scratch(&self, &other, 2, |a, b, c, s| {
+            let (s1, s2) = s.split_at_mut(c.len());
+            taylor_ops::taylor_hypot(a, b, c, s1, s2);
         })
     }
 

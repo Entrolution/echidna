@@ -2117,3 +2117,39 @@ fn generated_source_pins_trunc_fract_and_full_precision_weights() {
         "CUDA 1/3 weight must carry full f64 precision"
     );
 }
+
+#[cfg(all(feature = "gpu-wgpu", feature = "stde"))]
+#[test]
+fn gpu_taylor_powf_zero_base_zero_exponent_matches_cpu() {
+    // 0^0 through the generated Taylor kernel. The recorded exponent is a
+    // tape constant, so the kernel's integer-exponent peel takes the
+    // powi-jet n == 0 branch (jet_const(1)); this pins that peel against
+    // the CPU jet, NaN coefficients matching as NaN. powf_real's own 0^0
+    // guard is pinned separately at the generated-source level.
+    let ctx = match gpu_context() {
+        Some(c) => c,
+        None => return,
+    };
+
+    fn f_powf<T: Scalar>(x: &[T]) -> T {
+        x[0].powf(T::from_f(<T::Float as num_traits::Zero>::zero()))
+    }
+
+    let x = [0.0_f64];
+    let (tape, _) = record(f_powf, &x);
+    let gpu_data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+    let tape_buf = ctx.upload_tape(&gpu_data);
+
+    let cpu_coeffs = echidna::stde::taylor_jet_dyn(&tape, &x, &[1.0], 3);
+    let result = ctx
+        .taylor_forward_kth_batch(&tape_buf, &[0.0f32], &[1.0f32], 1, 3)
+        .unwrap();
+
+    for (k, &cpu) in cpu_coeffs.iter().enumerate().take(3) {
+        let gpu = result.coefficients[k][0] as f64;
+        assert!(
+            (cpu.is_nan() && gpu.is_nan()) || (cpu - gpu).abs() < 1e-6,
+            "0^0 jet coeff {k}: cpu = {cpu}, gpu = {gpu}"
+        );
+    }
+}

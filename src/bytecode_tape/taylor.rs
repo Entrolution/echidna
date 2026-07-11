@@ -120,8 +120,10 @@ impl<F: Float> super::BytecodeTape<F> {
             y_coeffs[i][0] = y0[i];
         }
 
+        let mut inputs: Vec<Taylor<F, K>> = Vec::with_capacity(n);
         for k in 0..K - 1 {
-            let inputs: Vec<Taylor<F, K>> = (0..n).map(|i| Taylor::new(y_coeffs[i])).collect();
+            inputs.clear();
+            inputs.extend((0..n).map(|i| Taylor::new(y_coeffs[i])));
 
             self.forward_tangent(&inputs, buf);
 

@@ -118,6 +118,7 @@ macro_rules! assert_send_sync {
     };
 }
 
+mod active_cell;
 pub mod api;
 pub mod dual;
 pub mod dual_vec;
@@ -267,3 +268,10 @@ pub type TaylorDyn64 = TaylorDyn<f64>;
 #[cfg_attr(docsrs, doc(cfg(feature = "taylor")))]
 #[cfg(feature = "taylor")]
 pub type TaylorDyn32 = TaylorDyn<f32>;
+
+/// Compile and run the README examples as doctests. `diffop` implies
+/// `bytecode` and `taylor`, covering every snippet except the GPU example,
+/// which gates itself on `gpu-wgpu`.
+#[cfg(all(doctest, feature = "diffop"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

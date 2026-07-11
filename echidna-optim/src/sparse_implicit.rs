@@ -247,28 +247,21 @@ impl SparseImplicitContext {
     }
 
     /// Number of state variables (m).
+    #[must_use]
     pub fn num_states(&self) -> usize {
         self.num_states
     }
 
     /// Number of parameters (n).
+    #[must_use]
     pub fn num_params(&self) -> usize {
         self.num_params
     }
 
-    /// Number of structural non-zeros in the full Jacobian pattern.
-    pub fn nnz(&self) -> usize {
-        self.pattern.nnz()
-    }
-
     /// Number of structural non-zeros in the F_z block.
+    #[must_use]
     pub fn fz_nnz(&self) -> usize {
         self.fz_indices.len()
-    }
-
-    /// Number of structural non-zeros in the F_x block.
-    pub fn fx_nnz(&self) -> usize {
-        self.fx_indices.len()
     }
 }
 
@@ -441,6 +434,23 @@ fn col_to_vec(col: &Col<f64>, len: usize) -> Vec<f64> {
 //  Public API
 // ══════════════════════════════════════════════
 
+/// Length guard shared by the three public entry points.
+fn check_len(
+    field: &'static str,
+    actual: usize,
+    expected: usize,
+) -> Result<(), SparseImplicitError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(SparseImplicitError::DimensionMismatch {
+            field,
+            expected,
+            actual,
+        })
+    }
+}
+
 /// Compute the implicit tangent `dz*/dx · ẋ` using sparse Jacobian evaluation and sparse LU.
 ///
 /// This is the sparse analogue of [`crate::implicit_tangent`]. It solves:
@@ -453,8 +463,8 @@ fn col_to_vec(col: &Col<f64>, len: usize) -> Vec<f64> {
 /// Returns `Err(SparseImplicitError)` if F_z is singular or
 /// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
-/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// Runtime vector-length mismatches (`z_star`, `x`, or `x_dot` not
+/// matching `ctx.num_states()` / `ctx.num_params()`)
 /// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
 /// tape-shape contract is still checked at `SparseImplicitContext::new`
 /// construction time, where mismatches panic — those are programmer
@@ -468,27 +478,9 @@ pub fn implicit_tangent_sparse(
 ) -> Result<Vec<f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    if z_star.len() != m {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "z_star",
-            expected: m,
-            actual: z_star.len(),
-        });
-    }
-    if x.len() != n {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "x",
-            expected: n,
-            actual: x.len(),
-        });
-    }
-    if x_dot.len() != n {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "x_dot",
-            expected: n,
-            actual: x_dot.len(),
-        });
-    }
+    check_len("z_star", z_star.len(), m)?;
+    check_len("x", x.len(), n)?;
+    check_len("x_dot", x_dot.len(), n)?;
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -523,8 +515,8 @@ pub fn implicit_tangent_sparse(
 /// Returns `Err(SparseImplicitError)` if F_z is singular or
 /// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
-/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// Runtime vector-length mismatches (`z_star`, `x`, or `z_bar` not
+/// matching `ctx.num_states()` / `ctx.num_params()`)
 /// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
 /// tape-shape contract is still checked at `SparseImplicitContext::new`
 /// construction time, where mismatches panic — those are programmer
@@ -538,27 +530,9 @@ pub fn implicit_adjoint_sparse(
 ) -> Result<Vec<f64>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    if z_star.len() != m {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "z_star",
-            expected: m,
-            actual: z_star.len(),
-        });
-    }
-    if x.len() != n {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "x",
-            expected: n,
-            actual: x.len(),
-        });
-    }
-    if z_bar.len() != m {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "z_bar",
-            expected: m,
-            actual: z_bar.len(),
-        });
-    }
+    check_len("z_star", z_star.len(), m)?;
+    check_len("x", x.len(), n)?;
+    check_len("z_bar", z_bar.len(), m)?;
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 
@@ -596,8 +570,8 @@ pub fn implicit_adjoint_sparse(
 /// Returns `Err(SparseImplicitError)` if F_z is singular or
 /// numerically degenerate; the variant pinpoints which check failed.
 ///
-/// Runtime vector-length mismatches (`z_star`, `x`, `x_dot`, or
-/// `z_bar` not matching `ctx.num_states()` / `ctx.num_params()`)
+/// Runtime vector-length mismatches (`z_star` or `x` not matching
+/// `ctx.num_states()` / `ctx.num_params()`)
 /// surface as `Err(SparseImplicitError::DimensionMismatch)`. The
 /// tape-shape contract is still checked at `SparseImplicitContext::new`
 /// construction time, where mismatches panic — those are programmer
@@ -610,20 +584,8 @@ pub fn implicit_jacobian_sparse(
 ) -> Result<Vec<Vec<f64>>, SparseImplicitError> {
     let m = ctx.num_states;
     let n = ctx.num_params;
-    if z_star.len() != m {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "z_star",
-            expected: m,
-            actual: z_star.len(),
-        });
-    }
-    if x.len() != n {
-        return Err(SparseImplicitError::DimensionMismatch {
-            field: "x",
-            expected: n,
-            actual: x.len(),
-        });
-    }
+    check_len("z_star", z_star.len(), m)?;
+    check_len("x", x.len(), n)?;
 
     let (_outputs, jac_values) = compute_sparse_jacobian(tape, z_star, x, ctx);
 

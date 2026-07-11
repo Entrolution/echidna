@@ -26,7 +26,7 @@ pub fn generate_taylor_wgsl(k: usize) -> String {
     write_wgsl_opcodes(&mut s);
 
     // TapeMeta, bind groups
-    write_wgsl_bindings(&mut s, k);
+    write_wgsl_bindings(&mut s);
 
     // Helper builtins missing from WGSL
     write_wgsl_helpers(&mut s);
@@ -132,7 +132,7 @@ fn write_wgsl_opcodes(s: &mut String) {
     writeln!(s).unwrap();
 }
 
-fn write_wgsl_bindings(s: &mut String, k: usize) {
+fn write_wgsl_bindings(s: &mut String) {
     writeln!(
         s,
         "struct TapeMeta {{
@@ -160,7 +160,6 @@ fn write_wgsl_bindings(s: &mut String, k: usize) {
 "
     )
     .unwrap();
-    let _ = k; // K only affects buffer sizes at dispatch time, not bindings
 }
 
 fn write_wgsl_helpers(s: &mut String) {
@@ -174,6 +173,11 @@ fn atanh_f(x: f32) -> f32 {{ return 0.5 * log((1.0 + x) / (1.0 - x)); }}
 fn powf_real(base: f32, b: f32) -> f32 {{
     // WGSL `pow(x, y)` is undefined for x < 0. Rust/C `powf` define x^y for
     // x < 0 only at integer y: sign(x)^y * |x|^y; non-integer y is NaN.
+    // 0^0 = 1 (matches CPU/C `powf`); naga lowers `pow(0,0)` to
+    // `exp2(0*log2(0)) = exp2(NaN) = NaN`, so guard it explicitly. The
+    // callers currently peel the reachable 0^0 cases, but every powf primal
+    // routes through here so the convention cannot regress.
+    if base == 0.0 && b == 0.0 {{ return 1.0; }}
     if base >= 0.0 {{ return pow(base, b); }}
     let rb = round(b);
     if rb != b {{ return bitcast<f32>(0x7fc00000u); }}
@@ -511,12 +515,9 @@ fn write_wgsl_jet_transcendental(s: &mut String, k: usize) {
     writeln!(s, "    c.v[0] = tan(a.v[0]);").unwrap();
     writeln!(s, "    sc.v[0] = 1.0 + c.v[0] * c.v[0];").unwrap();
     for i in 1..k {
-        // First update sc[i] (c² contribution) from already-computed c[0..i-1]
-        // Actually, we need sc[i-j] in the integration, so we compute sc up to i-1 first
-        // Then compute c[i], then sc[i].
-        // sc[p] = Σ_{j=0}^{p} c[j]*c[p-j] for the c² part
-        // Actually the recurrence is: c[i] = (1/i) * Σ_{j=1}^{i} j*a[j]*sc[i-j]
-        // where sc = 1+c². So sc[0] = 1 + c[0]², sc[p] = Σ_{j=0}^{p} c[j]*c[p-j] for p>0
+        // With sc = 1 + c²: c[i] = (1/i) * Σ_{j=1}^{i} j*a[j]*sc[i-j].
+        // The sum reads only sc[0..i-1] (j >= 1), so c[i] is emitted first,
+        // then sc[i] = Σ_{j=0}^{i} c[j]*c[i-j] (sc[0] = 1 + c[0]² seeds it).
         let inv_i = 1.0 / i as f64;
         let mut terms = Vec::new();
         for j in 1..=i {
@@ -778,7 +779,7 @@ fn write_wgsl_powi_jet(s: &mut String, k: usize, n_expr: &str, ni_expr: &str) {
         "                    r = jet_exp(jet_scale(jet_ln(a), n));"
     )
     .unwrap();
-    writeln!(s, "                    r.v[0] = pow(a.v[0], n);").unwrap();
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], n);").unwrap();
     writeln!(s, "                }}").unwrap();
 }
 
@@ -879,7 +880,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     // the `<=` form would admit 2^31 and overflow the `i32(..)` cast below.
     let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && abs(b.v[0]) < 2147483648.0");
     for i in 1..k {
-        b_int_cond.push_str(&format!(" && b.v[{i}] == 0.0"));
+        write!(b_int_cond, " && b.v[{i}] == 0.0").unwrap();
     }
     writeln!(s, "                let b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "                if b_is_int {{").unwrap();
@@ -919,7 +920,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .unwrap();
     }
     writeln!(s, "                    }} else {{").unwrap();
-    writeln!(s, "                        r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(
+        s,
+        "                        r.v[0] = powf_real(a.v[0], b.v[0]);"
+    )
+    .unwrap();
     for i in 1..k {
         writeln!(
             s,
@@ -932,7 +937,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     writeln!(s, "                    let lna = jet_ln(a);").unwrap();
     writeln!(s, "                    let product = jet_mul(b, lna);").unwrap();
     writeln!(s, "                    r = jet_exp(product);").unwrap();
-    writeln!(s, "                    r.v[0] = pow(a.v[0], b.v[0]);").unwrap();
+    writeln!(s, "                    r.v[0] = powf_real(a.v[0], b.v[0]);").unwrap();
     writeln!(s, "                }}").unwrap();
     writeln!(s, "            }}").unwrap();
 
@@ -2030,7 +2035,7 @@ fn write_cuda_main_kernel(s: &mut String, k: usize) {
     // `<=` form would admit 2^31 and overflow the `(int)` cast below.
     let mut b_int_cond = String::from("b.v[0] == round(b.v[0]) && fabs(b.v[0]) < F(2147483648.0)");
     for i in 1..k {
-        b_int_cond.push_str(&format!(" && b.v[{i}] == F(0)"));
+        write!(b_int_cond, " && b.v[{i}] == F(0)").unwrap();
     }
     writeln!(s, "            bool b_is_int = {b_int_cond};").unwrap();
     writeln!(s, "            if (b_is_int) {{").unwrap();
@@ -2625,6 +2630,19 @@ mod tests {
     }
 
     #[test]
+    fn wgsl_powf_real_guards_zero_base_zero_exponent() {
+        // The emitted powf_real must keep the 0^0 = 1 guard (naga lowers
+        // pow(0,0) to exp2(0*log2(0)) = NaN). The kernel call sites peel
+        // the reachable 0^0 cases today, so only a source-level pin can
+        // protect the guard against regression.
+        let wgsl = generate_taylor_wgsl(3);
+        assert!(
+            wgsl.contains("if base == 0.0 && b == 0.0 { return 1.0; }"),
+            "generated powf_real lost its 0^0 guard"
+        );
+    }
+
+    #[test]
     fn m_powf_neg_base_all_nan_in_both_backends() {
         // taylor_powf convention (Option A): a negative base with a
         // non-constant-integer exponent gives an all-NaN jet on both backends.
@@ -2664,7 +2682,7 @@ mod tests {
         );
     }
 
-    // GPU-low parity: MAX/MIN keep CPU's NaN tie-break (`|| other.is_nan()`), jet_sqrt
+    // MAX/MIN keep CPU's NaN tie-break (`|| other.is_nan()`), jet_sqrt
     // gives a uniform +Inf higher-coeff jet at a0==0 (not sign-dependent Inf/NaN), and
     // REM by a zero-leading divisor returns an all-NaN jet (matching CPU Taylor::rem).
     #[test]
@@ -2702,7 +2720,7 @@ mod tests {
         );
     }
 
-    // GPU-low (WGSL primal conventions): SIGNUM uses the sign-bit helper (so -0.0
+    // WGSL primal conventions: SIGNUM uses the sign-bit helper (so -0.0
     // gives -1, not +1), and ROUND is ties-away-from-zero (WGSL `round()` is
     // ties-to-even). CUDA's `round`/`copysign` are already ties-away / sign-bit.
     #[test]

@@ -15,8 +15,8 @@ A high-performance automatic differentiation library for Rust.
 - **Taylor-mode higher-order derivatives** -- const-generic and arena-based dynamic implementations
 - **Sparse Jacobian/Hessian** -- automatic sparsity detection and graph coloring
 - **GPU acceleration** -- wgpu (Metal/Vulkan/DX12) and CUDA batch evaluation, including GPU-accelerated STDE
-- **Nonsmooth AD** -- branch tracking, kink detection for abs/min/max/signum/floor/ceil/round/trunc, Clarke generalized Jacobians
-- **Gradient checkpointing** -- binomial, online, disk-backed, and hint-guided strategies
+- **Nonsmooth AD** -- branch tracking, kink detection for abs/min/max/signum/floor/ceil/round/trunc/fract, Clarke generalized Jacobians
+- **Gradient checkpointing** -- evenly spread, online, disk-backed, and hint-guided strategies
 - **Cross-country elimination** -- Markowitz vertex elimination for optimal Jacobian accumulation
 - **Stochastic Taylor derivative estimators** -- Laplacian, Hessian diagonal, higher-order diagonals, sparse STDE for arbitrary operators, parabolic PDE σ-transform, variance reduction
 - **Arbitrary differential operators** -- any mixed partial via jet coefficients, plan-once evaluate-many, `DiffOp` type with sparse sampling distributions
@@ -32,10 +32,10 @@ A high-performance automatic differentiation library for Rust.
 | Taylor mode | `Taylor<F, K>`, `TaylorDyn<F>` -- const-generic and arena-based dynamic higher-order derivatives |
 | Sparse derivatives | Auto sparsity detection + graph coloring for Jacobians and Hessians |
 | Cross-country elimination | Markowitz vertex elimination for optimal Jacobian accumulation |
-| Checkpointing | Binomial, online, disk-backed, and hint-guided gradient checkpointing |
+| Checkpointing | Evenly spread, online, disk-backed, and hint-guided gradient checkpointing |
 | STDE | Stochastic Taylor Derivative Estimators -- Laplacian, Hessian diagonal, higher-order diagonals, const-generic diagonal, dense STDE, sparse STDE, parabolic σ-transform |
 | Differential operators | `diffop::mixed_partial`, `diffop::hessian`, `JetPlan`, `DiffOp` -- arbitrary mixed partials and operator evaluation |
-| Nonsmooth AD | Branch tracking, kink detection (8 nonsmooth ops), Clarke generalized Jacobian |
+| Nonsmooth AD | Branch tracking, kink detection (9 nonsmooth ops), Clarke generalized Jacobian |
 | Laurent series | `Laurent<F, K>` -- singularity analysis via Laurent expansion |
 | GPU acceleration | wgpu (Metal/Vulkan/DX12, f32) and CUDA (NVIDIA, f32+f64) batch evaluation + GPU STDE |
 | Composable nesting | `Dual<BReverse<f64>>`, `BReverse<Dual<f64>>`, `Taylor<BReverse<f64>, K>`, `Dual<Dual<f64>>` for higher-order |
@@ -56,12 +56,12 @@ echidna = "0.14"
 use echidna::Scalar;
 
 // Gradient of f(x) = x0^2 + x1^2
-let g = echidna::grad(|x| x[0] * x[0] + x[1] * x[1], &[3.0, 4.0]);
+let g = echidna::grad(|x| x[0] * x[0] + x[1] * x[1], &[3.0_f64, 4.0]);
 assert!((g[0] - 6.0).abs() < 1e-10);
 assert!((g[1] - 8.0).abs() < 1e-10);
 
 // Write generic code that works with f64, Dual, and Reverse
-fn rosenbrock<T: Scalar>(x: &[T]) -> T {
+fn rosenbrock<T: Scalar<Float = f64>>(x: &[T]) -> T {
     let one = T::from_f(1.0);
     let hundred = T::from_f(100.0);
     let t1 = one - x[0];
@@ -69,16 +69,14 @@ fn rosenbrock<T: Scalar>(x: &[T]) -> T {
     t1 * t1 + hundred * t2 * t2
 }
 
-let g = echidna::grad(|x| rosenbrock(x), &[1.5, 2.0]);
+let g = echidna::grad(|x| rosenbrock(x), &[1.5_f64, 2.0]);
 ```
 
 ### BytecodeTape: record once, evaluate many
 
-```rust,ignore
-use echidna::{record, record_multi};
-
+```rust
 // Record a scalar function to tape
-let (tape, value) = echidna::record(|x| x[0] * x[0] + x[1] * x[1], &[3.0, 4.0]);
+let (mut tape, value) = echidna::record(|x| x[0] * x[0] + x[1] * x[1], &[3.0, 4.0]);
 
 // Re-evaluate at new points without re-recording
 let g = tape.gradient(&[1.0, 2.0]);
@@ -97,24 +95,24 @@ let (vals, pattern, jac_vals) = tape.sparse_jacobian(&[1.0, 2.0]);
 
 ### Taylor mode: higher-order derivatives
 
-```rust,ignore
-use echidna::{Taylor64, record};
+```rust
+use num_traits::Float; // brings sin/exp into scope for the AD types
 
 // Record function, then compute Taylor coefficients via taylor_grad
 let (tape, _) = echidna::record(|x| x[0].sin() + x[1].exp(), &[0.0, 0.0]);
 
 // K=4 Taylor coefficients along direction v
 let (output, adjoints) = tape.taylor_grad::<4>(&[0.0, 0.0], &[1.0, 0.0]);
-// output.coeffs() gives [f(x), f'(x)*v, f''(x)*v^2/2!, ...]
+// output.coeffs holds [f(x), f'(x)*v, f''(x)*v^2/2!, ...]
 ```
 
 ### Arbitrary mixed partials via jet extraction
 
-```rust,ignore
+```rust
 use echidna::diffop::{JetPlan, MultiIndex};
 
 // Record f(x, y) = x²y + y³
-let (tape, _) = echidna::record(|x| x[0] * x[0] * x[1] + x[1] * x[1] * x[1], &[1.0, 2.0]);
+let (tape, _) = echidna::record(|x| x[0] * x[0] * x[1] + x[1] * x[1] * x[1], &[1.0_f64, 2.0]);
 
 // Plan which derivatives to compute
 let indices = vec![
@@ -184,14 +182,14 @@ echidna = { version = "0.14", features = ["bytecode", "taylor"] }
 | `tape.sparse_hessian(x)` | Sparse Hessian with auto sparsity detection + coloring |
 | `tape.jacobian_cross_country(x)` | Jacobian via Markowitz vertex elimination |
 | `tape.forward_nonsmooth(x)` | Branch tracking and kink detection |
-| `tape.clarke_jacobian(x, tol)` | Clarke generalized Jacobian |
+| `tape.clarke_jacobian(x, tol, max_kinks)` | Clarke generalized Jacobian |
 | `composed_hvp(f, x, v)` | One-shot forward-over-reverse Hessian-vector product |
 | `tape.hessian_vec::<N>(x)` | Batched Hessian computation (N directions per pass) |
 | `tape.sparse_hessian_vec::<N>(x)` | Batched sparse Hessian (N directions per pass) |
-| `grad_checkpointed(f, x, segments)` | Binomial gradient checkpointing |
-| `grad_checkpointed_online(f, x, budget)` | Online checkpointing |
-| `grad_checkpointed_disk(f, x, segments, dir)` | Disk-backed checkpointing |
-| `grad_checkpointed_with_hints(f, x, hints)` | User-controlled checkpoint placement |
+| `grad_checkpointed(step, loss, x0, num_steps, num_checkpoints)` | Evenly spread gradient checkpointing |
+| `grad_checkpointed_online(step, stop, loss, x0, num_checkpoints)` | Online checkpointing (unknown step count) |
+| `grad_checkpointed_disk(step, loss, x0, num_steps, num_checkpoints, dir)` | Disk-backed checkpointing |
+| `grad_checkpointed_with_hints(step, loss, x0, num_steps, num_checkpoints, required)` | User-pinned checkpoint placement |
 
 ### Higher-Order (requires `taylor` or `stde`)
 
@@ -229,19 +227,40 @@ echidna = { version = "0.14", features = ["bytecode", "taylor"] }
 
 ### GPU (requires `gpu-wgpu` or `gpu-cuda`)
 
+**Prerequisites.** `gpu-wgpu` runs on any adapter wgpu supports (Metal,
+Vulkan, DX12) with stock drivers — no SDK needed. `gpu-cuda` builds
+against a CUDA toolkit: cudarc reads the version from the build system,
+so compiling without one installed fails; set `CUDARC_CUDA_VERSION`
+(e.g. `12080`) to compile-check on machines without the toolkit. Kernels
+load at runtime through the driver API.
+
+**Construction.** `WgpuContext::new()` picks the highest-performance
+adapter and returns `None` when no usable GPU exists, so callers can fall
+back to the CPU path:
+
+```rust,no_run
+# #[cfg(feature = "gpu-wgpu")] {
+use echidna::gpu::{GpuBackend, GpuTapeData, WgpuContext};
+
+let ctx = WgpuContext::new().expect("no wgpu adapter available");
+let (tape, _) = echidna::record(|x| x[0] * x[0] + x[1], &[3.0_f64, 4.0]);
+let data = GpuTapeData::from_tape_f64_lossy(&tape).unwrap();
+let bufs = ctx.upload_tape(&data);
+let outputs = ctx.forward_batch(&bufs, &[3.0_f32, 4.0], 1).unwrap();
+# }
+```
+
 | Method | Description |
 |--------|-------------|
-| `ctx.forward_batch(bufs, inputs)` | Batched forward evaluation |
-| `ctx.gradient_batch(bufs, inputs)` | Batched gradient computation |
-| `ctx.sparse_jacobian(bufs, inputs)` | Sparse Jacobian on GPU |
-| `ctx.hvp_batch(bufs, inputs, dirs)` | Batched Hessian-vector products |
-| `ctx.sparse_hessian(bufs, inputs)` | Sparse Hessian on GPU |
-| `ctx.taylor_forward_2nd_batch(bufs, primals, seeds)` | Batched 2nd-order Taylor forward (requires `stde`) |
+| `ctx.forward_batch(bufs, inputs, batch)` | Batched forward evaluation |
+| `ctx.gradient_batch(bufs, inputs, batch)` | Batched gradient computation |
+| `ctx.sparse_jacobian(bufs, tape, x)` | Sparse Jacobian on GPU |
+| `ctx.hvp_batch(bufs, x, dirs, batch)` | Batched Hessian-vector products |
+| `ctx.sparse_hessian(bufs, tape, x)` | Sparse Hessian on GPU |
+| `ctx.taylor_forward_2nd_batch(bufs, primals, seeds, batch)` | Batched 2nd-order Taylor forward (requires `stde`) |
 | `stde_gpu::laplacian_gpu(ctx, bufs, x, dirs)` | GPU-accelerated Laplacian estimator |
 | `stde_gpu::hessian_diagonal_gpu(ctx, bufs, x)` | GPU-accelerated exact Hessian diagonal |
 | `stde_gpu::laplacian_with_control_gpu(ctx, bufs, x, dirs, ctrl)` | GPU Laplacian with control variate |
-| `stde_gpu::laplacian_gpu_cuda(ctx, bufs, x, dirs)` | CUDA-accelerated Laplacian estimator |
-| `stde_gpu::hessian_diagonal_gpu_cuda(ctx, bufs, x)` | CUDA-accelerated exact Hessian diagonal |
 
 CUDA additionally supports `_f64` variants of all methods.
 
@@ -259,6 +278,14 @@ echidna uses a two-tier AD architecture:
 
 Types compose via nesting: `Dual<BReverse<f64>>` gives forward-over-reverse for Hessian-vector products, `Taylor<BReverse<f64>, K>` gives Taylor-over-reverse, and `Dual<Dual<f64>>` gives forward-over-forward.
 
+## Documentation
+
+- [Algorithm guide](docs/algorithms.md) — the theory behind each mode and where it lives in the source
+- [Formal specifications](specs/README.md) — TLA+ models of checkpointing and the tape optimizer, with the invariant cross-reference
+- [API reference](https://docs.rs/echidna) — rustdoc for `echidna`; see also [`echidna-optim` on docs.rs](https://docs.rs/echidna-optim)
+- [Contributing](CONTRIBUTING.md) — build, test, and review workflow
+- Historical reference: [design principles](docs/design-principles.md) and the [Griewank & Walther chapter mapping](docs/book-breakdown.md) that guided the initial build-out; planning state lives in the [deferred-work ADR](docs/adr-deferred-work.md)
+
 ## Formal Specifications
 
 Core algorithms are modelled in TLA+ and verified with the TLC model checker:
@@ -266,9 +293,9 @@ Core algorithms are modelled in TLA+ and verified with the TLC model checker:
 - **Gradient checkpointing** (`src/checkpoint.rs`) — base Revolve, online thinning, and hint-based allocation, with budget, coverage, and spacing invariants.
 - **Bytecode tape optimizer** (`src/bytecode_tape/optimize.rs`) — CSE + DCE structural invariants and idempotency of `optimize(optimize(t)) = optimize(t)`.
 
-Spec-to-code alignment is enforced by two mechanisms, both gated by the [TLA+ Specs workflow](.github/workflows/specs.yml):
+Spec-to-code alignment is enforced by two mechanisms — source anchors, gated by the [TLA+ Specs workflow](.github/workflows/specs.yml), and semantic property tests, which run in the main CI test suite on every PR and push to `main`:
 
-1. **Source anchors.** Every invariant carries a `// SPEC: <InvariantName>` comment next to the code line that upholds it. `specs/verify_anchors.sh` parses `specs/README.md` and greps each declared source file for the corresponding anchor, failing if any is missing. (The check catches deletion, renames, and file moves; it does not catch an anchor pasted next to the wrong line within the same file — that remains a reviewer responsibility.)
+1. **Source anchors.** Every invariant carries a `// SPEC: <InvariantName>` comment next to the code line that upholds it. `specs/verify_anchors.sh` parses `specs/README.md` and greps each declared source file for the corresponding anchor, failing if any is missing. (The check catches deletions, renames, and file moves; it does not catch an anchor pasted next to the wrong line within the same file — that remains a reviewer responsibility.)
 2. **Semantic property tests.** `tests/spec_invariants_checkpoint.rs` and `tests/spec_invariants_tape_optimize.rs` exercise the specs' properties against the real Rust implementation (gradient correctness across checkpoint strategies, `optimize ∘ optimize = optimize`, post-optimise structural assertions).
 
 See [`specs/README.md`](specs/README.md) for the full invariant cross-reference and local model-checking instructions.
@@ -311,22 +338,18 @@ Results from `cargo bench --bench comparison` on Apple M4 Pro. See `benches/comp
 
 ## echidna-optim
 
-The [`echidna-optim`](echidna-optim/) crate provides optimization solvers and implicit differentiation built on `echidna`:
-
-**Solvers**: L-BFGS, Newton (Cholesky), trust-region (Steihaug-Toint CG), with Armijo line search.
-
-**Implicit differentiation**: Differentiate through the fixed point of an optimization problem or nonlinear solve -- `implicit_tangent`, `implicit_adjoint`, `implicit_jacobian`, `implicit_hvp`, `implicit_hessian`.
-
-**Piggyback differentiation**: `piggyback_tangent_solve`, `piggyback_adjoint_solve`, `piggyback_forward_adjoint_solve`.
-
-**Sparse implicit** (with faer): `implicit_tangent_sparse`, `implicit_adjoint_sparse`, `implicit_jacobian_sparse`.
+The [`echidna-optim`](echidna-optim/) crate provides optimization solvers
+(L-BFGS, Newton, trust-region), implicit differentiation through fixed points,
+and piggyback differentiation, all built on `echidna` tapes:
 
 ```toml
 [dependencies]
-echidna-optim = "0.13"
+echidna-optim = "0.14"
 ```
 
-Optional features: `parallel` (enables rayon parallelism via `echidna/parallel`), `sparse-implicit` (sparse implicit differentiation via faer).
+The full API surface, feature table, and a runnable quick start live in
+[echidna-optim/README.md](echidna-optim/README.md) and on
+[docs.rs](https://docs.rs/echidna-optim).
 
 ## Development
 
@@ -337,6 +360,14 @@ cargo bench                                   # Run benchmarks
 cargo clippy                                  # Lint
 cargo fmt                                     # Format
 ```
+
+## Stability
+
+echidna is pre-1.0. Minor releases (0.x → 0.y) may contain breaking API
+changes; every breaking change is listed under **Changed** or **Removed** in
+the [CHANGELOG](CHANGELOG.md). Where feasible, a replaced API is kept for one
+release with a `#[deprecated]` attribute pointing at its successor before
+removal. Patch releases (0.x.y → 0.x.z) are additive or fix-only.
 
 ## License
 

@@ -8,6 +8,7 @@ use std::fmt;
 /// literal.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct OptimResult<F> {
     /// Solution point.
     pub x: Vec<F>,
@@ -33,6 +34,34 @@ pub struct OptimResult<F> {
     /// filtering paths — a sign that the problem doesn't suit the
     /// chosen solver.
     pub diagnostics: SolverDiagnostics,
+}
+
+impl<F> OptimResult<F> {
+    /// Assemble a result. The single construction path for every solver
+    /// return — the struct is `#[non_exhaustive]`, so adding a field means
+    /// touching exactly this signature and its call sites.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn assemble(
+        x: Vec<F>,
+        value: F,
+        gradient: Vec<F>,
+        gradient_norm: F,
+        iterations: usize,
+        func_evals: usize,
+        termination: TerminationReason,
+        diagnostics: SolverDiagnostics,
+    ) -> Self {
+        OptimResult {
+            x,
+            value,
+            gradient,
+            gradient_norm,
+            iterations,
+            func_evals,
+            termination,
+            diagnostics,
+        }
+    }
 }
 
 /// Why the optimizer stopped.
@@ -98,8 +127,6 @@ pub enum SolverDiagnostics {
     Newton(NewtonDiagnostics),
     /// Trust-region-specific counters.
     TrustRegion(TrustRegionDiagnostics),
-    /// Fallback for solver paths that don't yet emit specific counters.
-    Other,
 }
 
 impl SolverDiagnostics {
@@ -135,11 +162,11 @@ impl SolverDiagnostics {
 #[derive(Debug, Clone, Default)]
 pub struct LbfgsDiagnostics {
     /// Number of (s, y) curvature pairs that passed the Cauchy-Schwarz
-    /// filter `sy > F::epsilon() · sqrt(ss · yy)` and entered the
+    /// filter `sy > sqrt(F::epsilon()) · sqrt(ss · yy)` and entered the
     /// history buffer.
     pub pairs_accepted: usize,
     /// Number of curvature pairs rejected by the filter
-    /// `sy > F::epsilon() · sqrt(ss · yy)` (negative or near-zero
+    /// `sy > sqrt(F::epsilon()) · sqrt(ss · yy)` (negative or near-zero
     /// curvature, i.e. cosine angle near 0 between `s` and `y`).
     pub pairs_curvature_rejected: usize,
     /// Number of evict-then-push events: a new accepted pair was added

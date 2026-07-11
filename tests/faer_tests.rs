@@ -1,9 +1,9 @@
 #![cfg(feature = "faer")]
 
 use echidna::faer_support::{
-    grad_faer, hessian_faer, hvp_faer, jacobian_faer, solve_dense_cholesky_faer,
-    solve_dense_lu_faer, solve_sparse_cholesky_faer, solve_sparse_lu_faer, tape_hvp_faer,
-    tape_sparse_hessian_faer,
+    grad_faer, grad_faer_val, hessian_faer, hvp_faer, jacobian_faer, solve_dense_cholesky_faer,
+    solve_dense_lu_faer, solve_sparse_cholesky_faer, solve_sparse_lu_faer, sparse_hessian_faer,
+    tape_gradient_faer, tape_hessian_faer, tape_hvp_faer, tape_sparse_hessian_faer,
 };
 use echidna::BReverse;
 use faer::{Col, Mat};
@@ -214,4 +214,56 @@ fn faer_wrappers_return_none_on_length_mismatch() {
     let b = Col::from_fn(2, |_| 1.0_f64);
     assert!(echidna::faer_support::solve_sparse_cholesky_faer(&pattern, short, &b).is_none());
     assert!(echidna::faer_support::solve_sparse_lu_faer(&pattern, short, &b).is_none());
+}
+
+#[test]
+fn grad_faer_val_rosenbrock() {
+    let x = Col::from_fn(2, |i| [1.0_f64, 2.0][i]);
+    let (val, g) = grad_faer_val(rosenbrock_br, &x);
+
+    // f(1,2) = 0 + 100·(2-1)² = 100; ∇f(1,2) = (-400, 200).
+    assert!((val - 100.0).abs() < 1e-12);
+    assert!((g[0] - -400.0).abs() < 1e-9);
+    assert!((g[1] - 200.0).abs() < 1e-9);
+}
+
+#[test]
+fn sparse_hessian_faer_rosenbrock() {
+    let x = Col::from_fn(2, |i| [1.0_f64, 2.0][i]);
+    let (val, grad, pattern, values) = sparse_hessian_faer(rosenbrock_br, &x);
+
+    assert!((val - 100.0).abs() < 1e-12);
+    assert!((grad[0] - -400.0).abs() < 1e-9);
+    assert!((grad[1] - 200.0).abs() < 1e-9);
+    assert!(pattern.nnz() > 0);
+    assert_eq!(pattern.nnz(), values.len());
+}
+
+#[test]
+fn tape_gradient_faer_reuse() {
+    let x = Col::from_fn(2, |i| [1.0_f64, 2.0][i]);
+    let (mut tape, _) = echidna::record(rosenbrock_br, &[1.0, 2.0]);
+
+    let g1 = tape_gradient_faer(&mut tape, &x);
+    let g2 = tape_gradient_faer(&mut tape, &x);
+
+    for i in 0..2 {
+        assert!((g1[i] - g2[i]).abs() < 1e-14, "gradient mismatch at {i}");
+        assert!(g1[i].is_finite());
+    }
+}
+
+#[test]
+fn tape_hessian_faer_rosenbrock_entries() {
+    let x = Col::from_fn(2, |i| [1.0_f64, 2.0][i]);
+    let (tape, _) = echidna::record(rosenbrock_br, &[1.0, 2.0]);
+    let (val, g, h) = tape_hessian_faer(&tape, &x);
+
+    // H(1,2) = [[402, -400], [-400, 200]].
+    assert!((val - 100.0).abs() < 1e-12);
+    assert!((g[0] - -400.0).abs() < 1e-9);
+    assert!((h[(0, 0)] - 402.0).abs() < 1e-9);
+    assert!((h[(0, 1)] - -400.0).abs() < 1e-9);
+    assert!((h[(1, 0)] - -400.0).abs() < 1e-9);
+    assert!((h[(1, 1)] - 200.0).abs() < 1e-9);
 }

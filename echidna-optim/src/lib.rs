@@ -12,7 +12,8 @@
 //!
 //! - **L-BFGS** ([`lbfgs`]) — two-loop recursion limited-memory quasi-Newton.
 //!   Low per-iteration cost; the default choice for smooth, large-scale problems.
-//! - **Newton** ([`newton`]) — exact Hessian with Cholesky factorization.
+//! - **Newton** ([`newton`]) — exact Hessian solved by LU with partial
+//!   pivoting, falling back to steepest descent on indefinite Hessians.
 //!   Quadratic convergence near the solution; practical when `n` is moderate.
 //! - **Trust-region** ([`trust_region`]) — Steihaug-Toint conjugate-gradient
 //!   subproblem. Robust on indefinite or ill-conditioned Hessians.
@@ -55,9 +56,9 @@
 //! [`implicit_tangent_sparse`], [`implicit_adjoint_sparse`], and
 //! [`implicit_jacobian_sparse`].
 
-pub mod convergence;
+mod convergence;
 pub mod implicit;
-pub mod linalg;
+mod linalg;
 pub mod line_search;
 pub mod objective;
 pub mod piggyback;
@@ -91,3 +92,8 @@ pub use sparse_implicit::{
     implicit_adjoint_sparse, implicit_jacobian_sparse, implicit_tangent_sparse,
     SparseImplicitContext, SparseImplicitError,
 };
+
+/// Compile and run the README examples as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;

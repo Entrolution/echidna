@@ -61,7 +61,6 @@ impl<F: Float, const K: usize> Float for crate::laurent::Laurent<F, K> {}
 /// incorrectly dropping tangent (eps) contributions. `PartialEq` only
 /// compares `.re`, so a value with `re==0` but `eps!=0` would be
 /// incorrectly pruned without this trait.
-#[cfg_attr(not(feature = "bytecode"), allow(dead_code))]
 #[doc(hidden)]
 pub trait IsAllZero {
     fn is_all_zero(&self) -> bool;

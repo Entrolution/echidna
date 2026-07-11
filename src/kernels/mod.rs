@@ -216,7 +216,7 @@ pub fn ln_deriv<T: Float>(a: T) -> T {
 #[inline]
 pub fn log2_deriv<T: Float>(a: T) -> T {
     if a >= T::zero() {
-        T::one() / (a * T::from(2.0).unwrap().ln())
+        T::one() / (a * T::from(std::f64::consts::LN_2).unwrap())
     } else {
         T::nan()
     }
@@ -226,7 +226,7 @@ pub fn log2_deriv<T: Float>(a: T) -> T {
 #[inline]
 pub fn log10_deriv<T: Float>(a: T) -> T {
     if a >= T::zero() {
-        T::one() / (a * T::from(10.0).unwrap().ln())
+        T::one() / (a * T::from(std::f64::consts::LN_10).unwrap())
     } else {
         T::nan()
     }

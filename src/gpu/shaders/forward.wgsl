@@ -76,6 +76,13 @@ struct TapeMeta {
 
 // ── Manual implementations for functions not in WGSL ──
 
+
+// IEEE f32 bit patterns (same names across all four shaders).
+const F32_SIGN_MASK: u32 = 0x80000000u;
+const F32_ABS_MASK:  u32 = 0x7fffffffu;
+const F32_INF_BITS:  u32 = 0x7f800000u;
+const F32_QNAN_BITS: u32 = 0x7fc00000u;
+
 fn cbrt_f32(x: f32) -> f32 {
     // cbrt(x) = sign(x) * |x|^(1/3)
     let s = sign(x);
@@ -143,7 +150,7 @@ fn hypot_f32(a: f32, b: f32) -> f32 {
     // Factor out max magnitude to avoid overflow for large inputs.
     let ax = abs(a);
     let ay = abs(b);
-    let inf = bitcast<f32>(0x7f800000u);
+    let inf = bitcast<f32>(F32_INF_BITS);
     // IEEE: hypot(±Inf, x) = +Inf for any x (including NaN). The
     // rescaled formula would otherwise compute `Inf/Inf = NaN` when
     // both operands are Inf, diverging from CPU f64::hypot and the
@@ -178,14 +185,14 @@ fn signum_f32(x: f32) -> f32 {
     // `x >= 0.0` wrongly maps -0.0 to +1; inspect the sign bit. Bitcast NaN test
     // since `x != x` is unreliable under Metal fast-math.
     let b = bitcast<u32>(x);
-    if ((b & 0x7fffffffu) > 0x7f800000u) { return x; }
-    return select(1.0, -1.0, (b & 0x80000000u) != 0u);
+    if ((b & F32_ABS_MASK) > F32_INF_BITS) { return x; }
+    return select(1.0, -1.0, (b & F32_SIGN_MASK) != 0u);
 }
 
 fn is_nan_f32(x: f32) -> bool {
     // NaN iff exponent is all-ones and mantissa is non-zero. Inspect the bits
     // directly — `x != x` can be folded away by Metal's fast-math.
-    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+    return (bitcast<u32>(x) & F32_ABS_MASK) > F32_INF_BITS;
 }
 
 fn powf_real(base: f32, b: f32) -> f32 {
@@ -198,7 +205,7 @@ fn powf_real(base: f32, b: f32) -> f32 {
     if base == 0.0 && b == 0.0 { return 1.0; }
     if base >= 0.0 { return pow(base, b); }
     let rb = round(b);
-    if rb != b { return bitcast<f32>(0x7fc00000u); }
+    if rb != b { return bitcast<f32>(F32_QNAN_BITS); }
     let mag = pow(abs(base), b);
     if (i32(rb) & 1) != 0 { return -mag; }
     return mag;

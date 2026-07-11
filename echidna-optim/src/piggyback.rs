@@ -166,6 +166,22 @@ fn validate_step_tape<F: Float>(tape: &BytecodeTape<F>, z: &[F], x: &[F], num_st
     );
 }
 
+/// Relative step delta `||new - old|| / (1 + ||old||)` — the fixed-point
+/// convergence convention shared by every piggyback stream. Plain
+/// accumulation on purpose: `convergence::norm` switches to compensated
+/// summation at larger n, which would shift gate values and the norms
+/// reported in `PiggybackError`.
+fn relative_delta_norm<F: Float>(new: &[F], old: &[F]) -> F {
+    let mut delta_sq = F::zero();
+    let mut old_sq = F::zero();
+    for (&n, &o) in new.iter().zip(old.iter()) {
+        let d = n - o;
+        delta_sq = delta_sq + d * d;
+        old_sq = old_sq + o * o;
+    }
+    delta_sq.sqrt() / (F::one() + old_sq.sqrt())
+}
+
 /// One tangent piggyback step through a fixed-point map G.
 ///
 /// Given the iteration `z_{k+1} = G(z_k, x)`, computes both the primal step
@@ -277,14 +293,7 @@ pub fn piggyback_tangent_solve<F: Float>(
             piggyback_tangent_step_with_buf(step_tape, &z, x, &z_dot, x_dot, num_states, &mut buf);
 
         // Relative convergence: ||z_new - z|| / (1 + ||z||)
-        let mut delta_sq = F::zero();
-        let mut z_sq = F::zero();
-        for i in 0..m {
-            let d = z_new[i] - z[i];
-            delta_sq = delta_sq + d * d;
-            z_sq = z_sq + z[i] * z[i];
-        }
-        let norm = delta_sq.sqrt() / (F::one() + z_sq.sqrt());
+        let norm = relative_delta_norm(&z_new, &z);
         // Variant-mapping order: norm-check first → PrimalDivergence;
         // tangent-finite check second → TangentDivergence. A non-finite
         // primal naturally produces a non-finite norm, so it falls into
@@ -322,14 +331,7 @@ pub fn piggyback_tangent_solve<F: Float>(
         // `tangent_norm` cannot fake convergence (`NaN < tol` and
         // `Inf < tol` are both false), and non-finite tangents were already
         // rejected componentwise above.
-        let mut tangent_delta_sq = F::zero();
-        let mut tangent_sq = F::zero();
-        for i in 0..m {
-            let d = z_dot_new[i] - z_dot[i];
-            tangent_delta_sq = tangent_delta_sq + d * d;
-            tangent_sq = tangent_sq + z_dot[i] * z_dot[i];
-        }
-        let tangent_norm = tangent_delta_sq.sqrt() / (F::one() + tangent_sq.sqrt());
+        let tangent_norm = relative_delta_norm(&z_dot_new, &z_dot);
 
         last_norm = norm.to_f64().unwrap_or(f64::NAN);
         if norm < tol && tangent_norm < tol {
@@ -397,18 +399,8 @@ pub fn piggyback_adjoint_solve<F: Float>(
         let adj = step_tape.reverse_seeded(&lambda);
 
         // λ_new[i] = adj[i] + z_bar[i] for i = 0..m
-        let mut lambda_new = Vec::with_capacity(m);
-        let mut delta_sq = F::zero();
-        let mut lam_sq = F::zero();
-        for i in 0..m {
-            let l_new = adj[i] + z_bar[i];
-            let d = l_new - lambda[i];
-            delta_sq = delta_sq + d * d;
-            lam_sq = lam_sq + lambda[i] * lambda[i];
-            lambda_new.push(l_new);
-        }
-
-        let norm = delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
+        let lambda_new: Vec<F> = (0..m).map(|i| adj[i] + z_bar[i]).collect();
+        let norm = relative_delta_norm(&lambda_new, &lambda);
         if !norm.is_finite() {
             return Err(PiggybackError::AdjointDivergence {
                 iteration: k,
@@ -499,14 +491,7 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         let adj = step_tape.reverse_seeded(&lambda);
 
         // Primal convergence: ||z_new - z|| / (1 + ||z||)
-        let mut z_delta_sq = F::zero();
-        let mut z_sq = F::zero();
-        for i in 0..m {
-            let d = z_new[i] - input[i];
-            z_delta_sq = z_delta_sq + d * d;
-            z_sq = z_sq + input[i] * input[i];
-        }
-        let z_norm = z_delta_sq.sqrt() / (F::one() + z_sq.sqrt());
+        let z_norm = relative_delta_norm(&z_new, &input);
         if !z_norm.is_finite() {
             return Err(PiggybackError::PrimalDivergence {
                 iteration: k,
@@ -515,17 +500,8 @@ pub fn piggyback_forward_adjoint_solve<F: Float>(
         }
 
         // Adjoint update and convergence: λ_new = G_z^T · λ + z̄
-        let mut lam_delta_sq = F::zero();
-        let mut lam_sq = F::zero();
-        let mut lambda_new = Vec::with_capacity(m);
-        for i in 0..m {
-            let l_new = adj[i] + z_bar[i];
-            let d = l_new - lambda[i];
-            lam_delta_sq = lam_delta_sq + d * d;
-            lam_sq = lam_sq + lambda[i] * lambda[i];
-            lambda_new.push(l_new);
-        }
-        let lam_norm = lam_delta_sq.sqrt() / (F::one() + lam_sq.sqrt());
+        let lambda_new: Vec<F> = (0..m).map(|i| adj[i] + z_bar[i]).collect();
+        let lam_norm = relative_delta_norm(&lambda_new, &lambda);
         if !lam_norm.is_finite() {
             return Err(PiggybackError::AdjointDivergence {
                 iteration: k,

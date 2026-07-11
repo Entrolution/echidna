@@ -646,8 +646,8 @@ impl<F: Float + TapeThreadLocal> NumFloat for Reverse<F> {
 
     fn mul_add(self, a: Self, b: Self) -> Self {
         // d(x*a + b)/dx = a, d/da = x, d/db = 1
-        // We need a ternary push; emulate as binary + unary.
-        // self*a + b
+        // Decompose to Mul + Add (MulAdd is ternary, incompatible with the
+        // binary tape encoding).
         self * a + b
     }
 
