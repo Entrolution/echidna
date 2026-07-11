@@ -9,8 +9,8 @@ Optimization solvers and implicit differentiation for [echidna](https://crates.i
 
 ```toml
 [dependencies]
-echidna = "0.14"
-echidna-optim = "0.14"
+echidna = "0.15"
+echidna-optim = "0.15"
 ```
 
 Requires Rust 1.93 or later, matching the workspace MSRV.

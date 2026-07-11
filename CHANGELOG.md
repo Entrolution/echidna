@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-11
+
 ### Changed
 
 - `BytecodeTape::validate` (and therefore deserialization of serialized
@@ -41,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `linalg` and `convergence` modules are no longer public; they were
   internal solver plumbing. `ConvergenceParams` remains re-exported at the
   crate root.
+
+### Fixed
+
+- The generated GPU Taylor kernels route `Powf`/`Powi` through the guarded
+  `powf_real` helper instead of raw WGSL `pow` (which naga lowers to
+  `exp2(y*log2(x))`): `0^0` now returns 1 and negative bases with integer
+  exponents evaluate with the correct sign, matching the CPU paths and the
+  static shaders.
 
 ## [0.14.1] - 2026-07-08
 
@@ -1275,7 +1285,8 @@ types changed; the bump reflects the wgpu API-break that downstream
 - Forward-vs-reverse cross-validation on Rosenbrock, Beale, Ackley, Booth, and more
 - Criterion benchmarks for forward overhead and reverse gradient
 
-[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/Entrolution/echidna/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/Entrolution/echidna/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/Entrolution/echidna/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/Entrolution/echidna/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/Entrolution/echidna/compare/v0.12.0...v0.13.0
