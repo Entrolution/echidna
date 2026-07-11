@@ -47,7 +47,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-echidna = "0.14"
+echidna = "0.15"
 ```
 
 ### Gradient via reverse mode
@@ -156,7 +156,7 @@ assert!((d2_dxdy - 2.0).abs() < 1e-6);
 Enable features in `Cargo.toml`:
 
 ```toml
-echidna = { version = "0.14", features = ["bytecode", "taylor"] }
+echidna = { version = "0.15", features = ["bytecode", "taylor"] }
 ```
 
 ## API
@@ -344,7 +344,7 @@ and piggyback differentiation, all built on `echidna` tapes:
 
 ```toml
 [dependencies]
-echidna-optim = "0.14"
+echidna-optim = "0.15"
 ```
 
 The full API surface, feature table, and a runnable quick start live in
