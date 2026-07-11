@@ -7,12 +7,14 @@ use faer::{Col, Mat};
 use crate::bytecode_tape::BytecodeTape;
 use crate::BReverse;
 
+fn col_to_vec(x: &Col<f64>) -> Vec<f64> {
+    x.iter().copied().collect()
+}
+
 /// Record a function and compute its gradient, returning a `Col<f64>`.
 pub fn grad_faer(f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>, x: &Col<f64>) -> Col<f64> {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
-    let (mut tape, _) = crate::api::record(f, &xs);
-    let g = tape.gradient(&xs);
-    Col::from_fn(g.len(), |i| g[i])
+    let (mut tape, _) = crate::api::record(f, &col_to_vec(x));
+    tape_gradient_faer(&mut tape, x)
 }
 
 /// Record a function, compute value and gradient.
@@ -20,10 +22,8 @@ pub fn grad_faer_val(
     f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
     x: &Col<f64>,
 ) -> (f64, Col<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
-    let (mut tape, val) = crate::api::record(f, &xs);
-    let g = tape.gradient(&xs);
-    (val, Col::from_fn(g.len(), |i| g[i]))
+    let (mut tape, val) = crate::api::record(f, &col_to_vec(x));
+    (val, tape_gradient_faer(&mut tape, x))
 }
 
 /// Record and compute the Hessian, returning `(value, gradient, hessian)`.
@@ -31,13 +31,8 @@ pub fn hessian_faer(
     f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
     x: &Col<f64>,
 ) -> (f64, Col<f64>, Mat<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
-    let (tape, _) = crate::api::record(f, &xs);
-    let (val, grad, hess) = tape.hessian(&xs);
-    let n = xs.len();
-    let g = Col::from_fn(n, |i| grad[i]);
-    let h = Mat::from_fn(n, n, |i, j| hess[i][j]);
-    (val, g, h)
+    let (tape, _) = crate::api::record(f, &col_to_vec(x));
+    tape_hessian_faer(&tape, x)
 }
 
 /// Compute the Jacobian of a multi-output function, returning `Mat<f64>`.
@@ -45,7 +40,7 @@ pub fn jacobian_faer(
     f: impl FnOnce(&[BReverse<f64>]) -> Vec<BReverse<f64>>,
     x: &Col<f64>,
 ) -> Mat<f64> {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
+    let xs = col_to_vec(x);
     let (mut tape, _) = crate::api::record_multi(f, &xs);
     let jac = tape.jacobian(&xs);
     let m = jac.len();
@@ -55,7 +50,7 @@ pub fn jacobian_faer(
 
 /// Evaluate gradient on a pre-recorded tape, accepting and returning faer types.
 pub fn tape_gradient_faer(tape: &mut BytecodeTape<f64>, x: &Col<f64>) -> Col<f64> {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
+    let xs = col_to_vec(x);
     let g = tape.gradient(&xs);
     Col::from_fn(g.len(), |i| g[i])
 }
@@ -63,7 +58,7 @@ pub fn tape_gradient_faer(tape: &mut BytecodeTape<f64>, x: &Col<f64>) -> Col<f64
 /// Evaluate Hessian on a pre-recorded tape, accepting and returning faer types.
 #[must_use]
 pub fn tape_hessian_faer(tape: &BytecodeTape<f64>, x: &Col<f64>) -> (f64, Col<f64>, Mat<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
+    let xs = col_to_vec(x);
     let (val, grad, hess) = tape.hessian(&xs);
     let n = xs.len();
     let g = Col::from_fn(n, |i| grad[i]);
@@ -81,20 +76,15 @@ pub fn hvp_faer(
     x: &Col<f64>,
     v: &Col<f64>,
 ) -> (Col<f64>, Col<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
-    let vs: Vec<f64> = (0..v.nrows()).map(|i| v[i]).collect();
-    let (grad, hvp) = crate::api::hvp(f, &xs, &vs);
-    (
-        Col::from_fn(grad.len(), |i| grad[i]),
-        Col::from_fn(hvp.len(), |i| hvp[i]),
-    )
+    let (tape, _) = crate::api::record(f, &col_to_vec(x));
+    tape_hvp_faer(&tape, x, v)
 }
 
 /// Compute the Hessian-vector product on a pre-recorded tape.
 #[must_use]
 pub fn tape_hvp_faer(tape: &BytecodeTape<f64>, x: &Col<f64>, v: &Col<f64>) -> (Col<f64>, Col<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
-    let vs: Vec<f64> = (0..v.nrows()).map(|i| v[i]).collect();
+    let xs = col_to_vec(x);
+    let vs = col_to_vec(v);
     let (grad, hvp) = tape.hvp(&xs, &vs);
     (
         Col::from_fn(grad.len(), |i| grad[i]),
@@ -107,10 +97,8 @@ pub fn sparse_hessian_faer(
     f: impl FnOnce(&[BReverse<f64>]) -> BReverse<f64>,
     x: &Col<f64>,
 ) -> (f64, Col<f64>, crate::sparse::SparsityPattern, Vec<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
-    let (val, grad, pattern, values) = crate::api::sparse_hessian(f, &xs);
-    let g = Col::from_fn(grad.len(), |i| grad[i]);
-    (val, g, pattern, values)
+    let (tape, _) = crate::api::record(f, &col_to_vec(x));
+    tape_sparse_hessian_faer(&tape, x)
 }
 
 /// Compute the sparse Hessian on a pre-recorded tape.
@@ -119,7 +107,7 @@ pub fn tape_sparse_hessian_faer(
     tape: &BytecodeTape<f64>,
     x: &Col<f64>,
 ) -> (f64, Col<f64>, crate::sparse::SparsityPattern, Vec<f64>) {
-    let xs: Vec<f64> = (0..x.nrows()).map(|i| x[i]).collect();
+    let xs = col_to_vec(x);
     let (val, grad, pattern, values) = tape.sparse_hessian(&xs);
     let g = Col::from_fn(grad.len(), |i| grad[i]);
     (val, g, pattern, values)
